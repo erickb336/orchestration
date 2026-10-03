@@ -15,12 +15,12 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import canonicalize from "canonicalize";
-import { buildingSpend, maintenanceEstimate } from "../spend";
+import { buildingSpend, itemEstimate, maintenanceEstimate } from "../spend";
 import { currentSpec, currentVision, draft, event, nextId } from "../model/core";
 import { pushVision } from "../model/vision";
 import { newWorkReview } from "../peReview";
 import { ControlError, StaleWriteError, type Finding, type State, type Task } from "../types";
-import { artifactName, covers, currentFeedback, latestArtifacts, latestVersion, openObjections, peReview, readyForOwner, versionsOf } from "./studio";
+import { artifactName, currentFeedback, latestArtifacts, latestVersion, openObjections, peReview, readyForOwner, versionsOf } from "./studio";
 import type { BlueprintItem, BlueprintRevision, ChangeOrder, DictionaryEntry, DraftVision, ItemEstimate, LockInSummary, StudioArtifact, TaskHandling, TouchedTask, TouchedTaskState, UsdRange } from "./types";
 
 // ---------- the version in force ----------
@@ -238,12 +238,6 @@ function handlingOf(state: TouchedTaskState, onlyDropped: boolean): TaskHandling
 
 const refsOf = (t: Task) => currentSpec(t).content.blueprintRefs ?? [];
 
-/** The PE's newest estimate on the item's version (and variant), or null: no estimate. */
-function peEstimate(s: State, item: BlueprintItem): ItemEstimate {
-  const v = s.studio.verdicts.filter((x) => x.artifactId === item.artifactId && x.version === item.version && covers(x, item.variant) && x.budget).at(-1);
-  return { itemId: item.id, estimate: v?.budget ? structuredClone(v.budget) : null };
-}
-
 /** The sum of one range over the estimates; null when there is none, or one has no figure for it. */
 function sumRange(estimates: ItemEstimate[], pick: (e: NonNullable<ItemEstimate["estimate"]>) => UsdRange | undefined): UsdRange | null {
   if (!estimates.length) return null;
@@ -301,7 +295,7 @@ export function lockInSummary(s: State): LockInSummary {
     tasks.push({ taskId: t.id, title: currentSpec(t).content.title, state, items, handling: handlingOf(state, refs.every(droppedAfter)) });
   }
   const cited = new Set(s.tasks.filter((t) => t.lifecycle !== "cancelled").flatMap(refsOf));
-  const estimates = [...c.added, ...c.changed.map((x) => x.item)].map((i) => peEstimate(s, i));
+  const estimates = [...c.added, ...c.changed.map((x) => x.item)].map((i) => itemEstimate(s, i));
   const spend = buildingSpend(s);
   const m = maintenanceEstimate(s);
   const why = new Map(openBlueprintItems(s).map((o) => [o.item.id, o.why]));
@@ -313,7 +307,7 @@ export function lockInSummary(s: State): LockInSummary {
     newWork: c.added.filter((i) => !cited.has(i.id)).map((i) => i.id),
     budgets: {
       building: { budgetUsd: s.project.budgets.buildingUsd, spentUsd: spend.usd, unknownRuns: spend.unknown.length },
-      maintenance: { budgetUsdPerMonth: s.project.budgets.maintenanceUsdPerMonth, estimateUsdPerMonth: m.startUsd === null ? null : m.startUsd + m.callsUsd },
+      maintenance: { budgetUsdPerMonth: s.project.budgets.maintenanceUsdPerMonth, estimateUsdPerMonth: m.partsUsd === null ? null : m.partsUsd + m.callsUsd },
       items: estimates,
       itemsTotal: { buildUsd: sumRange(estimates, (e) => e.buildUsd), maintenanceUsdPerMonth: sumRange(estimates, (e) => e.maintenanceUsdPerMonth) },
     },

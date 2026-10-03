@@ -273,6 +273,8 @@ export const COMMANDS = {
   sendFeedback: same((s, now, a) => S.sendFeedback(s, array<unknown>(a.entries, "entries").map(feedbackEntry), now)),
   /** Overrule one of the PE's objections, with your reason (recorded). */
   overruleObjection: same((s, now, a) => S.overruleObjection(s, str(a, "verdictId"), str(a, "why"), now)),
+  /** Ask the PE again to review a version it gave no verdict on, because it could not answer (B-06). The service asks for the run. */
+  askPeAgain: same((s, now, a) => S.askPeAgain(s, str(a, "artifactId"), int(a, "version"), now)),
   /** Approve one artifact version (the one you saw) into the blueprint's draft, with a variant when it has several. Never the lead's. */
   approveArtifact: same((s, now, a) => B.approveArtifact(s, { artifactId: str(a, "artifactId"), version: int(a, "version"), ...(a.variant === undefined ? {} : { variant: str(a, "variant") }) }, now)),
   /** Approve a whole round into the draft; what cannot be approved as it stands is listed as open. Never the lead's. */

@@ -167,11 +167,6 @@ export interface FactoryStart {
   settings: FactorySettings;
   /** What was still open, named to the owner and confirmed: the vision's open areas, then the blueprint's open items and the unfinished probes (by id). */
   openItems: string[];
-  /**
-   * The pre-flight's budget estimates. Nothing writes it yet: the PE's pre-flight (ORC-029 pass 6) fills it. While it is
-   * absent the project's maintenance is not yet estimated (unknown, never $0; see `maintenanceEstimate`).
-   */
-  estimate?: { buildUsd?: [number, number]; maintenanceUsdPerMonth?: [number, number]; basis: string };
 }
 
 /** The areas a vision needs to cover; the lead reports how clear each is and asks about the open ones. */
@@ -1133,6 +1128,20 @@ type AttemptOutcome =
   | "failed"
   | "lost"; // the run's process no longer exists (for example after a service restart)
 
+/**
+ * What a run used, as its runtime reported it. `cachedInputTokens`: of `inputTokens`, those read from the provider's
+ * prompt cache (Codex reports them). `openRequest`: the run ended before its turn completed, so the turn's last model
+ * request is not in these figures: Codex reports a request's usage only when the request completes. The budgets count
+ * that request at an estimate (src/domain/spend.ts), never as $0.
+ */
+export interface RunUsage {
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  outputTokens?: number;
+  costUsd?: number;
+  openRequest?: true;
+}
+
 export interface Attempt {
   id: string;
   taskId: string;
@@ -1153,8 +1162,7 @@ export interface Attempt {
   actualModel?: string;
   /** Latest meaningful milestone reported by the runtime. */
   activity?: string;
-  /** `cachedInputTokens`: of `inputTokens`, those read from the provider's prompt cache (Codex reports them). */
-  usage?: { inputTokens?: number; cachedInputTokens?: number; outputTokens?: number; costUsd?: number };
+  usage?: RunUsage;
   /** The fake runtime ran it: no agent ran, so it spent a known $0 (src/domain/spend.ts), as a simulated studio run. */
   simulated?: true;
   /**

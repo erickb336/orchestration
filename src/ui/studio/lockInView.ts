@@ -4,6 +4,7 @@
 
 import { diffLines } from "../../domain/diff";
 import { currentVision } from "../../domain/model";
+import { buildingSpend, unrecordedWords } from "../../domain/spend";
 import * as B from "../../domain/studio/blueprint";
 import type { BlueprintItem, TaskHandling, TouchedTaskState } from "../../domain/studio/types";
 import type { State } from "../../domain/types";
@@ -84,7 +85,8 @@ export function lockInWords(s: State): LockInWords {
     ? `${sum.newWork.map(name).join(", ")} ${sum.newWork.length === 1 ? "has" : "have"} no task yet. The lead plans ${sum.newWork.length === 1 ? "its" : "their"} tasks after the Lock in${s.project.peReviewsNewWork ? ", and the PE reviews them before they start" : ""}.`
     : undefined;
   const b = sum.budgets;
-  const unknown = b.building.unknownRuns ? ` ${count(b.building.unknownRuns, "run")} ${b.building.unknownRuns === 1 ? "has" : "have"} no recorded cost, so the spend may be higher.` : "";
+  const unrecorded = unrecordedWords(buildingSpend(s));
+  const unknown = unrecorded ? ` ${unrecorded}` : "";
   const building = `Building: ${usd(b.building.spentUsd)} spent${b.building.budgetUsd === null ? ". No building budget is set." : ` of ${usd(b.building.budgetUsd)}. The factory stops and asks you at ${usd(b.building.budgetUsd)}.`}${unknown}`;
   const estimateLines = b.items.map((e) => {
     const n = name(e.itemId);

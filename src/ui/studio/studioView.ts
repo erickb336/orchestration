@@ -550,6 +550,8 @@ export interface PeView {
   notIndependent?: string;
   simulated: boolean;
   verdicts: VerdictLine[];
+  /** You can ask the PE again (`askPeAgain`): it gave no verdict on this version, because it could not answer (B-06). */
+  canAskAgain?: true;
 }
 
 /** "$40–$90", "$5–$5 a month" as "$5 a month". */
@@ -564,8 +566,9 @@ function yourMove(s: State, a: StudioArtifact, r: S.PeReview): string | undefine
   const objections = r.status === "ended" ? S.openObjections(s, a).length : 0;
   const mark = S.currentFeedback(s, a.id, a.version)?.mark;
   const overrule = objections ? `You can overrule ${objections === 1 ? "the objection" : "an objection"}, with your reason. ` : "";
-  if (mark) return `${overrule}You marked it ${mark}.${objections ? "" : " Nothing else is needed from you."}`;
-  return `${overrule}Mark it Keep, Change or Drop${a.variants.length > 1 ? ", and pick a variant" : ""}.`;
+  const askAgain = S.canAskPeAgain(s, a) ? "You can ask the PE again. " : "";
+  if (mark) return `${overrule}${askAgain}You marked it ${mark}.${objections || askAgain ? "" : " Nothing else is needed from you."}`;
+  return `${overrule}${askAgain}Mark it Keep, Change or Drop${a.variants.length > 1 ? ", and pick a variant" : ""}.`;
 }
 
 /**
@@ -604,7 +607,7 @@ export function peView(s: State, a: StudioArtifact, providerLabel: (p: "claude" 
   const peProvider = madeBy?.provider ?? run?.provider;
   const designer = a.madeBy.role === "user" ? undefined : a.madeBy.provider;
   const notIndependent = peProvider && peProvider === designer ? `Not independent: the PE ran on the designer's own provider (${providerLabel(peProvider)}).` : undefined;
-  const base = { ...(by ? { by } : {}), ...(notIndependent ? { notIndependent } : {}), simulated: !!byRun?.simulated, verdicts };
+  const base = { ...(by ? { by } : {}), ...(notIndependent ? { notIndependent } : {}), simulated: !!byRun?.simulated, verdicts, ...(S.canAskPeAgain(s, a) ? { canAskAgain: true as const } : {}) };
   const move = yourMove(s, a, r);
   const view = (tone: PeView["tone"], state: string, text: string, next?: string): PeView => ({ ...base, tone, state, text, ...(next ? { next } : {}) });
 
@@ -628,12 +631,8 @@ export function peView(s: State, a: StudioArtifact, providerLabel: (p: "claude" 
   if (a.shots?.status === "pending" || a.demo?.status === "pending") return view("neutral", "Waiting", `The PE reviews it once the ${a.shots?.status === "pending" ? "screenshots are taken" : "recording is made"}.`);
   if (run && R.isActiveStudioRun(run)) return view("work", "Reviewing", asIs ? "The PE is checking it against the code." : "The PE is reading this version: its files, screenshots and recordings.");
   if (run?.status === "queued") return view("neutral", "Queued", heldBecause(s, "The PE's run") ?? "Waiting to start.");
-  if (run && S.endedWithoutResult([run])) {
-    const why = run.note ?? `its run was ${run.status}`;
-    return R.peRunDue(s, a)
-      ? view("work", "Asking again", `The PE's run ended without a verdict (${why}). The service asks the PE again.`)
-      : view("neutral", "No verdict", `The PE's run ended without a verdict (${why}).`);
-  }
+  // Waiting with no run under way: the service asks the PE again on its next cycle (`peRunDue`).
+  if (run && S.endedWithoutResult([run])) return view("work", "Asking again", `The PE's run ended without a verdict (${run.note ?? `its run was ${run.status}`}). The service asks the PE again.`);
   return view("neutral", "Waiting", r.passes ? `The designer revised it. The PE reviews it next, on pass ${r.passes + 1} of ${S.MAX_PE_PASSES}.` : "Waiting for PE review.");
 }
 

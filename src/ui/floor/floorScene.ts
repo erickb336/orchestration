@@ -8,14 +8,17 @@
 //   "Join from an invite" landed;
 // - CLI: "trips plan and share" finished its first step and waits at the checks;
 // - Offline: "Offline maps" waits for the owner's go-ahead.
-// Budgets: building $40, maintenance $50 a month; the PE's pre-flight estimate (a fixture: nothing writes it yet) is
-// $9–$16 to build and $25–$35 a month. Each finished task run costs $1.10, the PE's decision run $0.40.
+// Budgets: building $40, maintenance $50 a month. The PE's estimates on its verdicts of the three approved parts in
+// force (Trip plan v2, Trip list and Packing list), none built yet: $9–$16 to build and up to $35 a month. Each
+// finished task run costs $1.10, the PE's decision run $0.40.
 
 import * as F from "../../domain/findings";
 import * as M from "../../domain/model";
 import { landTask } from "../../domain/testing/blueprintScene";
 import { at, changeOrdered } from "../../domain/testing/changeOrders";
 import type { OutputReport } from "../../domain/model/runs";
+import * as B from "../../domain/studio/blueprint";
+import type { BudgetEstimate } from "../../domain/studio/types";
 import type { Finding, State } from "../../domain/types";
 
 export interface FloorScene {
@@ -79,7 +82,15 @@ export function floorScene(): FloorScene {
   const offline = create(s, "Offline maps", "Offline", true, 31);
   s = structuredClone(offline.s);
   for (const r of [...s.attempts, ...s.leadRuns]) if (r.outcome !== "running" && r.outcome !== "stopping") r.usage ??= { costUsd: 1.1 };
-  s.project.factoryStarts.at(-1)!.estimate = { buildUsd: [9, 16], maintenanceUsdPerMonth: [25, 35], basis: "The PE's pre-flight: similar screens, and storage for 1,000 users" };
+  const estimates: Record<string, BudgetEstimate> = {
+    "Trip plan": { buildUsd: [4, 7], maintenanceUsdPerMonth: [10, 15], basis: "Similar screens, and map tiles for 1,000 users" },
+    "Trip list": { buildUsd: [3, 5], maintenanceUsdPerMonth: [10, 12], basis: "Similar screens, and storage for 1,000 users" },
+    "Packing list": { buildUsd: [2, 4], maintenanceUsdPerMonth: [5, 8], basis: "A small list screen" },
+  };
+  for (const item of B.blueprintItems(s)) {
+    const v = s.studio.verdicts.filter((x) => x.artifactId === item.artifactId && x.version === item.version).at(-1);
+    if (v && estimates[item.title]) v.budget = estimates[item.title];
+  }
   s = M.setBudgets(s, { buildingUsd: 40, maintenanceUsdPerMonth: 50 }, at(32));
   return { s, tasks: { invite: invite.id, joined: joined.id, cli: cli.id, offline: offline.id, ...co.tasks }, decisionId };
 }

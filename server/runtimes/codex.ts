@@ -170,7 +170,10 @@ interface Run {
   model?: string;
   lastAgentText?: string;
   finalAnswerText?: string;
+  /** The thread's totals from Codex's last usage report: the model requests that completed. */
   usage?: Usage;
+  /** The service asked Codex for the turn: from here on a model request may be open. */
+  turnRequested?: true;
   interruptRequested: boolean;
   lastError?: string;
   stderrTail: string;
@@ -236,6 +239,17 @@ function plus(a: Usage | undefined, b: Usage): Usage {
   const out: Usage = { ...a };
   for (const k of USAGE_KEYS) if (b[k] !== undefined) out[k] = (a?.[k] ?? 0) + b[k]!;
   return out;
+}
+
+/**
+ * What a run used, as it ends: the thread's totals from Codex's last usage report, or zeros when no model request
+ * completed. Codex reports a request's usage only when the request completes, so a run that ends before its turn
+ * completed (stopped, failed or crashed) has one request with no report: `openRequest` marks it, and the budgets count
+ * it at an estimate (src/domain/spend.ts). A run that never asked for its turn made no model request: zeros, complete.
+ */
+function usageAtEnd(run: Run, turnCompleted: boolean): Usage {
+  const u = run.usage ?? { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
+  return run.turnRequested && !turnCompleted ? { ...u, openRequest: true } : u;
 }
 
 /** What `now` adds to `before`, or undefined when nothing grew. */
@@ -357,7 +371,7 @@ export class CodexAdapter implements RuntimeAdapter {
     child.stderr?.on("data", (d: string) => {
       run.stderrTail = (run.stderrTail + d).slice(-2000);
     });
-    child.on("error", (e) => this.finish(run, { type: "failed", attemptId: a.attemptId, message: this.spawnFailure(e), usage: run.usage }));
+    child.on("error", (e) => this.finish(run, { type: "failed", attemptId: a.attemptId, message: this.spawnFailure(e) }));
     let exited = false;
     const onGone = (code: number | null, signal: NodeJS.Signals | null) => {
       if (exited) return;
@@ -365,7 +379,7 @@ export class CodexAdapter implements RuntimeAdapter {
       run.rpc.close();
       this.archiveKept(run);
       if (run.done) return;
-      this.finish(run, { type: "failed", attemptId: a.attemptId, message: this.exitFailure(run, code, signal), usage: run.usage });
+      this.finish(run, { type: "failed", attemptId: a.attemptId, message: this.exitFailure(run, code, signal) });
     };
     // "close" waits for stdio to drain (so stderr is complete); "exit" plus a short delay covers a
     // grandchild that keeps a pipe open.
@@ -423,6 +437,7 @@ export class CodexAdapter implements RuntimeAdapter {
         // The turn's final message is constrained to the schema, so it is the JSON answer itself.
         ...(a.outputSchema ? { outputSchema: a.outputSchema as TurnStartParams["outputSchema"] } : {}),
       };
+      run.turnRequested = true;
       const turn = await rpc.request("turn/start", turnParams);
       if (run.done) return;
       run.turnId ??= turn.turn.id;
@@ -431,7 +446,7 @@ export class CodexAdapter implements RuntimeAdapter {
       if (run.done) return;
       // A closed connection means the process went away; the exit handler reports it with stderr.
       if (e instanceof RpcClosedError) return;
-      this.finish(run, { type: "failed", attemptId: a.attemptId, message: this.requestFailure(e), usage: run.usage });
+      this.finish(run, { type: "failed", attemptId: a.attemptId, message: this.requestFailure(e) });
     }
   }
 
@@ -565,15 +580,16 @@ export class CodexAdapter implements RuntimeAdapter {
 
   private forceStop(run: Run) {
     if (run.child) killGroup(run.child, "SIGKILL");
-    this.finish(run, { type: "stopped", attemptId: run.a.attemptId, how: "killed", usage: run.usage }, false);
+    this.finish(run, { type: "stopped", attemptId: run.a.attemptId, how: "killed" }, false);
   }
 
-  /** Emit the single terminal event, forget the run, and end its process. */
+  /** Emit the single terminal event, with the run's usage, forget the run, and end its process. */
   private finish(run: Run, e: AdapterEvent, gentle = true) {
     if (run.done) return;
     run.done = true;
     this.clearTimers(run);
     if (this.runs.get(run.a.attemptId) === run) this.runs.delete(run.a.attemptId);
+    if (e.type === "completed" || e.type === "stopped" || e.type === "failed") e = { ...e, usage: usageAtEnd(run, e.type === "completed") };
     // Sub-agents end with their parent: the app-server that runs them exits now.
     e = this.endSubagents(run, e);
     // Notes the app-server has not answered settle first: the run is over, so they were not delivered.
@@ -634,7 +650,7 @@ export class CodexAdapter implements RuntimeAdapter {
         }
         run.lastError = this.clean(msg);
         this.timer(run, () => {
-          this.finish(run, { type: "failed", attemptId: id, message: run.lastError!, usage: run.usage });
+          this.finish(run, { type: "failed", attemptId: id, message: run.lastError! });
         }, ERROR_SETTLE_MS);
         return;
       }
@@ -645,13 +661,13 @@ export class CodexAdapter implements RuntimeAdapter {
         if (turn.status === "completed") {
           const fromItems = [...turn.items].reverse().find((i): i is Extract<ThreadItem, { type: "agentMessage" }> => i.type === "agentMessage");
           const finalText = run.finalAnswerText ?? run.lastAgentText ?? fromItems?.text ?? "";
-          this.finish(run, { type: "completed", attemptId: id, finalText, usage: run.usage, model: run.model });
+          this.finish(run, { type: "completed", attemptId: id, finalText, model: run.model });
         } else if (turn.status === "interrupted") {
-          if (run.interruptRequested) this.finish(run, { type: "stopped", attemptId: id, how: "interrupted", usage: run.usage });
-          else this.finish(run, { type: "failed", attemptId: id, message: "Codex interrupted the turn without being asked to.", usage: run.usage });
+          if (run.interruptRequested) this.finish(run, { type: "stopped", attemptId: id, how: "interrupted" });
+          else this.finish(run, { type: "failed", attemptId: id, message: "Codex interrupted the turn without being asked to." });
         } else if (turn.status === "failed") {
           const message = this.clean(describeTurnError(turn.error) ?? run.lastError ?? "Codex turn failed without an error message.");
-          this.finish(run, { type: "failed", attemptId: id, message, usage: run.usage });
+          this.finish(run, { type: "failed", attemptId: id, message });
         }
         return;
       }

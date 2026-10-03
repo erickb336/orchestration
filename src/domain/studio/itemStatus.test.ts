@@ -12,7 +12,7 @@ import { blueprintScene, citingTask, landTask, testReport } from "../testing/blu
 import { builtBy, captured, capturedAs, decisionOn, landedCommit, leadDecides, notCaptured, realityBase, realityScene, recordingFiles, shotFile, uxReviewed } from "../testing/realityScene";
 import { lockInAsOwner } from "../testing/studio";
 import type { State } from "../types";
-import { blueprintFactoryStatus, itemFactoryStatus } from "./itemStatus";
+import { blueprintFactoryStatus, itemFactoryStatus, restOfBuild } from "./itemStatus";
 
 const statuses = (s: State) => Object.fromEntries(blueprintFactoryStatus(s).map((v) => [`${v.item.title} v${v.item.version}`, v.status]));
 const status = (s: State, id: string) => itemFactoryStatus(s, id)!.status;
@@ -257,5 +257,33 @@ describe("a terminal demo, and the scene of the browser pass", () => {
       "Trip summary v1": "built-not-verified",
     });
     expect(gap(sc.s, sc.items.summary)).toMatchObject({ why: "no-evidence", reason: "preview-did-not-start", log: expect.stringContaining("Cannot find module 'vite'") });
+  });
+});
+
+describe("the PE's estimate for the rest of the build (B-03)", () => {
+  /** The PE's building estimate on the newest verdict of each named part in force (a verdict is added where it has none). */
+  function estimated(s0: State, byTitle: Record<string, [number, number]>): State {
+    const s = structuredClone(s0);
+    for (const item of blueprintFactoryStatus(s).map((v) => v.item)) {
+      const range = byTitle[item.title];
+      if (!range) continue;
+      const budget = { buildUsd: range, basis: "Similar screens" };
+      const v = s.studio.verdicts.filter((x) => x.artifactId === item.artifactId && x.version === item.version).at(-1);
+      if (v) v.budget = budget;
+      else s.studio.verdicts.push({ id: `pv-${item.id}`, artifactId: item.artifactId, version: item.version, pass: 1, verdict: "feasible", reasons: "Fits.", budget, at: "2026-10-02T12:00:00.000Z" });
+    }
+    return s;
+  }
+
+  it("sums the PE's estimates of the approved parts no landed work has built yet: running and waiting work count, landed work and a word list do not", () => {
+    // Trip plan runs and Reminders waits; Trip data, Join flow and Share costs landed; Words is a word list.
+    const { s } = blueprintScene();
+    expect(restOfBuild(estimated(s, { "Trip plan": [4, 7], Reminders: [2, 3], "Trip data": [9, 9], "Join flow": [9, 9], "Share costs": [9, 9] }))).toEqual({ usd: [6, 10], parts: 2, missing: 0 });
+  });
+
+  it("has no total while a part to build has no estimate from the PE: never $0; nothing left to build is a known $0", () => {
+    const { s } = blueprintScene();
+    expect(restOfBuild(estimated(s, { "Trip plan": [4, 7] }))).toEqual({ usd: null, parts: 2, missing: 1 });
+    expect(restOfBuild(realityScene().s)).toEqual({ usd: [0, 0], parts: 0, missing: 0 });
   });
 });

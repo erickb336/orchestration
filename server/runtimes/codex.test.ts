@@ -81,6 +81,10 @@ async function waitFor(pred: () => boolean, ms = 5000) {
   }
 }
 
+/** A run's usage when it made no model request, and when it ended with its first request open (Codex reports none for it). */
+const NO_REQUEST = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
+const OPEN_REQUEST = { ...NO_REQUEST, openRequest: true };
+
 const TERMINAL = new Set(["completed", "stopped", "failed"]);
 const terminals = (events: AdapterEvent[]) => events.filter((e) => TERMINAL.has(e.type));
 const noteEvents = (events: AdapterEvent[]) => events.filter((e) => e.type === "note");
@@ -210,7 +214,7 @@ describe("CodexAdapter runs", () => {
     adapter.interrupt("att-1");
     await waitFor(() => terminals(events).length > 0);
     await settle(400);
-    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "att-1", how: "interrupted", usage: undefined }]);
+    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "att-1", how: "interrupted", usage: OPEN_REQUEST }]);
     const interrupts = stubLog().filter((l) => l.recv?.method === "turn/interrupt");
     expect(interrupts).toHaveLength(1);
     expect(interrupts[0].recv.params).toEqual({ threadId: "thr_stub_1", turnId: "turn_stub_1" });
@@ -227,8 +231,25 @@ describe("CodexAdapter runs", () => {
     await waitFor(() => terminals(events).length > 0);
     expect(Date.now() - t0).toBeGreaterThanOrEqual(280);
     await settle();
-    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "att-1", how: "killed", usage: undefined }]);
+    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "att-1", how: "killed", usage: OPEN_REQUEST }]);
     expect(adapter.has("att-1")).toBe(false);
+  });
+
+  it("a stop mid-turn reports the usage of the model requests that completed, and marks the open one Codex never reports (B-02)", async () => {
+    const { adapter, events } = make("usage-interrupt");
+    adapter.start(assignment());
+    await waitFor(() => events.some((e) => e.type === "started"));
+    await settle(80);
+    adapter.interrupt("att-1");
+    await waitFor(() => terminals(events).length > 0);
+    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "att-1", how: "interrupted", usage: { inputTokens: 300, cachedInputTokens: 100, outputTokens: 20, openRequest: true } }]);
+  });
+
+  it("a crash mid-turn is a failure whose usage marks the open model request (B-02)", async () => {
+    const { adapter, events } = make("crash");
+    adapter.start(assignment());
+    await waitFor(() => terminals(events).length > 0);
+    expect((terminals(events)[0] as { usage?: unknown }).usage).toEqual(OPEN_REQUEST);
   });
 
   it("an interrupt before the turn has started kills the process", async () => {
@@ -239,7 +260,8 @@ describe("CodexAdapter runs", () => {
     adapter.interrupt("att-1");
     await waitFor(() => terminals(events).length > 0);
     await settle();
-    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "att-1", how: "killed", usage: undefined }]);
+    // No model request was made: a known zero, not a missing report (B-02).
+    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "att-1", how: "killed", usage: NO_REQUEST }]);
     expect(events.some((e) => e.type === "started")).toBe(false);
   });
 
@@ -249,7 +271,7 @@ describe("CodexAdapter runs", () => {
     await waitFor(() => terminals(events).length > 0);
     await settle();
     expect(events.some((e) => e.type === "activity" && e.note === "Time limit reached")).toBe(true);
-    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "att-t", how: "interrupted", usage: undefined }]);
+    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "att-t", how: "interrupted", usage: OPEN_REQUEST }]);
   });
 
   it("maps an authentication failure to login guidance", async () => {
@@ -331,7 +353,7 @@ describe("CodexAdapter runs", () => {
     expect(adapter.ids()).toEqual(["b"]);
     adapter.kill("b");
     await settle();
-    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "a", how: "interrupted", usage: undefined }]);
+    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "a", how: "interrupted", usage: OPEN_REQUEST }]);
   });
 });
 
@@ -420,7 +442,7 @@ describe("sub-agents (ORC-031)", () => {
       { phase: "started", id: "thr_sub_a", asked: "Codex sub-agent /root/a", usageInParent: false },
       { phase: "ended", id: "thr_sub_a", how: "stopped", model: "stub-sub-model", usage: { inputTokens: 700, cachedInputTokens: 0, outputTokens: 5 } },
     ]);
-    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "att-i", how: "interrupted", usage: undefined }]);
+    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "att-i", how: "interrupted", usage: OPEN_REQUEST }]);
     // One interrupt, of the parent's turn.
     expect(recvOf(stubLog, "turn/interrupt").map((m) => m.params)).toEqual([{ threadId: "thr_stub_1", turnId: "turn_stub_1" }]);
   });

@@ -13,7 +13,7 @@
 
 import * as C from "./checks";
 import * as M from "./model";
-import { fmtUsd, pastBudget } from "./spend";
+import { fmtUsd, isStandingPeCall, pastBudget } from "./spend";
 import { followUpRefs } from "./studio/blueprint";
 import { readEstimate } from "./studio/studio";
 import type { BudgetEstimate } from "./studio/types";
@@ -208,15 +208,15 @@ export function createDecisions(s: State, t: Task, art: Artifact, now: string): 
 /**
  * Keep the record bounded: decided decisions of settled tasks go first, oldest first. A task is
  * settled once cancelled, or done and landed (or done with no delivery to wait for). Open decisions,
- * and decided ones a repair or the gate may still read (an unsettled task), are never dropped: the
- * cap yields rather than reopen a finding.
+ * decided ones a repair or the gate may still read (an unsettled task), and PE calls that stand (the
+ * budgets count them, B-18) are never dropped: the cap yields rather than reopen a finding or lose a cost.
  */
 function pruneDecisions(s: State) {
   if (s.decisions.length <= MAX_DECISIONS) return;
   const delivery = s.project.prDelivery.enabled || s.project.autonomy.autoDeliver.enabled;
   const settledTask = (t: Task) => t.lifecycle === "cancelled" || (t.lifecycle === "done" && (!!t.integration?.landed || t.integration?.status === "not-needed" || !delivery));
   const settledIds = new Set(s.tasks.filter(settledTask).map((t) => t.id));
-  const droppable = (d: FindingDecision) => d.status !== "open" && (d.status === "superseded" || settledIds.has(d.taskId) || !s.tasks.some((t) => t.id === d.taskId));
+  const droppable = (d: FindingDecision) => d.status !== "open" && !isStandingPeCall(d) && (d.status === "superseded" || settledIds.has(d.taskId) || !s.tasks.some((t) => t.id === d.taskId));
   for (let i = 0; i < s.decisions.length && s.decisions.length > MAX_DECISIONS; ) {
     if (droppable(s.decisions[i])) s.decisions.splice(i, 1);
     else i++;

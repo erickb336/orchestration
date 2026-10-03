@@ -899,6 +899,25 @@ function OverruleObjection({ verdictId }: { verdictId: string }) {
   );
 }
 
+/** Ask the PE again (`askPeAgain`, B-06): it gave no verdict on this version, because it could not answer. The service asks for its run. */
+function AskPeAgain({ artifact: a }: { artifact: StudioArtifact }) {
+  const { send, disabled } = useStore();
+  const [busy, setBusy] = useState(false);
+  const ask = async () => {
+    if (disabled || busy) return;
+    setBusy(true);
+    await send("askPeAgain", { artifactId: a.id, version: a.version });
+    setBusy(false);
+  };
+  return (
+    <div>
+      <Button size="small" disabled={disabled} disabledReason="The service is offline." loading={busy} onClick={() => void ask()}>
+        {busy ? "Asking…" : "Ask the PE again"}
+      </Button>
+    </div>
+  );
+}
+
 /** PE review of the artifact shown: where it stands for you, the PE's latest verdict on each variant, and the artifact's versions. */
 function PeReviewPanel({ artifact: a, onVersion }: { artifact: StudioArtifact | undefined; onVersion: (artifactId: string, version: number) => void }) {
   const { state } = useStore();
@@ -942,6 +961,7 @@ function PeReviewPanel({ artifact: a, onVersion }: { artifact: StudioArtifact | 
             </ul>
           )}
           {view.next && <p className="small">{view.next}</p>}
+          {view.canAskAgain && <AskPeAgain artifact={a} />}
           {view.by && <p className="micro muted">PE · {view.by}</p>}
           {view.notIndependent && <p className="small">{view.notIndependent}</p>}
           <PeQuestions artifact={a} />

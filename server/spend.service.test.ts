@@ -125,6 +125,6 @@ describe("a run that never started", () => {
     codex.emit({ type: "failed", attemptId: run.id, message: "Codex crashed" });
     tick();
     expect(attempt(run.id).sessionId).toBeDefined();
-    expect(buildingSpend(st(), LIST).unknown).toEqual([{ runId: run.id, provider: "codex", model: "codex-sample-large-actual", reason: "no-usage" }]);
+    expect(buildingSpend(st(), LIST).unknown).toEqual([{ runId: run.id, provider: "codex", model: "codex-sample-large-actual", reason: "no-usage", countedUsd: null }]);
   });
 });

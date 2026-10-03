@@ -3,7 +3,8 @@
 // budgets. Pure: derived from state only.
 
 import pricesJson from "./prices.json";
-import type { BudgetEstimate, StudioRun } from "./studio/types";
+import { covers } from "./studio/studio";
+import { type BlueprintItem, type BudgetEstimate, type ItemEstimate, type StudioRun, type UsdRange, KIND_RULES } from "./studio/types";
 import { type Attempt, type FindingDecision, type LeadRun, type PeCall, type ProviderId, type Runner, type State, type Subagent, isProvider } from "./types";
 
 /** One model's published API price, in dollars per million tokens, with where and when it was read. */
@@ -24,18 +25,24 @@ export interface ModelPrice {
 
 export const PRICES: readonly ModelPrice[] = pricesJson as ModelPrice[];
 
-/** Why a run has no recorded cost: its model has no price, or no usage was recorded for it. */
-export type NoCostReason = "no-price" | "no-usage";
+/**
+ * Why a run has no full record of its cost: its model has no price; no usage was recorded for it; or it ended with a
+ * model request open, whose usage the provider never reported (Codex reports a request's usage when it completes).
+ */
+export type NoCostReason = "no-price" | "no-usage" | "open-request";
 
 /**
  * One run's cost. Every figure is an estimate: a cost the runtime reports (Claude) is computed by the
  * runtime at list prices and is not billed on a subscription, and no run records how it was billed.
  * `not-started`: the run ended before its runtime started it, so nothing ran: a known $0 (see `neverStarted`).
  * `simulated`: the fake runtime ran it (a studio run records it); no agent ran, so it spent nothing: a known $0.
- * `unknown`: the run has no recorded cost (no reported cost, and no usage or no price to work one out);
- * unknown, never zero.
+ * `unknown`: the run has no full record of its cost (no reported cost, and no usage or no price to work one out, or a
+ * model request with no usage report); unknown, never zero. `recordedUsd`: for an open request, what the requests
+ * that completed cost.
  */
-export type RunCost = { basis: "reported" | "priced" | "not-started" | "simulated"; usd: number; estimated: true } | { basis: "unknown"; usd: null; estimated: true; reason: NoCostReason };
+export type RunCost =
+  | { basis: "reported" | "priced" | "not-started" | "simulated"; usd: number; estimated: true }
+  | { basis: "unknown"; usd: null; estimated: true; reason: NoCostReason; recordedUsd?: number };
 
 /** A task step's run, a lead run, or a studio run (Vision's). */
 type Run = Attempt | LeadRun | StudioRun;
@@ -62,7 +69,7 @@ function neverStarted(r: Run): boolean {
   if (outcomeOf(r) !== "failed" && outcomeOf(r) !== "stopped") return false;
   if (r.sessionId !== undefined || r.actualModel !== undefined) return false;
   const u = r.usage;
-  return u === undefined || (u.costUsd === undefined && !u.inputTokens && !u.outputTokens);
+  return u === undefined || (u.costUsd === undefined && !u.inputTokens && !u.outputTokens && !u.openRequest);
 }
 
 /**
@@ -71,6 +78,7 @@ function neverStarted(r: Run): boolean {
  * is priced at the cached-input price where one is published, and the rest of the input at the full price.
  * Claude reports its cache reads and writes only inside its input count, so were its reported cost missing, its
  * input would all be priced at the full price: too high for cache reads, too low for cache writes.
+ * A run that ended with a model request open (`openRequest`, Codex) is unknown, never $0, whatever completed before it.
  */
 export function estimateUsd(run: Run, prices: readonly ModelPrice[]): RunCost {
   const u = run.usage;
@@ -78,17 +86,24 @@ export function estimateUsd(run: Run, prices: readonly ModelPrice[]): RunCost {
   if (neverStarted(run)) return { basis: "not-started", usd: 0, estimated: true };
   if ("simulated" in run && run.simulated) return { basis: "simulated", usd: 0, estimated: true };
   const { provider, model } = ranOn(run);
-  return priced(provider, model, u, prices);
+  const c = priced(provider, model, u, prices);
+  return c.basis === "priced" && u?.openRequest ? { basis: "unknown", usd: null, estimated: true, reason: "open-request", recordedUsd: c.usd } : c;
 }
 
-/** Tokens at the model's published price; unknown without usage or without a price. */
+/** Tokens at the model's published price; unknown without usage or without a price. No tokens cost $0 at any price. */
 function priced(provider: Runner, model: string, u: Usage | undefined, prices: readonly ModelPrice[]): RunCost {
   if (u?.inputTokens === undefined || u.outputTokens === undefined) return { basis: "unknown", usd: null, estimated: true, reason: "no-usage" };
+  if (u.inputTokens === 0 && u.outputTokens === 0) return { basis: "priced", usd: 0, estimated: true };
   const price = prices.find((p) => p.provider === provider && p.model === model);
-  if (!price) return { basis: "unknown", usd: null, estimated: true, reason: "no-price" };
-  const cached = Math.min(Math.max(u.cachedInputTokens ?? 0, 0), u.inputTokens);
-  const input = (u.inputTokens - cached) * price.inputPerMTok + cached * (price.cachedInputPerMTok ?? price.inputPerMTok);
-  return { basis: "priced", usd: (input + u.outputTokens * price.outputPerMTok) / 1_000_000, estimated: true };
+  return price ? { basis: "priced", usd: tokensAt(price, u), estimated: true } : { basis: "unknown", usd: null, estimated: true, reason: "no-price" };
+}
+
+/** The tokens' dollars at one price: cached input at the cached-input price where one is published. */
+function tokensAt(price: Pick<ModelPrice, "inputPerMTok" | "outputPerMTok" | "cachedInputPerMTok">, u: Usage & {}): number {
+  const inputTokens = u.inputTokens ?? 0;
+  const cached = Math.min(Math.max(u.cachedInputTokens ?? 0, 0), inputTokens);
+  const input = (inputTokens - cached) * price.inputPerMTok + cached * (price.cachedInputPerMTok ?? price.inputPerMTok);
+  return (input + (u.outputTokens ?? 0) * price.outputPerMTok) / 1_000_000;
 }
 
 type Usage = Attempt["usage"];
@@ -136,20 +151,29 @@ export function subagentsCost(r: Run, prices: readonly ModelPrice[] = PRICES): S
   return out;
 }
 
-/** A finished run with no recorded cost, and why. */
+/**
+ * A finished run's cost with no full record, and why, with what the budgets count for it beyond the recorded spend
+ * (`countedUsd`): an estimate, or null when nothing bounds it. Unknown, never zero.
+ * - open-request: one model request the provider never reported, at the dearest finished run on the same model so far
+ *   (a run has at least one whole request), or at the run limit before there is one;
+ * - no-price: the run's tokens at the dearest price its provider has in the list; null if it has none;
+ * - no-usage: a Claude run at its run limit, its spend cap (a run does not record its own, so one started under
+ *   another limit counts at today's); null for a Codex run, which has no spend cap.
+ */
 export interface UnknownCost {
   runId: string;
   provider: Runner;
   model: string;
   reason: NoCostReason;
+  countedUsd: number | null;
 }
 
 export interface Spend {
-  /** Estimated dollars of the finished runs that have a figure. Runs with no recorded cost are not in it. */
+  /** Estimated dollars of what the finished runs recorded. The costs with no full record are not in it. */
   usd: number;
   /** Finished runs counted. */
   runs: number;
-  /** Finished runs with no recorded cost: unknown, never zero. The budget stop counts each at its run limit (`budgetStop`). */
+  /** Finished runs' costs with no full record: unknown, never zero, each with what the budgets count for it. */
   unknown: UnknownCost[];
 }
 
@@ -161,72 +185,131 @@ export interface Spend {
  */
 export function buildingSpend(s: State, prices: readonly ModelPrice[] = PRICES): Spend {
   const out: Spend = { usd: 0, runs: 0, unknown: [] };
-  const runs: Run[] = [...s.attempts.filter((a) => isProvider(a.snapshot.provider)), ...s.leadRuns, ...s.studio.runs];
-  for (const r of runs) {
-    const o = outcomeOf(r);
-    if (o === "running" || o === "stopping" || o === "queued") continue;
+  const finished: Run[] = [...s.attempts.filter((a) => isProvider(a.snapshot.provider)), ...s.leadRuns, ...s.studio.runs].filter((r) => !["running", "stopping", "queued"].includes(outcomeOf(r)));
+  const costs = finished.map((r) => estimateUsd(r, prices));
+  // The dearest finished run on each model with a full record: the estimate of one request its provider did not report.
+  const dearest = new Map<string, number>();
+  finished.forEach((r, i) => {
+    const c = costs[i];
+    const key = modelKey(ranOn(r));
+    if (c.basis === "reported" || c.basis === "priced") dearest.set(key, Math.max(dearest.get(key) ?? 0, c.usd));
+  });
+  /** What the budgets count for a cost with no full record (`UnknownCost`). */
+  const count = (reason: NoCostReason, on: { provider: Runner; model: string }, u: Usage | undefined): number | null => {
+    const openRequest = dearest.get(modelKey(on)) || s.project.runLimits.maxBudgetUsd;
+    if (reason === "open-request") return openRequest;
+    if (reason === "no-price") {
+      const tokens = atDearestPrice(on.provider, u, prices);
+      return tokens !== null && u?.openRequest ? tokens + openRequest : tokens;
+    }
+    return on.provider === "claude" ? s.project.runLimits.maxBudgetUsd : null;
+  };
+  finished.forEach((r, i) => {
     out.runs++;
-    const c = estimateUsd(r, prices);
-    if (c.basis === "unknown") out.unknown.push({ runId: r.id, ...ranOn(r), reason: c.reason });
-    else out.usd += c.usd;
-    addSubagents(out, r, prices);
-  }
+    const c = costs[i];
+    if (c.basis !== "unknown") out.usd += c.usd;
+    else {
+      out.usd += c.recordedUsd ?? 0;
+      out.unknown.push({ runId: r.id, ...ranOn(r), reason: c.reason, countedUsd: count(c.reason, ranOn(r), r.usage) });
+    }
+    addSubagents(out, r, prices, count);
+  });
   return out;
+}
+
+const modelKey = (on: { provider: Runner; model: string }) => `${on.provider}\n${on.model}`;
+
+/** Tokens at the dearest price the provider has in the list, input, cached input and output each; null when it has none. */
+function atDearestPrice(provider: Runner, u: Usage | undefined, prices: readonly ModelPrice[]): number | null {
+  const mine = prices.filter((p) => p.provider === provider);
+  if (!mine.length || !u) return null;
+  const top = (f: (p: ModelPrice) => number) => Math.max(...mine.map(f));
+  return tokensAt({ inputPerMTok: top((p) => p.inputPerMTok), outputPerMTok: top((p) => p.outputPerMTok), cachedInputPerMTok: top((p) => p.cachedInputPerMTok ?? p.inputPerMTok) }, u);
 }
 
 /**
  * A finished run's subagents (ORC-031) count apart from it where its own usage does not include theirs (Codex's
  * sub-threads may report apart); where it does (Claude's session total), they are already in the run's cost. One with
- * no recorded cost is unknown, like a run; so is each unlisted one, whose usage was not kept.
+ * no recorded cost is unknown, like a run, and counts as one; so is each unlisted one, whose usage was not kept.
  */
-function addSubagents(out: Spend, r: Run, prices: readonly ModelPrice[]) {
+function addSubagents(out: Spend, r: Run, prices: readonly ModelPrice[], count: (reason: NoCostReason, on: { provider: Runner; model: string }, u: Usage | undefined) => number | null) {
   const rec = r.subagents;
   if (!rec) return;
   const on = ranOn(r);
   for (const sub of rec.items) {
     if (sub.usageInParent) continue;
     const c = subagentUsd(r, sub, prices);
-    if (c.basis === "unknown") out.unknown.push({ runId: `${r.id} helper ${sub.id}`, provider: on.provider, model: sub.model ?? on.model, reason: c.reason });
+    const model = sub.model ?? on.model;
+    if (c.basis === "unknown") out.unknown.push({ runId: `${r.id} helper ${sub.id}`, provider: on.provider, model, reason: c.reason, countedUsd: count(c.reason, { provider: on.provider, model }, sub.usage) });
     else out.usd += c.usd;
   }
-  for (let i = 0; i < (rec.unlisted ?? 0); i++) out.unknown.push({ runId: `${r.id} unlisted helper ${i + 1}`, provider: on.provider, model: on.model, reason: "no-usage" });
+  for (let i = 0; i < (rec.unlisted ?? 0); i++) out.unknown.push({ runId: `${r.id} unlisted helper ${i + 1}`, ...on, reason: "no-usage", countedUsd: count("no-usage", on, undefined) });
 }
 
-/**
- * The most one run on this provider may spend, or undefined when it has no limit. Claude's is its spend cap, the
- * project's run limit (a run does not record its own, so one started under another limit counts at today's). Codex
- * has no spend cap.
- */
-export const runLimitUsd = (s: State, provider: Runner): number | undefined => (provider === "claude" ? s.project.runLimits.maxBudgetUsd : undefined);
+/** The spend the budgets count: the recorded spend and each cost with no full record at its estimate; null when one has none. */
+export function countedSpend(spend: Spend): number | null {
+  if (spend.unknown.some((u) => u.countedUsd === null)) return null;
+  return spend.unknown.reduce((usd, u) => usd + u.countedUsd!, spend.usd);
+}
+
+/** What the estimates in the counted spend add. */
+const estimatedUsd = (spend: Spend) => spend.unknown.reduce((usd, u) => usd + (u.countedUsd ?? 0), 0);
 
 /** Why nothing new starts at the building budget. */
 export interface BudgetStop {
   budgetUsd: number;
   spend: Spend;
-  /** The spend with each run of no recorded cost counted at its run limit; null when one has no limit, so the spend cannot be checked. */
+  /** The counted spend (`countedSpend`); null when a cost has nothing to count it at, so the spend cannot be checked. */
   countedUsd: number | null;
   /** Why, in one line for the owner. */
   why: string;
 }
 
+const runs = (n: number) => `${n} run${n === 1 ? "" : "s"}`;
+
 /**
  * The building budget is reached, or the spend cannot be checked against it: nothing new starts until the owner raises
  * it or continues past it. Undefined while no building budget is set, below it, or after the owner chose to continue
- * past this amount. A finished run with no recorded cost is unknown, never $0 (review finding 4): it counts at its run
- * limit, the most it could have spent (the rule of the studio trial, scripts/trialSpend.mjs); a run with no limit
- * cannot be counted, so the stop holds new runs and says why.
+ * past this amount. A cost with no full record is unknown, never $0 (review finding 4): it counts at its estimate
+ * (`UnknownCost`); one with nothing to count it at holds new runs, and the stop says why.
  */
 export function budgetStop(s: State, prices: readonly ModelPrice[] = PRICES): BudgetStop | undefined {
   const budgetUsd = s.project.budgets.buildingUsd;
   if (budgetUsd === null || s.project.budgetContinued?.buildingUsd === budgetUsd) return undefined;
   const spend = buildingSpend(s, prices);
-  const runs = (n: number) => `${n} run${n === 1 ? "" : "s"}`;
-  const unlimited = spend.unknown.filter((u) => runLimitUsd(s, u.provider) === undefined).length;
-  if (unlimited) return { budgetUsd, spend, countedUsd: null, why: `The building spend cannot be checked against the ${fmtUsd(budgetUsd)} budget: ${runs(unlimited)} with no recorded cost ${unlimited === 1 ? "has" : "have"} no spend limit` };
-  const countedUsd = spend.unknown.reduce((usd, u) => usd + runLimitUsd(s, u.provider)!, spend.usd);
+  const countedUsd = countedSpend(spend);
+  if (countedUsd === null) {
+    const n = spend.unknown.filter((u) => u.countedUsd === null).length;
+    return { budgetUsd, spend, countedUsd, why: `The building spend cannot be checked against the ${fmtUsd(budgetUsd)} budget: ${runs(n)} with no recorded cost ${n === 1 ? "has" : "have"} no spend limit` };
+  }
   if (countedUsd < budgetUsd) return undefined;
-  const counted = spend.unknown.length ? `, counting ${runs(spend.unknown.length)} with no recorded cost at the ${fmtUsd(s.project.runLimits.maxBudgetUsd)} run limit` : "";
-  return { budgetUsd, spend, countedUsd, why: `The building budget is reached: ${fmtUsd(countedUsd)} of ${fmtUsd(budgetUsd)}${counted}` };
+  const n = spend.unknown.length;
+  const estimate = n ? `, of which ${fmtUsd(estimatedUsd(spend))} is an estimate for ${n} unrecorded cost${n === 1 ? "" : "s"}` : "";
+  return { budgetUsd, spend, countedUsd, why: `The building budget is reached: ${fmtUsd(countedUsd)} of ${fmtUsd(budgetUsd)}${estimate}` };
+}
+
+/**
+ * The costs with no full record, in one line for the owner, or undefined when there is none: "2 unrecorded costs count
+ * at an estimate of $0.15." A cost with nothing to count it at makes the spend unknown.
+ */
+export function unrecordedWords(spend: Spend): string | undefined {
+  const n = spend.unknown.length;
+  if (!n) return undefined;
+  const none = spend.unknown.filter((u) => u.countedUsd === null).length;
+  if (none) return `${runs(none)} ${none === 1 ? "has" : "have"} no recorded cost and no spend limit, so the spend cannot be checked.${n > none ? ` ${n - none} more unrecorded cost${n - none === 1 ? " counts" : "s count"} at an estimate of ${fmtUsd(estimatedUsd(spend))}.` : ""}`;
+  return `${n} unrecorded cost${n === 1 ? " counts" : "s count"} at an estimate of ${fmtUsd(estimatedUsd(spend))}: ${whyUnrecorded(spend.unknown)}.`;
+}
+
+/** "a model request Codex did not report; model gpt-x has no price". */
+function whyUnrecorded(unknown: UnknownCost[]): string {
+  const open = unknown.filter((u) => u.reason === "open-request").length;
+  const models = [...new Set(unknown.filter((u) => u.reason === "no-price").map((u) => u.model))];
+  const noUsage = unknown.filter((u) => u.reason === "no-usage").length;
+  return [
+    ...(open ? [`${open === 1 ? "a model request" : `${open} model requests`} the provider did not report, each at the dearest run on its model`] : []),
+    ...(models.length ? [`${models.length === 1 ? "model" : "models"} ${models.join(", ")} ${models.length === 1 ? "has" : "have"} no price, so the dearest price of its provider applies`] : []),
+    ...(noUsage ? [`${runs(noUsage)} with no usage, each at the run limit`] : []),
+  ].join("; ");
 }
 
 /** "$12.34". */
@@ -237,22 +320,68 @@ export const fmtUsd = (usd: number) => `$${usd.toFixed(2)}`;
  * owner, who took a call that went to them). A call the owner reversed or reopened does not stand.
  */
 function standingPeCalls(s: State): (FindingDecision & { pe: PeCall })[] {
-  return s.decisions.filter((d): d is FindingDecision & { pe: PeCall } => !!d.pe && d.status === d.pe.decision);
+  return s.decisions.filter(isStandingPeCall);
+}
+
+/** A PE call that stands: the budgets count it (`maintenanceEstimate`, `committedBuildUsd`), so its record is kept. */
+export const isStandingPeCall = (d: FindingDecision): d is FindingDecision & { pe: PeCall } => !!d.pe && d.status === d.pe.decision;
+
+// ---------- the PE's estimates of the approved parts (B-03) ----------
+
+/** The PE's newest estimate on the item's version (and variant), from its review of that version; null: no estimate (never $0). */
+export function itemEstimate(s: State, item: BlueprintItem): ItemEstimate {
+  const v = s.studio.verdicts.filter((x) => x.artifactId === item.artifactId && x.version === item.version && covers(x, item.variant) && x.budget).at(-1);
+  return { itemId: item.id, estimate: v?.budget ? structuredClone(v.budget) : null };
+}
+
+/**
+ * The parts the factory builds and the PE estimates: the approved items in force, but not a word list (the PE does not
+ * review one) and not a reproduction of the code as it is today (it exists already).
+ */
+export function estimatedParts(s: State): BlueprintItem[] {
+  const asIs = (i: BlueprintItem) => s.studio.artifacts.some((a) => a.id === i.artifactId && a.version === i.version && a.provenance);
+  return (s.blueprint.revisions.at(-1)?.items ?? []).filter((i) => i.status === "approved" && KIND_RULES[i.kind].peReviews && !asIs(i));
+}
+
+/** One range of the PE's estimates summed over some parts: null while a part has no figure for it (`missing`). */
+export interface PartsSum {
+  usd: UsdRange | null;
+  parts: number;
+  missing: number;
+}
+
+export function sumOfParts(s: State, parts: BlueprintItem[], pick: (e: BudgetEstimate) => UsdRange | undefined): PartsSum {
+  let lo = 0;
+  let hi = 0;
+  let missing = 0;
+  for (const part of parts) {
+    const e = itemEstimate(s, part).estimate;
+    const r = e ? pick(e) : undefined;
+    if (!r) missing++;
+    else [lo, hi] = [lo + r[0], hi + r[1]];
+  }
+  return { usd: missing ? null : [lo, hi], parts: parts.length, missing };
 }
 
 /** The project's estimated maintenance, in dollars a month (the high ends). */
 export interface MaintenanceEstimate {
-  /** The newest factory start's estimate (the PE's pre-flight, pass 6); null while none was made: not yet estimated, never $0. */
-  startUsd: number | null;
+  /**
+   * The PE's monthly estimates summed over the approved parts (`estimatedParts`); null while no part is approved or one
+   * has no monthly figure (`missing` of `parts`): not estimated, never $0.
+   */
+  partsUsd: number | null;
+  parts: number;
+  missing: number;
   /** What the PE calls that stand add. */
   callsUsd: number;
 }
 
-/** The newest factory start's maintenance estimate, and what each PE call that stands adds to it. */
+/** The PE's monthly estimates of the approved parts, and what each PE call that stands adds to them. */
 export function maintenanceEstimate(s: State): MaintenanceEstimate {
   let callsUsd = 0;
   for (const d of standingPeCalls(s)) callsUsd += d.pe.cost?.maintenanceUsdPerMonth?.[1] ?? 0;
-  return { startUsd: s.project.factoryStarts.at(-1)?.estimate?.maintenanceUsdPerMonth?.[1] ?? null, callsUsd };
+  const sum = sumOfParts(s, estimatedParts(s), (e) => e.maintenanceUsdPerMonth);
+  return { partsUsd: sum.parts && sum.usd ? sum.usd[1] : null, parts: sum.parts, missing: sum.missing, callsUsd };
 }
 
 /**
@@ -278,10 +407,12 @@ export function committedBuildUsd(s: State): number {
  * Why a PE call with this stated cost is not the PE's to make, or undefined when it stays within the budgets. Spending
  * past a budget is never the PE's call (ORC-029): the high end of each stated range counts, and while a budget is set
  * the call must state its figure for it (0 is a figure), since a cost not stated is unknown, never zero.
- * - Building: what was spent, plus what the PE calls that stand commit before their work has run, plus this call. A run
- *   with no recorded cost makes the spend unknown, so a call that adds any building cost goes to the owner.
- * - Maintenance: the pre-flight's estimate, plus the PE calls that stand, plus this call. While the pre-flight has made no
- *   estimate, the maintenance is unknown, so a call that adds any maintenance cost goes to the owner.
+ * - Building: the counted spend (each cost with no full record at its estimate), plus what the PE calls that stand
+ *   commit before their work has run, plus this call. A cost with nothing to count it at makes the spend unknown, so a
+ *   call that adds any building cost goes to the owner.
+ * - Maintenance: the PE's monthly estimates of the approved parts, plus the PE calls that stand, plus this call. While
+ *   they make no estimate (no part, or a part with no figure), the maintenance is unknown, so a call that adds any
+ *   maintenance cost goes to the owner.
  * - A call that adds nothing passes even when the spend is already past the budget (the owner continued past it).
  */
 export function pastBudget(s: State, cost: BudgetEstimate | undefined, prices: readonly ModelPrice[] = PRICES): string | undefined {
@@ -290,22 +421,24 @@ export function pastBudget(s: State, cost: BudgetEstimate | undefined, prices: r
   if (b.buildingUsd !== null) {
     const more = cost?.buildUsd?.[1];
     const spend = buildingSpend(s, prices);
+    const counted = countedSpend(spend);
     const committed = committedBuildUsd(s);
-    const total = spend.usd + committed;
-    const unknown = spend.unknown.length;
+    const none = spend.unknown.filter((u) => u.countedUsd === null).length;
+    const estimated = estimatedUsd(spend);
     if (more === undefined) why.push(`it states no building cost, and the building budget is ${fmtUsd(b.buildingUsd)}`);
-    else if (more > 0 && total + more > b.buildingUsd)
-      why.push(`up to ${fmtUsd(more)} more would take the building spend to ${fmtUsd(total + more)}, past the ${fmtUsd(b.buildingUsd)} budget (${fmtUsd(spend.usd)} spent${committed ? `, up to ${fmtUsd(committed)} committed to PE calls whose work has not run` : ""})`);
-    else if (more > 0 && unknown)
-      why.push(`${unknown} run${unknown === 1 ? " has" : "s have"} no recorded cost, so the building spend is unknown, and up to ${fmtUsd(more)} more cannot be checked against the ${fmtUsd(b.buildingUsd)} budget`);
+    else if (more > 0 && counted === null) why.push(`${runs(none)} ${none === 1 ? "has" : "have"} no recorded cost and no spend limit, so up to ${fmtUsd(more)} more cannot be checked against the ${fmtUsd(b.buildingUsd)} budget`);
+    else if (more > 0 && counted! + committed + more > b.buildingUsd)
+      why.push(
+        `up to ${fmtUsd(more)} more would take the building spend to ${fmtUsd(counted! + committed + more)}, past the ${fmtUsd(b.buildingUsd)} budget (${fmtUsd(spend.usd)} spent${estimated ? `, ${fmtUsd(estimated)} estimated for unrecorded costs` : ""}${committed ? `, up to ${fmtUsd(committed)} committed to PE calls whose work has not run` : ""})`,
+      );
   }
   if (b.maintenanceUsdPerMonth !== null) {
     const more = cost?.maintenanceUsdPerMonth?.[1];
     const m = maintenanceEstimate(s);
     if (more === undefined) why.push(`it states no maintenance cost, and the maintenance budget is ${fmtUsd(b.maintenanceUsdPerMonth)} a month`);
-    else if (more > 0 && m.startUsd === null) why.push(`the project's maintenance is not yet estimated, so up to ${fmtUsd(more)} more a month cannot be checked against the ${fmtUsd(b.maintenanceUsdPerMonth)} budget`);
-    else if (more > 0 && m.startUsd! + m.callsUsd + more > b.maintenanceUsdPerMonth)
-      why.push(`up to ${fmtUsd(more)} more a month would take the maintenance estimate to ${fmtUsd(m.startUsd! + m.callsUsd + more)}, past the ${fmtUsd(b.maintenanceUsdPerMonth)} budget`);
+    else if (more > 0 && m.partsUsd === null) why.push(`the project's maintenance is not yet estimated, so up to ${fmtUsd(more)} more a month cannot be checked against the ${fmtUsd(b.maintenanceUsdPerMonth)} budget`);
+    else if (more > 0 && m.partsUsd! + m.callsUsd + more > b.maintenanceUsdPerMonth)
+      why.push(`up to ${fmtUsd(more)} more a month would take the maintenance estimate to ${fmtUsd(m.partsUsd! + m.callsUsd + more)}, past the ${fmtUsd(b.maintenanceUsdPerMonth)} budget`);
   }
   return why.length ? why.join("; ") : undefined;
 }

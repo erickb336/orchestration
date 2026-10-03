@@ -302,6 +302,43 @@ describe("the PE's runs (pass 3)", () => {
     expect(S.readyForOwner(lost, S.latestVersion(lost, id)!)).toBe(true);
   });
 
+  it("the owner asks the PE again after its runs ended without a verdict: the version waits for the PE, which gets two runs again (B-06)", () => {
+    const { s, id } = imported();
+    let x = s;
+    for (const sec of [3, 6]) {
+      x = R.askForPeReviews(x, at(sec));
+      x = R.reportStudioRunFailed(dispatch(x, sec + 1).state, peRuns(x).at(-1)!.id, "The PE's answer had no verdicts.", at(sec + 2));
+    }
+    expect(S.peReview(x, S.latestVersion(x, id)!)).toMatchObject({ status: "ended", ended: "no-review", pass: 0 });
+    const asked = run(x, "askPeAgain", { artifactId: id, version: 1 }, at(10)).state;
+    expect(S.peReview(asked, S.latestVersion(asked, id)!)).toEqual({ status: "waiting", passes: 0 });
+    expect(S.readyForOwner(asked, S.latestVersion(asked, id)!)).toBe(false);
+    expect(asked.events.at(-1)).toMatchObject({ actor: "user", kind: "vision", message: "You asked the PE again to review Trip plan v1" });
+    // The service asks for the run, as for any version waiting for the PE; one failure is retried, the second ends it.
+    let y = R.askForPeReviews(asked, at(11));
+    expect(peRuns(y).map((r) => r.status)).toEqual(["failed", "failed", "queued"]);
+    y = R.reportStudioRunFailed(dispatch(y, 12).state, peRuns(y).at(-1)!.id, "No verdicts again.", at(13));
+    expect(S.peReview(y, S.latestVersion(y, id)!).status).toBe("waiting");
+    y = R.askForPeReviews(y, at(14));
+    y = R.reportStudioRunFailed(dispatch(y, 15).state, peRuns(y).at(-1)!.id, "No verdicts again.", at(16));
+    expect(S.peReview(y, S.latestVersion(y, id)!)).toMatchObject({ status: "ended", ended: "no-review", pass: 0 });
+  });
+
+  it("asking the PE again is only for a version the PE gave no verdict on, whose review ended because the PE could not answer", () => {
+    const { s, id, n } = imported();
+    const refused = (st: State, args: Record<string, unknown>) => () => runCommand(st, "askPeAgain", args, at(20));
+    expect(refused(s, { artifactId: id, version: 1 })).toThrow("Trip plan v1 waits for PE review already.");
+    expect(refused(peAgrees(s, id, 1, ["A", "B", "C"], at(3)), { artifactId: id, version: 1 })).toThrow("The PE gave a verdict on Trip plan v1: there is nothing to ask it again.");
+    // No provider could run the PE: once one can, the owner asks again, and the recorded end is cleared.
+    const noProvider = S.endReview(s, id, 1, "the PE cannot run: Codex is not enabled.", at(3));
+    const again = run(noProvider, "askPeAgain", { artifactId: id, version: 1 }, at(4)).state;
+    expect(S.peReview(again, S.latestVersion(again, id)!)).toEqual({ status: "waiting", passes: 0 });
+    // Its round closed: the PE reviews a version only in its own round.
+    expect(refused(run(noProvider, "closeRound", { round: n }, at(4)).state, { artifactId: id, version: 1 })).toThrow("PE review of Trip plan v1 cannot start again: its round closed before the PE agreed.");
+    // A newer version replaced it.
+    expect(refused(addScreen(noProvider, n, at(4), { artifactId: id }).state, { artifactId: id, version: 1 })).toThrow("Trip plan v1 is not the newest version: the PE reviews v2.");
+  });
+
   it("a revision the PE fails to review twice is not hidden behind the version it replaced: it goes to the owner (review finding 6)", () => {
     const { s, id, n } = imported();
     let x = pePass(s, id, 1, [{ variant: "A", verdict: "feasible-if" }, { variant: "B", verdict: "feasible" }, { variant: "C", verdict: "feasible" }], at(3));

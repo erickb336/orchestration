@@ -485,7 +485,8 @@ export const LOOP_END_WORDS: Record<LoopEnd, string> = {
 /**
  * Why PE review of a version is over before the PE agreed, or undefined while it goes on. `pass` is the PE's latest
  * pass on this version, 0 when it has none. In order: an end the service recorded; the round's last pass; a
- * reproduction of the code, which is not revised (round 0); the round closed; the revisions or the PE's runs failed.
+ * reproduction of the code, which is not revised (round 0); the round closed; the revisions or the PE's runs failed
+ * (those since the owner last asked the PE again).
  */
 function loopEnd(s: State, a: StudioArtifact, pass: number): LoopEnd | undefined {
   if (a.reviewEnd) return a.reviewEnd.reason;
@@ -494,7 +495,7 @@ function loopEnd(s: State, a: StudioArtifact, pass: number): LoopEnd | undefined
   const round = s.studio.rounds.find((r) => r.n === a.round);
   if (!round || round.closedAt) return "round-closed";
   if (pass && endedWithoutResult(revisionRunsOf(s, a)) >= MAX_REVISION_RUNS) return "no-revision";
-  if (!pass && endedWithoutResult(peRunsOf(s, a.id, a.version)) >= MAX_PE_RUNS) return "no-review";
+  if (!pass && endedWithoutResult(peRunsOf(s, a.id, a.version).slice(a.askedAgain?.runsBefore ?? 0)) >= MAX_PE_RUNS) return "no-review";
   return undefined;
 }
 
@@ -545,6 +546,40 @@ export function endReview(state: State, artifactId: string, version: number, not
   const art = getArtifact(s, artifactId, version);
   art.reviewEnd = { reason: "no-provider", at: now, note: reasonText(note) };
   event(s, now, "system", "vision", `PE review of ${artifactName(a)}: ${outcomeWords(peReview(s, art))}`);
+  return s;
+}
+
+/** The ends of PE review where the PE could not answer: its runs ended with no verdict, or no provider could run it. */
+const NO_ANSWER: readonly LoopEnd[] = ["no-review", "no-provider"];
+
+/** The owner can ask the PE again (B-06): the PE gave no verdict on the newest version, because it could not answer. */
+export function canAskPeAgain(s: State, a: StudioArtifact): boolean {
+  const r = peReview(s, a);
+  return latestVersion(s, a.id)?.version === a.version && r.status === "ended" && r.pass === 0 && NO_ANSWER.includes(r.ended);
+}
+
+/**
+ * The owner asks the PE again (B-06): PE review of the newest version ended with no verdict, because the PE's runs
+ * ended without one or no enabled provider could run it. The PE's runs before now no longer end the review, and a
+ * recorded end is cleared, so the version waits for the PE again; the service asks for its run on its next cycle
+ * (`askForPeReviews`), as for any version that waits. Refused for any other version or end, and when the review still
+ * could not go on (its round closed).
+ */
+export function askPeAgain(state: State, artifactId: string, version: number, now: string): State {
+  const a = getArtifact(state, artifactId, version);
+  const newest = latestVersion(state, artifactId)!;
+  if (newest.version !== version) throw new ControlError(`${artifactName(a)} is not the newest version: the PE reviews v${newest.version}.`);
+  const r = peReview(state, a);
+  if (r.status === "waiting" || r.status === "revising") throw new ControlError(`${artifactName(a)} waits for PE review already.`);
+  if (r.status !== "ended" || r.pass > 0) throw new ControlError(`The PE gave a verdict on ${artifactName(a)}: there is nothing to ask it again.`);
+  if (!NO_ANSWER.includes(r.ended)) throw new ControlError(`PE review of ${artifactName(a)} cannot start again: ${LOOP_END_WORDS[r.ended]}.`);
+  const s = draft(state);
+  const art = getArtifact(s, artifactId, version);
+  delete art.reviewEnd;
+  art.askedAgain = { at: now, runsBefore: peRunsOf(s, artifactId, version).length };
+  const after = peReview(s, art);
+  if (after.status === "ended") throw new ControlError(`PE review of ${artifactName(a)} cannot start again: ${LOOP_END_WORDS[after.ended]}.`);
+  event(s, now, "user", "vision", `You asked the PE again to review ${artifactName(a)}`);
   return s;
 }
 
