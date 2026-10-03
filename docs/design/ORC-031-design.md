@@ -16,7 +16,7 @@
 
 ## 31b as built (the Claude adapter)
 
-**Status:** built and unit-tested. The real runs have not run, so Claude's `childAgentTracking` stays "unsupported" and no research step can turn helpers on yet.
+**Status:** built and unit-tested. The lead ran the real check once on sonnet. The cap, safety and pause held, and two reporting checks failed; both are now fixed. Claude's `childAgentTracking` stays "unsupported" until the lead's rerun passes every check, so no research step can turn helpers on yet.
 
 **What the adapter does** (`server/runtimes/claude.ts`):
 
@@ -29,20 +29,26 @@
   - Isolation ("worktree" or "remote") would move the helper out of the run's workspace.
 - **A helper's own tool calls** go through the same hook and the same workspace guard. The hook input names the helper (`agent_id`), so the activity note says "(helper)".
 - **Counting from the stream.** These messages end a helper or count one:
-  - The `Agent` call's result ends the helper, with its model (`resolvedModel`) and usage from the structured result.
-  - A `task_notification` also ends it.
+  - A `task_notification` ends the helper. In the real run it came before the `Agent` call's result.
+  - The `Agent` call's result ends it if no notification did, with the model the result names (`resolvedModel`).
+  - The model of a helper otherwise: the one its call named, else the parent's, because the "researcher" definition inherits the parent's model.
   - A message tagged with a `parent_tool_use_id` that the hook never allowed counts as a helper that slipped through.
   - A helper that is still open when the run ends is reported "stopped" (or "failed"), before the run's terminal event.
-- **Cost.** The run's usage stays the session total: `modelUsage` summed over every model, and `total_cost_usd`. Per `sdk.d.ts`, both include the subagents' calls, so every helper is reported with `usageInParent: true`, and the budgets do not add it twice. A helper's own usage is shown only on its run.
+- **Cost.** The run's usage stays the session total: `modelUsage` summed over every model, and `total_cost_usd`. Both include the helpers' calls (the real run below), so every helper is reported with `usageInParent: true`, and the budgets count helpers through the parent, once. A helper's own usage is never reported: it stays unknown, never 0. The `Agent` result's `usage` covers only one call of the helper, so it would undercount.
 
-**Not verified (needs the real runs):**
+**The real check** (`scripts/helpers-real-claude.mjs`, record [2026-10-03T08-25-56-353Z](../real-runs/2026-10-03T08-25-56-353Z.json)). The lead ran it on the owner's subscription, on sonnet, for an estimated $0.075. An earlier run on haiku started no helper: the parent answered in one turn with no tools. So the script now uses sonnet by default.
 
-- that interrupting the parent stops a foreground helper;
-- that the session total really includes the helpers' usage, and whether the `Agent` result's `usage` covers all of a helper's calls or only its last one;
-- that the CLI honours the helper definition and the forced foreground;
-- that a real helper's refused write leaves nothing behind.
+| Point | Result | Evidence |
+| --- | --- | --- |
+| (d) The cap holds | Held | Cap 2: the hook allowed two `Agent` calls and refused the third |
+| (c) The guard runs for helpers | Held | 3 helper tool calls went through the hook. A read inside the folder passed; a read outside it was refused. No helper had a write tool, and nothing was written |
+| (a) Pause stops helpers | Held | The interrupt came while both helpers worked. Both ended "stopped", and no tool call or message came in the 4 s after the stop |
+| (b) Cost is counted | Held; the check failed | Total $0.0610. The per-model total was 30,207 tokens and the parent's main loop 14,532, so 15,675 tokens of helper work are in the total. The check asked for per-helper usage, which the SDK does not give for all calls. It now checks what the budget needs, and it passes on this record |
+| Each helper's model | Missing; fixed | The notification ended each helper before its result, so no model was reported. The adapter now gives the parent's model |
 
-**To prove it:** run `node --import tsx scripts/helpers-real-claude.mjs` in an interactive shell with `ORCHESTRATION_CLAUDE_AUTH=subscription`. It makes two runs on haiku, limited to $0.15 and $0.10:
+**Not verified yet:** the fixed reporting in a real run (the lead's rerun), and a helper that tries to write with a write tool. No helper has one, so its refused write was proved only in unit tests.
+
+**To rerun:** in an interactive shell with `ORCHESTRATION_CLAUDE_AUTH=subscription`, run `node --import tsx scripts/helpers-real-claude.mjs`. It makes two runs on sonnet, limited to $0.15 and $0.10:
 
 1. Three helpers under a cap of 2. One is asked to write a file and to read outside the folder.
 2. Two helpers, interrupted while they work.
