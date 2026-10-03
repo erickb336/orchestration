@@ -8,7 +8,8 @@ import { runCommand } from "../../domain/commands";
 import { blueprintScene } from "../../domain/testing/blueprintScene";
 import type { State } from "../../domain/types";
 import type { SendResult } from "../store";
-import { renderScreen, visible } from "../testStore";
+import { renderScreen, testService, visible } from "../testStore";
+import { AdvancedSection } from "./Advanced";
 import { ChecksCard, checksProblem, checksSteps, liveChecks } from "../ChecksSettings";
 import { answerChangeOrder, at, changeOrdered, fullAnswer } from "../../domain/testing/changeOrders";
 import { sendInOrder } from "./draft";
@@ -107,6 +108,15 @@ describe("Settings › Quality › PE review of new work", () => {
     const back = await save(r.state, async (send) => (await peReviewSteps(r.state, true, true, send, async () => false))!);
     expect([back.sent, back.state.project.peReviewsNewWork]).toEqual([[["setPeReviewsNewWork", { on: true }]], true]);
     expect(await peReviewSteps(s, true, false, async () => ({ ok: true }), async () => true)).toEqual([]);
+  });
+});
+
+describe("Settings › Advanced: the intro", () => {
+  it("says which controls act at once, the housekeeping ones included; the rest waits for Save", () => {
+    const { s } = blueprintScene();
+    const html = renderScreen(<AdvancedSection current onDirty={noop} />, s, testService({ housekeeping: { everyHours: 6, ownerApps: true, running: false } as never }));
+    expect(visible(html)).toContain("Advanced Developer settings and diagnostics. Most changes here wait for Save. These act at once: Check again, Download, Import, Remove, the housekeeping checkbox and Clean up now.");
+    expect(visible(html)).toContain("Clean up what runs leave in Codex and Claude");
   });
 });
 
