@@ -11,7 +11,7 @@ Each new language would need its own flags and its own image. That does not scal
 ## Decisions
 
 **1. One environment per project, for the checks and the evidence.** Where it comes from, first match wins:
-1. **The repository's dev container:** `.devcontainer/devcontainer.json`, with `image` or `build.dockerfile` (the open Dev Container specification, containers.dev; many repositories already have one).
+1. **The repository's dev container:** `.devcontainer/devcontainer.json`, with `image` or `build.dockerfile` (the open Dev Container specification, containers.dev; many repositories already have one), once the owner confirms it by its digest (review fixes, 3).
 2. **A base image the owner confirmed in Settings:** the lead proposes one from the repository's files, from a table of data (for example `package.json` → a Node image, `pyproject.toml` or `requirements.txt` → a Python image, `go.mod` → Go, `Cargo.toml` → Rust, `Gemfile` → Ruby). Each image in the table is pinned by digest. The table is data, not code paths.
 
 Without Docker, the checks keep today's host sandbox (npm, pnpm and yarn installs only) and say why other languages cannot run; evidence capture says "not set up".
@@ -55,9 +55,9 @@ The Node script is chosen: it is the only option that refuses a listed name reso
 
 **Reuse: once per prepare key.** The key is a hash of the image's id, the prepare commands, the allowed hosts and the content of the prepare inputs (a data list of manifests and lockfiles, at any depth). A later commit with the same key reuses the prepared image and the entries the prepare added to the copy (found by comparing the copy before and after, so `node_modules`, `.venv` or `vendor/bundle` need no names). The newest three keys per project are kept.
 
-**What the checks' own prepare commands become.** In the environment, the prepare phase runs the environment's prepare commands; the checks' "prepare" commands (the host sandbox's npm installs) are not run there. They stay for the host sandbox. A Final checks step therefore does not reuse an environment run of the same commit by its command ids; it runs again, and the prepare is reused by its key.
+**What the checks' own prepare commands become.** In the environment, the prepare phase runs the environment's prepare commands; the checks' "prepare" commands (the host sandbox's npm installs) are not run there, unless the environment has none (changed by the review fixes, 8). They stay for the host sandbox. A Final checks step therefore does not reuse an environment run of the same commit by its command ids; it runs again, and the prepare is reused by its key.
 
-**Where the dev container is read.** At the trusted base, as the project conventions and the check suggestions are, so a change cannot choose the image its own checks run in. A `build.dockerfile`'s text comes from the trusted base too; the build context is the checked copy, and `RUN` steps have no network.
+**Where the dev container is read.** At the trusted base, as the project conventions and the check suggestions are, so a change cannot choose the image its own checks run in. That was not enough: an agent's change reaches the trusted base by automatic merging, so the owner now confirms the dev container by its digest (review fixes, 3). A `build.dockerfile`'s text comes from the trusted base too; the build context is the checked copy, and `RUN` steps have no network.
 
 **Not done in E1:** a sweep of what a crashed service leaves (labelled networks, containers and `runs/` folders under `~/.cache/orchestrator/environment`); the held state of checks still follows the host sandbox's probe; Rust, Ruby and Java rows of the table are proposed but not run.
 
@@ -102,3 +102,35 @@ The shell is bash with VHS's prompt (`> `), so the failure scan skips typed comm
 2. Remove the recorder's install (`installArgs`, `INSTALL_ENV`, the yarn check in `captureEvidence`), the preview start and the VHS tapes in `CAPTURE_SCRIPT`, and the GIF outputs of evidence.
 3. Drop the preview setting's `install` field, with a state migration, and its form field.
 4. Keep only Chromium and playwright-core in the recorder's image; VHS stays only while studio demos use it.
+
+## Review fixes (2026-10-03)
+
+An independent review of E1, E2 and pass 6 found 13 problems. This note records the fixes of the eight that are this design's (3, 4, 5, 8, 10, 11, 12, 13); 1, 2, 6, 7 and 9 are fixed with the terminal recorder and the domain. Each fix has a test that failed before it.
+
+| | Finding | Fix |
+| --- | --- | --- |
+| 3 | An agent's merged dev container overrode the owner's image. | The owner confirms a dev container by its digest (the file and the Dockerfile it names); see the decision below. The default protected paths add `.devcontainer/**`, `.devcontainer.json` and Dockerfiles. A Dockerfile with a `# syntax=` line or a cache mount is refused. |
+| 4 | Clean-up removed the copy while its container could still run, and the walk followed a folder swapped for a link. | The copy goes only after Docker no longer lists every container that mounted it (`waitGone`); one that stays keeps the copy. `removeTree` opens each folder with `O_NOFOLLOW`, changes its mode through the descriptor, and checks before each removal that the folder is still the one it opened. Node has no `unlinkat`, so the wait is the main guard. |
+| 5 | The probe never tried the Docker VM, and counted a refused connection as unreachable. | The probe tries each gateway that `docker network inspect` lists (the private network, the proxy's network, the default bridge) on port 22, and counts only no route or a timeout. A listed name that the probe's proxy maps to the host gateway must be refused by the private-address rule, by the proxy's own decision. The hostile tests try `172.17.0.1:22`, which a control container reaches. |
+| 8 | A dev container with no prepare commands installed nothing, and the record said "prepared in 0.0 s". | The checks' own prepare commands run in the prepare phase when the environment has none; see the decision below. With neither, the record says `prepare: "none"` and the card says so. |
+| 10 | `docs/safety.md` did not describe E2. | It does now: the app in the project's image, the browser on the preview's loopback, the terminal through the daemon's socket. |
+| 11 | Nothing limited disk use on `/work` and `/cache`. | The copy and the cache are measured while a step runs (lstat, no links, without blocking the event loop); past 8 GB the step's containers stop with the reason. A cache past half the limit starts again empty before a prepare. |
+| 12 | Some IPv6 forms of local addresses passed as public. | The proxy reads every IPv6 form into its words: IPv4-mapped and NAT64 are judged by the IPv4 address they carry; IPv4-compatible, SIIT, 6to4, Teredo, local-use NAT64 and site-local `fec0::/10` are refused whole. |
+| 13 | The prepare lived in the checks runner (a fake check assignment, a runner whose fallback threw); `JAVA_TOOL_OPTIONS` was a JVM code path. | `server/environment/prepared.ts` owns the probe, the copy, the image and the prepare; the checks runner and the capture share one instance. `JAVA_TOOL_OPTIONS` is dropped; the phases after the prepare restore the base image's own proxy variables. |
+
+**3: the owner confirms the dev container by its digest.** Options:
+- (a, chosen) a dev container is used only while its digest at the trusted base is the one the owner confirmed; a new or changed one falls back to the confirmed image (or to this computer) and Needs you asks the owner;
+- (b, rejected) the confirmed image always wins: a project without a confirmed image would still run an agent's dev container unconfirmed, and nothing binds a Dockerfile's content;
+- protected paths alone (rejected as the only guard): they hold back pull requests only, not local delivery, and a dev container can name a Dockerfile by any name.
+
+The digest is SHA-256 over the file's text and the Dockerfile's path and text. The run's record names an unconfirmed dev container; Needs you shows it until the setting confirms that digest. A confirmed dev container can still name a tag that later points elsewhere; safety.md says so.
+
+**3: the Dockerfile build, measured.** On this Mac (Docker 29.5.2 under Colima, CLI without buildx), `docker build` runs the legacy builder: it ignored `# syntax=docker/dockerfile:1.7` and built offline, and refused `RUN --mount=type=cache` ("requires BuildKit"); `DOCKER_BUILDKIT=1` failed. Where buildx is installed, BuildKit is the default: a `# syntax=` line makes it fetch and run a frontend, and cache mounts are shared by every build on the daemon. Both are refused in the Dockerfile's text, whichever builder runs. Not measured: a BuildKit build on a machine with buildx.
+
+**8: the checks' own prepare commands.** Options:
+- (a, chosen) without the environment's own prepare commands, the checks' prepare commands run in the prepare phase: the owner already set them as the project's setup, and the capture gets the same plan, so it reuses the prepare by its key;
+- (b, rejected) record "none" and tell the owner: the checks that passed on this computer fail in the environment, and repair tasks start, until the owner acts.
+
+**12: no library.** `ipaddr.js` 2.5.0 (MIT) was measured: it calls `::7f00:1` unicast and does not judge the IPv4 inside 6to4 or NAT64, so the rules were needed anyway, and the proxy must stay one file in the stock Node image. Node's own `BlockList` matches the ranges.
+
+**Measured after the fixes:** the setup probe on this Mac took 0.9 s; the private network listed no gateway (isolated mode), and `172.19.0.1:22` (the proxy's network) and `172.17.0.1:22` gave `ENETUNREACH`. The real tests (`environment.docker.test.ts`, `evidence.container.test.ts`) pass.
