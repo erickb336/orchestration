@@ -119,7 +119,7 @@ await runJourney("lock-in", visionWithDraft, async (j, page, service) => {
     j.check(await has("from Lock in 1 and vision r1"), "started: from Lock in 1");
     await vision();
     j.check((await draftBar.count()) === 0, "after the start, the draft bar is gone");
-    j.check(await has("Nothing is in the draft. The factory builds from Lock in 1."), "Vision says the draft is empty and the factory builds from Lock in 1");
+    j.check(/Nothing is in the draft\.\s+The factory builds from Lock in 1\./.test(await text(page)), "Vision says the draft is empty and the factory builds from Lock in 1");
     j.check((await page.getByRole("button", { name: "Ask the lead for a round" }).count()) === 1, "with an empty draft, the main button is Ask the lead for a round");
     j.check((await page.getByRole("list", { name: /^Artifacts of round/ }).innerText()).includes("in force"), "the parts say in force");
     await j.shot("in-force");

@@ -99,7 +99,7 @@ for (const width of WIDTHS) {
   const parts = await p.getByRole("list", { name: "The parts" }).getByRole("listitem").count();
   if (parts !== 5) fail(`the blueprint lists ${parts} parts, not 5`);
   else ok("the blueprint: one list of the 5 parts");
-  if ((await p.getByText("What changes", { exact: true }).count()) || (await p.getByText("Your first Lock in").count())) fail("a second list of the same parts is still there");
+  if ((await p.getByText("What changes", { exact: true }).count()) || (await p.getByText("Your first Lock in", { exact: true }).count())) fail("a second list of the same parts is still there");
   else ok("no second list of the same parts");
   const fields = [await p.getByRole("textbox", { name: "Building budget (dollars)" }).inputValue(), await p.getByRole("textbox", { name: "Maintenance budget (dollars a month)" }).inputValue()];
   if (fields.join() !== "40,10") fail(`the budget fields hold ${fields.join(" and ")}, not 40 and 10`);
