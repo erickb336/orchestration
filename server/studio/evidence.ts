@@ -1,6 +1,16 @@
 // The "Capture evidence" step (ORC-029 pass 5; docs/design/ORC-029-pass5-design.md, "Evidence of what the factory
-// built"). The service, never the builder, captures what the built code shows: the screens in Chromium and the CLIs
-// with VHS, in the recorder's container (container.ts), on a copy of the task's change at its commit.
+// built"). The service, never the builder, captures what the built code shows, on a copy of the task's change at its
+// commit, by one of two paths (the record names which):
+//
+//   environment  a project with an environment (docs/design/project-environment.md, unit E2). The copy is prepared as
+//                its checks prepare it (the environment runner's withPrepared, reusing the prepared image by its key).
+//                The preview runs in the project's image with no network; the recorder's Chromium joins that
+//                container's network (one loopback, nothing else) and takes the screenshots. Each CLI tape is typed
+//                into a pseudo-terminal in the project's image, with no network, and the service records it as an
+//                asciicast v2 file. Nothing of the recorder runs in the project's image, so any language works.
+//   recorder     a project without an environment: the screens in Chromium and the CLIs with VHS, in the recorder's
+//                container (container.ts), after an npm, pnpm or yarn install with every install hook off. Node only;
+//                it goes once projects have environments (the design's note on removing it).
 //
 // The coder's capture plan (CAPTURE_PLAN, committed with the change, so the plan always matches the commit it
 // describes and a repair can fix it) names, for each screen it built, the page path and the devices, and for each
@@ -8,18 +18,20 @@
 // checked here, at the boundary, like the studio's manifests and tapes (artifacts.ts, terminal.ts): plain paths inside
 // the repository, read through no link, within caps, and every tape under the tape rules.
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, closeSync, constants, copyFileSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { hardenedInstall, yarnrcRefusal } from "../../src/domain/checks";
-import { CAPTURE_DEVICES, NO_EVIDENCE_WORDS, noCapture, type CaptureDevice, type CaptureItem, type EvidenceFile, type EvidenceRun, type ItemCapture, type NoEvidence, type PreviewSetting } from "../../src/domain/studio/evidence";
+import { CAPTURE_DEVICES, NO_EVIDENCE_WORDS, noCapture, type CaptureDevice, type CaptureItem, type EvidenceFile, type EvidencePath, type EvidenceRun, type ItemCapture, type NoEvidence, type PreviewSetting } from "../../src/domain/studio/evidence";
 import { isInsidePath, versionsOf } from "../../src/domain/studio/studio";
 import type { Artifact, State } from "../../src/domain/types";
-import { NO_SCRIPTS_ENV } from "../checks";
-import { OUT, WORK, containerArgs, containerName, defaultRecorderRoot, dockerEnv, makeStage, probeRecorder, removeStage, startRecording, type RunningContainer } from "./container";
+import { NO_SCRIPTS_ENV, type EnvironmentAssignment } from "../checks";
+import { envName, phaseArgs } from "../environment/docker";
+import { EnvironmentChecks, type PreparedCopy, type PreparedOutcome } from "../environment/runner";
+import { OUT, RECORDER_IMAGE, WORK, attachTty, containerArgs, containerName, defaultRecorderRoot, dockerEnv, dockerSocket, makeStage, probeRecorder, removeStage, resizeTty, runDocker, startRecording, type RunningContainer } from "./container";
 import type { AdapterEvent } from "../runtimes/types";
 import { MAGIC, projectStudioDir, versionDir as serveVersionDir } from "./serve";
-import { TAPE_CAP, transcriptError, validateTape } from "./terminal";
+import { TAPE_CAP, recordSession, tapeSession, transcriptError, validateCast, validateTape, type TapeSession } from "./terminal";
 
 // ---------- the capture plan ----------
 
@@ -53,6 +65,8 @@ export interface PlannedTerminal {
   normalized: string;
   /** The declared outputs, relative to `/out/<itemId>/`. */
   outputs: Partial<Record<"gif" | "webm" | "txt", string>>;
+  /** The tape's typed commands, for a session in the project's environment (unit E2); or why a session cannot type it. */
+  session: TapeSession | { error: string };
 }
 
 export interface CheckedPlan {
@@ -168,7 +182,8 @@ export function checkCapturePlan(text: string, items: readonly CaptureItem[], o:
       refuse(`${tape} never types the CLI entry ${o.cliEntry}, so it would not record the real command`);
       continue;
     }
-    plan.terminals.push({ itemId: item.itemId, tape, folder, normalized: check.normalized!, outputs: check.outputs });
+    const typed = tapeSession(text, { name: tape, readSource: (rel) => o.readFile(folder === "." ? rel : posix.join(folder, rel)) });
+    plan.terminals.push({ itemId: item.itemId, tape, folder, normalized: check.normalized!, outputs: check.outputs, session: typed.ok ? typed.session : { error: typed.errors.slice(0, 3).join("; ") } });
   }
   return { ok: true, plan };
 }
@@ -348,8 +363,11 @@ export function installArgs(o: { name: string; work: string; cache: string; argv
   });
 }
 
-/** The second container run: no network; the capture script reads its job on stdin. */
-export function captureArgs(o: { name: string; work: string; out: string; timeoutMs: number; image?: string }): string[] {
+/**
+ * The second container run: no network; the capture script reads its job on stdin. In the project's environment
+ * (unit E2), `network` names the preview's container, whose network is none: the browser shares its loopback only.
+ */
+export function captureArgs(o: { name: string; work: string; out: string; timeoutMs: number; image?: string; network?: { container: string } }): string[] {
   return containerArgs({
     name: o.name,
     work: o.work,
@@ -357,11 +375,12 @@ export function captureArgs(o: { name: string; work: string; out: string; timeou
     workdir: WORK,
     stdin: true,
     image: o.image,
+    ...(o.network ? { network: o.network } : {}),
     command: ["/usr/bin/timeout", "--kill-after=5", String(Math.ceil(o.timeoutMs / 1000) + GRACE_S), "/usr/local/bin/node", "-e", CAPTURE_SCRIPT],
   });
 }
 
-/** What the capture script is given on stdin. */
+/** What the capture script is given on stdin. Without `preview`, the preview runs beside it (the project's environment) and only its port is waited for. */
 export interface CaptureJobInput {
   preview?: string[];
   port?: number;
@@ -414,7 +433,8 @@ const portOpen = (port) => Promise.all(["127.0.0.1", "::1"].map((host) => new Pr
 }))).then((xs) => xs.some(Boolean));
 async function screens(job, result) {
   const env = { PATH: BIN, HOME: process.env.HOME, TMPDIR: "/tmp", LANG: "C.UTF-8", PORT: String(job.port), BROWSER: "none", CI: "1" };
-  const preview = start(job.preview, { cwd: "/work", env });
+  // Without a preview command, the preview runs in the container whose network this one shares: only its port is awaited.
+  const preview = job.preview ? start(job.preview, { cwd: "/work", env }) : { out: () => "", done: new Promise(() => {}), kill: () => {} };
   let exited;
   preview.done.then((r) => (exited = r));
   const deadline = Date.now() + job.startMs;
@@ -645,6 +665,28 @@ export interface CaptureJob {
   log?: (msg: string) => void;
   /** Ends the capture: the running container is stopped. */
   signal?: AbortSignal;
+  /** The project's environment, when it has one: the capture then runs there (unit E2), never in the recorder's install. */
+  environment?: EnvironmentAssignment;
+  /** What prepares the environment (default: an environment runner of this process); a stand-in in tests. */
+  lender?: EnvironmentLender;
+  /** Names this capture's folder in the environment's root. */
+  attemptId?: string;
+}
+
+/** What the capture needs of the project's environment: its prepare, lent as the checks run it (EnvironmentChecks). */
+export interface EnvironmentLender {
+  withPrepared<T>(o: { attemptId: string; workspace: string; sha: string; environment: EnvironmentAssignment; logDir: string; signal?: AbortSignal; note?: (msg: string) => void }, use: (p: PreparedCopy) => Promise<T>): Promise<PreparedOutcome<T>>;
+}
+
+let sharedLender: EnvironmentLender | undefined;
+/** This process's lender: an environment runner that only lends (it never runs checks), so it shares the environment's turn and prepared images. */
+function defaultLender(log: (msg: string) => void): EnvironmentLender {
+  return (sharedLender ??= new EnvironmentChecks({
+    log,
+    fallback: () => {
+      throw new Error("the capture of evidence never hands a run to the host sandbox");
+    },
+  }));
 }
 
 const sha256 = (b: Buffer) => createHash("sha256").update(b).digest("hex");
@@ -671,18 +713,188 @@ function bringBack(stageOut: string, rel: string, outDir: string, maxBytes: numb
       return `${rel} is not UTF-8 text`;
     }
   }
+  return keep(outDir, rel, data, type);
+}
+
+/** Write one evidence file into the evidence folder (never over another) and describe it. */
+function keep(outDir: string, rel: string, data: Buffer, type: EvidenceFile["type"]): EvidenceFile {
   const to = join(outDir, rel);
   mkdirSync(dirname(to), { recursive: true, mode: 0o700 });
   writeFileSync(to, data, { flag: "wx", mode: 0o600 });
   return { path: rel, type, bytes: data.length, sha256: sha256(data) };
 }
 
+// ---------- the capture in the project's environment (unit E2) ----------
+
+interface EnvironmentCapture {
+  job: CaptureJob;
+  L: EvidenceLimits;
+  /** The recorder's stage root, for its probe. */
+  root: string;
+  /** The capture's stage: the copy of the change (work) and the browser's output folder (out). */
+  stage: { dir: string; work: string; out: string };
+  screens: PlannedScreen[];
+  terminals: PlannedTerminal[];
+  none(items: readonly CaptureItem[], reason: NoEvidence, detail: string, logText?: string): void;
+  open(): CaptureItem[];
+  results: Map<string, ItemCapture>;
+  notes: string[];
+  log(msg: string): void;
+  setPath(p: EvidencePath): void;
+  /** The recorder's container in flight, so that a stop request stops it. */
+  setRunning(r: RunningContainer | undefined): void;
+}
+
+const lastLine = (s: string) => s.trim().split("\n").pop()?.slice(0, 200) ?? "";
+
 /**
- * Capture the evidence of `items` on a copy of the change, in the recorder's container, in two runs: the install with
- * Docker's network and every install hook off, then, with no network, the preview, the screenshots and the tapes
- * (CAPTURE_SCRIPT). Only the files the plan names come back, into `outDir`. One run at a time per service (the
- * recorder's queue). Never runs anything outside the container, and never throws: every item comes back captured or
- * with the reason it is not.
+ * Capture in the project's environment: the copy prepared as the checks prepare it (reusing the prepared image by its
+ * key), then the screens (screensInEnvironment) and each CLI (sessionInEnvironment) on the prepared image, with no
+ * network. A prepare that fails, or an environment that cannot run, says so on every item; nothing falls back to the
+ * recorder's install.
+ */
+async function captureInEnvironment(c: EnvironmentCapture): Promise<void> {
+  const { job } = c;
+  const itemsOf = (ids: string[]) => job.items.filter((i) => ids.includes(i.itemId));
+  // A tape a session cannot type is refused for its item only.
+  const sessions: (PlannedTerminal & { session: TapeSession })[] = [];
+  for (const t of c.terminals) {
+    if ("error" in t.session) c.none(itemsOf([t.itemId]), "invalid-plan", `${t.tape}: ${t.session.error}`);
+    else sessions.push(t as PlannedTerminal & { session: TapeSession });
+  }
+  if (!c.screens.length && !sessions.length) return;
+  const lender = job.lender ?? defaultLender(c.log);
+  const out = await lender.withPrepared(
+    { attemptId: job.attemptId ?? `ev-${randomBytes(6).toString("hex")}`, workspace: c.stage.work, sha: job.sha, environment: job.environment!, logDir: join(c.stage.dir, "logs"), ...(job.signal ? { signal: job.signal } : {}), note: (m) => c.log(`evidence: ${m}`) },
+    async (p) => {
+      c.setPath(pathOf(p.record));
+      if (c.screens.length && !job.signal?.aborted) await screensInEnvironment(c, p);
+      for (const t of sessions) {
+        if (job.signal?.aborted) break;
+        await sessionInEnvironment(c, p, t);
+      }
+    },
+  );
+  if (out.ok) return;
+  if (out.record) c.setPath(pathOf(out.record));
+  const reason: NoEvidence = out.reason === "prepare-failed" ? "install-failed" : out.reason === "stopped" ? "stopped" : "unavailable";
+  c.none(c.open(), reason, out.reason === "unavailable" ? `The project's environment could not run: ${out.detail}` : out.detail, out.log);
+}
+
+const pathOf = (r: PreparedCopy["record"]): EvidencePath => ({ via: "environment", from: r.from, image: r.image, ...(r.imageId ? { imageId: r.imageId } : {}), prepare: r.prepare, key: r.key });
+
+/**
+ * The screens: the preview in the project's image, detached, with no network; then the recorder's browser in a
+ * container that shares the preview's network (one loopback), which waits for the port and takes the shots exactly
+ * as in the recorder's path (CAPTURE_SCRIPT, with its hardening). The preview's own log comes from Docker.
+ */
+async function screensInEnvironment(c: EnvironmentCapture, p: PreparedCopy): Promise<void> {
+  const { job, L, stage, screens } = c;
+  const items = job.items.filter((i) => screens.some((s) => s.itemId === i.itemId));
+  const port = job.preview.port!;
+  const health = await probeRecorder({ docker: job.docker, env: job.env, image: job.image, root: c.root });
+  if (!health.ok || !health.docker) return c.none(items, "unavailable", `The recorder's browser is not available: ${health.detail}`);
+  const app = envName("preview");
+  p.track(app);
+  try {
+    const started = await runDocker(p.docker, phaseArgs({ name: app, image: p.image, work: p.work, argv: job.preview.preview!, phase: { kind: "preview", port } }), { env: p.denv, timeoutMs: 60_000 });
+    if (started.code !== 0) return c.none(items, "preview-did-not-start", `The preview's container did not start: ${lastLine(started.stderr) || `exit ${started.code ?? "?"}`}`, started.stderr);
+    const empty = join(stage.dir, "browser");
+    mkdirSync(empty, { mode: 0o700 });
+    const jobInput: CaptureJobInput = { port, screens: screens.map((s) => ({ item: s.itemId, path: s.path, devices: s.devices })), terminals: [], sizes: SIZES, startMs: L.startMs, pageMs: L.pageMs, settleMs: L.settleMs, tapeMs: L.tapeMs };
+    const shots = screens.reduce((n, s) => n + s.devices.length, 0);
+    const timeoutMs = L.startMs + L.pageMs * 2 + shots * (L.pageMs * 3 + L.settleMs) + 30_000;
+    const name = containerName("ev");
+    c.log(`evidence: capturing ${job.sha.slice(0, 12)}'s screens: the preview ${app} in the project's image, the browser ${name} on its loopback (${shots} screenshots)`);
+    const run = startRecording(health.docker, captureArgs({ name, work: empty, out: stage.out, timeoutMs, image: job.image, network: { container: app } }), { env: dockerEnv(job.env ?? process.env), name, stdin: JSON.stringify(jobInput), timeoutMs, cap: 64_000 });
+    c.setRunning(run);
+    let tooLarge = false;
+    const watch = setInterval(() => {
+      if (tooLarge || folderBytes(stage.out) <= L.maxOutBytes) return;
+      tooLarge = true;
+      void run.stop();
+    }, 1000);
+    const r = await run.done;
+    clearInterval(watch);
+    const removed = await run.remove();
+    if (!removed.gone) c.log(`evidence: ${removed.reason}`);
+    c.setRunning(undefined);
+    // The preview's side: the end of its log, and whether it still runs.
+    const logs = await runDocker(p.docker, ["logs", "--tail", "200", app], { env: p.denv, timeoutMs: 15_000, cap: 4000 });
+    const state = (await runDocker(p.docker, ["inspect", "--format", "{{.State.Running}} {{.State.ExitCode}}", app], { env: p.denv, timeoutMs: 15_000 })).stdout.trim().split(" ");
+    const previewLog = `${logs.stdout}${logs.stderr}`.slice(-1500);
+    const exit = state[0] === "false" ? `exit ${state[1] ?? "?"}` : undefined;
+    if (job.signal?.aborted) return c.none(items, "stopped", "The capture was stopped.");
+    if (tooLarge) return c.none(items, "capture-failed", `The capture wrote more than ${Math.round(L.maxOutBytes / 1024 / 1024)} MB; it was stopped, and nothing was kept.`);
+    const parsed = parseCaptureOutput(r.output, jobInput);
+    if (typeof parsed === "string") {
+      // The browser cannot join a container that has ended: the preview ended first.
+      if (exit) return c.none(items, "preview-did-not-start", `The preview command ended (${exit}) before port ${port} opened.`, previewLog);
+      return c.none(items, "capture-failed", r.timedOut ? `The capture did not finish within ${Math.round(timeoutMs / 1000)} s; it was stopped.` : `The capture ended without a result (exit ${r.code ?? "?"}): ${parsed}.`, r.output);
+    }
+    parsed.preview = { started: parsed.preview?.started === true, log: previewLog, ...(exit ? { exit } : {}) };
+    if (parsed.refused) c.notes.push(`The pages tried ${parsed.refused} connection${parsed.refused === 1 ? "" : "s"} out of the browser; the dead proxy refused them.`);
+    for (const x of collectCapture({ stageOut: stage.out, outDir: job.outDir, items: job.items, screens, terminals: [], out: parsed, port, limits: L })) c.results.set(x.itemId, x);
+  } finally {
+    const rm = await runDocker(p.docker, ["rm", "--force", app], { env: p.denv, timeoutMs: 30_000 });
+    if (rm.code === 0 || /No such container/i.test(rm.stderr)) p.untrack(app);
+    else c.log(`evidence: the preview's container ${app} may remain: ${lastLine(rm.stderr)}`);
+  }
+}
+
+/**
+ * One CLI: a container of the project's image with no network and a terminal (`docker create --tty --interactive`),
+ * its shell bash with VHS's prompt at the copy's root. The service attaches to the terminal through the daemon's
+ * socket, starts the container, sets the tape's size, types the tape (recordSession) and keeps the recording: an
+ * asciicast v2 file and its transcript, scanned for failures. Nothing half-made is kept.
+ */
+async function sessionInEnvironment(c: EnvironmentCapture, p: PreparedCopy, t: PlannedTerminal & { session: TapeSession }): Promise<void> {
+  const { job, L } = c;
+  const item = job.items.filter((i) => i.itemId === t.itemId);
+  const socket = await dockerSocket(p.docker, p.denv);
+  if (!socket) return c.none(item, "unavailable", "Recording a CLI in the project's environment needs the Docker daemon's local socket (unix://); this Docker is reached another way.");
+  const name = envName("session");
+  p.track(name);
+  let stream: Awaited<ReturnType<typeof attachTty>> | undefined;
+  try {
+    const made = await runDocker(p.docker, phaseArgs({ name, image: p.image, work: p.work, argv: ["bash", "--noprofile", "--norc", "-i"], phase: { kind: "session" } }), { env: p.denv, timeoutMs: 60_000 });
+    if (made.code !== 0) return c.none(item, "capture-failed", `The session's container was not made: ${lastLine(made.stderr) || `exit ${made.code ?? "?"}`}`, made.stderr);
+    stream = await attachTty(socket, name);
+    stream.on("error", () => {});
+    const started = await runDocker(p.docker, ["start", name], { env: p.denv, timeoutMs: 60_000 });
+    if (started.code !== 0) return c.none(item, "capture-failed", `The session's shell did not start (the image needs bash): ${lastLine(started.stderr) || `exit ${started.code ?? "?"}`}`, started.stderr);
+    await resizeTty(socket, name, t.session.size);
+    c.log(`evidence: recording ${t.tape} in ${name} (the project's image, no network)`);
+    const title = job.items.find((i) => i.itemId === t.itemId)?.title;
+    const rec = await recordSession({ stream, session: t.session, timeoutMs: L.tapeMs, ...(title ? { title: `${title} as built` } : {}), ...(job.signal ? { signal: job.signal } : {}) });
+    if (job.signal?.aborted) return c.none(item, "stopped", "The capture was stopped.");
+    if (rec.status !== "recorded") return c.none(item, "capture-failed", `The recording ${rec.status === "timeout" ? "timed out" : "failed"}: ${rec.error}.`, rec.transcript);
+    const check = validateCast(rec.cast, 2);
+    if (!check.ok) return c.none(item, "capture-failed", `The recording is not a valid asciicast v2 file: ${check.error}.`, rec.transcript);
+    // The files are named after the tape's own outputs: demo.gif is recorded as demo.cast, with demo.txt.
+    const base = (t.outputs.gif ?? t.outputs.webm ?? t.outputs.txt ?? "session.txt").replace(/\.[a-z0-9]+$/i, "");
+    const transcriptRel = posix.join(t.itemId, t.outputs.txt ?? `${base}.txt`);
+    const castRel = posix.join(t.itemId, `${base}.cast`);
+    const files = [keep(job.outDir, castRel, Buffer.from(rec.cast), "cast"), keep(job.outDir, transcriptRel, Buffer.from(rec.transcript), "txt")];
+    const errorLine = transcriptError(rec.transcript);
+    c.results.set(t.itemId, { ...item[0], status: "captured", files, ...(errorLine ? { warnings: [`The recording shows a failure: ${errorLine}`] } : {}) });
+  } catch (e) {
+    c.none(item, "capture-failed", `The session failed: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    stream?.destroy();
+    const rm = await runDocker(p.docker, ["rm", "--force", name], { env: p.denv, timeoutMs: 30_000 });
+    if (rm.code === 0 || /No such container/i.test(rm.stderr)) p.untrack(name);
+    else c.log(`evidence: the session's container ${name} may remain: ${lastLine(rm.stderr)}`);
+  }
+}
+
+/**
+ * Capture the evidence of `items` on a copy of the change. With a project environment (`job.environment`), in it
+ * (captureInEnvironment); else in the recorder's container, in two runs: the install with Docker's network and every
+ * install hook off, then, with no network, the preview, the screenshots and the tapes (CAPTURE_SCRIPT). Only the
+ * files the plan names (or the service's own recordings) come back, into `outDir`. One run at a time per service (the
+ * recorder's queue, and the environment's turn). Never runs anything outside a container, and never throws: every
+ * item comes back captured or with the reason it is not, and the run says which path it took.
  */
 export async function captureEvidence(job: CaptureJob): Promise<Omit<EvidenceRun, "at">> {
   const t0 = Date.now();
@@ -690,13 +902,14 @@ export async function captureEvidence(job: CaptureJob): Promise<Omit<EvidenceRun
   const log = job.log ?? (() => {});
   const results = new Map<string, ItemCapture>();
   const notes: string[] = [];
+  let path: EvidencePath | undefined;
   const open = () => job.items.filter((i) => !results.has(i.itemId));
   const none = (items: readonly CaptureItem[], reason: NoEvidence, detail: string, logText?: string) => {
     for (const i of items) if (!results.has(i.itemId)) results.set(i.itemId, noCapture(i, reason, detail, logText));
   };
   const finish = (): Omit<EvidenceRun, "at"> => {
     none(open(), "capture-failed", "The capture ended before this item.");
-    return { sha: job.sha, durationMs: Date.now() - t0, previewRev: job.preview.rev, items: job.items.map((i) => results.get(i.itemId)!), ...(notes.length ? { notes } : {}) };
+    return { sha: job.sha, durationMs: Date.now() - t0, previewRev: job.preview.rev, ...(path ? { path } : {}), items: job.items.map((i) => results.get(i.itemId)!), ...(notes.length ? { notes } : {}) };
   };
   if (!job.items.length) return finish();
 
@@ -746,6 +959,16 @@ export async function captureEvidence(job: CaptureJob): Promise<Omit<EvidenceRun
     const terminals = plan.terminals;
     if (!screens.length && !terminals.length) return finish();
     if (job.signal?.aborted) return finish();
+
+    // A project with an environment is captured there, and only there: the recorder's install never runs for it.
+    if (job.environment) {
+      const src = job.environment.plan.source;
+      path = { via: "environment", from: src.from, image: "image" in src ? src.image : `${src.file}: ${src.build.dockerfile}` };
+      if (job.preview.install.length) notes.push(`The project's environment prepared the copy with its own prepare commands; the preview setting's install (${job.preview.install.join(" ")}) did not run.`);
+      await captureInEnvironment({ job, L, root, stage, screens, terminals, none, open, results, notes, log, setPath: (p) => (path = p), setRunning: (r) => (running = r) });
+      return finish();
+    }
+    path = { via: "recorder", image: job.image ?? RECORDER_IMAGE };
 
     const health = await probeRecorder({ docker: job.docker, env: job.env, image: job.image, root });
     if (!health.ok || !health.docker) {
@@ -910,12 +1133,14 @@ export function evidenceInputLines(s: State, art: Artifact, dataDir: string): st
 
 // ---------- the app's file route ----------
 
-/** What the app serves of a capture: PNG, GIF and WebM by their first bytes, and text as plain text. Nothing that runs. */
+/** What the app serves of a capture: PNG, GIF and WebM by their first bytes, and text and asciicasts as plain text. Nothing that runs. */
 const EVIDENCE_TYPES: Record<string, { type: string; magic?: Buffer }> = {
   ".png": { type: "image/png", magic: MAGIC[".png"] },
   ".gif": { type: "image/gif", magic: MAGIC[".gif"] },
   ".webm": { type: "video/webm", magic: MAGIC[".webm"] },
   ".txt": { type: "text/plain; charset=utf-8" },
+  // The service's own asciicast v2 recordings (unit E2), read by the app's terminal player as text.
+  ".cast": { type: "text/plain; charset=utf-8" },
 };
 
 /**
@@ -952,6 +1177,8 @@ export interface EvidenceAssignment {
   preview: PreviewSetting;
   /** `<dataDir>/evidence/<projectId>/<attemptId>`, where the files that come back are kept. */
   outDir: string;
+  /** The project's environment, as a check run gets it (the scheduler's environmentFor): the capture runs there. */
+  environment?: EnvironmentAssignment;
 }
 
 /** The RuntimeAdapter contract for captures, as the checks have theirs (server/checks.ts, CheckRunner). */
@@ -975,12 +1202,12 @@ export function evidenceDir(dataDir: string, projectId: string, attemptId: strin
   return plain.test(projectId) && plain.test(attemptId) ? join(dataDir, "evidence", projectId, attemptId) : undefined;
 }
 
-/** Captures in the recorder's container (captureEvidence), one at a time through the recorder's queue. */
+/** Real captures (captureEvidence): in the project's environment when the assignment has one, else in the recorder's container. */
 export class ContainerEvidence implements EvidenceRunner {
   readonly simulated = false;
   private readonly runs = new Map<string, { abort: AbortController; killed: boolean }>();
   private readonly listeners = new Set<(e: AdapterEvent) => void>();
-  constructor(private readonly o: Pick<CaptureJob, "env" | "docker" | "image" | "root" | "log" | "limits"> = {}) {}
+  constructor(private readonly o: Pick<CaptureJob, "env" | "docker" | "image" | "root" | "log" | "limits" | "lender"> = {}) {}
   private emit(e: AdapterEvent) {
     for (const l of [...this.listeners]) l(e);
   }
@@ -989,7 +1216,7 @@ export class ContainerEvidence implements EvidenceRunner {
     const run = { abort: new AbortController(), killed: false };
     this.runs.set(a.attemptId, run);
     this.emit({ type: "started", attemptId: a.attemptId });
-    void captureEvidence({ ...this.o, source: a.workspace, sha: a.sha, items: a.items, preview: a.preview, outDir: a.outDir, signal: run.abort.signal })
+    void captureEvidence({ ...this.o, source: a.workspace, sha: a.sha, items: a.items, preview: a.preview, outDir: a.outDir, signal: run.abort.signal, attemptId: a.attemptId, ...(a.environment ? { environment: a.environment } : {}) })
       .then((r) => ({ ...r, at: new Date().toISOString() }))
       .then(
         (evidence) => {
