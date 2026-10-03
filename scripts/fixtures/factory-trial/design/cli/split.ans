@@ -1,0 +1,5 @@
+$ node bin/split.js 90 3
+Each person pays $30.00
+$ node bin/split.js 90 0
+Need at least one person
+$

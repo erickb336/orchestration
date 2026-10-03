@@ -1,0 +1,10 @@
+{
+  "rules": [
+    { "id": "R1", "text": "When the person gives a total and a number of people, the splitter shall show the share each person pays." },
+    { "id": "R2", "text": "If the number of people is less than one, then the splitter shall refuse with the message \"Need at least one person\"." },
+    { "id": "R3", "text": "The splitter shall give the cents left over after rounding to the first person, so that the shares add up to the total." }
+  ],
+  "examples": [
+    { "id": "E1", "text": "Given a total of 90.00 and 3 people, when the person splits the bill, then each person pays 30.00." }
+  ]
+}

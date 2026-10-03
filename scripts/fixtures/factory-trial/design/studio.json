@@ -1,0 +1,25 @@
+{
+  "artifacts": [
+    {
+      "kind": "screen",
+      "title": "Split a bill",
+      "devices": ["desktop", "mobile"],
+      "variants": [{ "id": "a", "label": "One form, the share below it", "entry": "screen/index.html" }],
+      "files": ["screen/index.html"]
+    },
+    {
+      "kind": "terminal-demo",
+      "title": "The split command",
+      "devices": ["terminal"],
+      "variants": [{ "id": "a", "label": "A share, then a refusal", "entry": "cli/split.ans" }],
+      "files": ["cli/split.ans"]
+    },
+    {
+      "kind": "flow",
+      "title": "Splitting a bill",
+      "devices": [],
+      "variants": [{ "id": "a", "label": "Equal shares", "entry": "flow/flow.md" }],
+      "files": ["flow/flow.md", "flow/rules.json"]
+    }
+  ]
+}
