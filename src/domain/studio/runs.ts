@@ -23,6 +23,7 @@ import { draftVisionText } from "../model/vision";
 import { providerLabel } from "../model/resolution";
 import { CONTROL_RE, stripInvisible, visibleOrEmpty } from "../model/textSafety";
 import { budgetStop } from "../spend";
+import { allowSubagentsForStudioRun } from "../subagents";
 import { ControlError, PROVIDERS, roleDefaultFor, type ModelSelection, type ProviderId, type State } from "../types";
 import { artifactName, endReview, latestArtifacts, latestVersion, peReview, peRunsOf } from "./studio";
 import { newWorkStaleReason } from "../peReview";
@@ -305,6 +306,9 @@ export function dispatchStudioRuns(state: State, now: string, opts: StudioDispat
     r.status = "running";
     r.startedAt = now;
     if (opts.simulated?.includes(r.provider)) r.simulated = true;
+    // A probe is read-only research: it may start helpers where the owner allows them (ORC-031); no other studio run may.
+    const allowSubagents = allowSubagentsForStudioRun(s, r);
+    if (allowSubagents) r.allowSubagents = allowSubagents;
     started.push(r.id);
     event(s, now, "lead", "dispatch", `${studioRunName(r)} started ${r.review ? `reviewing ${reviewName(r.review)}` : `for round ${r.round}`} on ${providerLabel(r.provider)} · ${r.model}${r.simulated ? " (simulated)" : ""}`);
   }

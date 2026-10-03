@@ -5,6 +5,7 @@ import * as C from "../checks";
 import * as F from "../findings";
 import { peReviewHold } from "../peReview";
 import { budgetStop } from "../spend";
+import { allowSubagentsForStep } from "../subagents";
 import { captureItems, evidenceSummary, notSetUpRun, type EvidenceSnapshot } from "../studio/evidence";
 import { type Attempt, type CheckRunRecord, type ProviderId, type State, type Task, DEFAULT_CHECKS, isServiceRole } from "../types";
 import { acceptedOutput, consumedInputs } from "./artifacts";
@@ -288,6 +289,8 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
       }
       const attemptId = nextId(s, "run");
       const inputs = consumedInputs(s, t, st);
+      // Subagents only in read-only research, where the owner allows them, on a provider that tracks them (ORC-031).
+      const allowSubagents = allowSubagentsForStep(s, t, st, r.selection.provider);
       const a: Attempt = {
         id: attemptId,
         taskId: t.id,
@@ -311,6 +314,7 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
           principles: runPrinciples(s, t, st, inputs),
           // A dedicated delivery review reads a worktree detached at exactly this commit.
           ...(t.reviewTarget ? { reviewedSha: t.reviewTarget.headSha } : {}),
+          ...(allowSubagents ? { allowSubagents } : {}),
         },
         startedAt: now,
         outcome: "running",

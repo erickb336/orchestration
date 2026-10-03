@@ -13,6 +13,7 @@ import { DEMO_DOC_HASH, DEMO_DOC_TEXT, buildDemo } from "../src/domain/demo";
 import { builtInCatalog } from "../src/domain/flows";
 import { event, setFlows } from "../src/domain/model";
 import { buildEmptyProject } from "../src/domain/seed";
+import { setSubagentProviders } from "../src/domain/subagents";
 import type { ProviderId } from "../src/domain/types";
 import { pruneCheckLogs, type CheckRunner } from "./checks";
 import type { GitHubHost } from "./github";
@@ -115,6 +116,9 @@ if (mode === "fake") {
   const now = new Date().toISOString();
   const flows = builtInCatalog();
   store.update((s) => setFlows(s, flows, now), now);
+  // Which providers track subagents (ORC-031), from what the adapters say: only their research runs may start them.
+  const tracking = (Object.entries(adapters) as [ProviderId, RuntimeAdapter][]).filter(([, a]) => a.capabilities.childAgentTracking === "supported").map(([p]) => p);
+  store.update((s) => setSubagentProviders(s, tracking, now), now);
   log(`Flows: ${flows.map((f) => f.name).join(", ")}`);
 }
 // Fake runtime: no `github` is passed, so the scheduler uses its simulated host and contacts nothing.

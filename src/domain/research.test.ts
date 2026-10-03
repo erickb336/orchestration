@@ -5,7 +5,7 @@ import Ajv2020 from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
 import schema from "../../flows/flow.schema.json";
 import { BUILT_IN_FILES } from "./builtInFlows";
-import { builtInCatalog, flowSummary, resolveFlows } from "./flows";
+import { builtInCatalog, flowSummary, resolveFlows, type RawFlow } from "./flows";
 import { stepAccess, structuralKey, validatePipeline } from "./pipeline";
 import { STEP_ROLES, type StepDef } from "./types";
 
@@ -48,7 +48,7 @@ describe("the schema and the graph rules refuse research on a step that writes",
     expect(errors([review, repair])).toEqual(["S1's findings start S2, which changes code, so S1 cannot be a research step."]);
     // The file passes the schema; the graph rules refuse it, and so does the resolver.
     expect(validate(file([review, repair]))).toBe(true);
-    expect(() => resolveFlows([{ file: "flows/probe-flow.json", raw: file([review, repair]) }])).toThrow("cannot be a research step");
+    expect(() => resolveFlows([{ file: "flows/probe-flow.json", raw: file([review, repair]) as RawFlow }])).toThrow("cannot be a research step");
     const revise: StepDef = { ...repair, outputs: [{ name: "report", kind: "report" }] };
     expect(errors([review, revise])).toEqual([]);
   });

@@ -13,6 +13,7 @@ import type { PeReviewTarget } from "./peReview";
 import * as B from "./studio/blueprint";
 import { setDomains } from "./studio/domains";
 import { setPreview } from "./studio/evidence";
+import { markSubagentsSeen, setResearchHelpers } from "./subagents";
 import * as R from "./studio/runs";
 import * as S from "./studio/studio";
 import { type Mark, type StudioMaker, type VariantRules, ROUND_FOCUSES, STUDIO_AGENT_ROLES, STUDIO_ARTIFACT_KINDS, STUDIO_RUN_KINDS, VERDICTS } from "./studio/types";
@@ -680,6 +681,13 @@ export const COMMANDS = {
   setRunLimits: same((s, now, a) => M.setRunLimits(s, { maxTurns: num(a, "maxTurns"), timeoutMinutes: num(a, "timeoutMinutes"), maxBudgetUsd: num(a, "maxBudgetUsd") }, now)),
   /** Whether housekeeping also archives Orchestrator's Codex threads and trashes its Claude session folders. */
   setHousekeepOwnerApps: same((s, now, a) => M.setHousekeepOwnerApps(s, bool(a, "on"), now)),
+  /**
+   * "Let research steps start helpers" (ORC-031): `step` names a research step ("investigation/S1", "studio/probe"),
+   * `cap` the helpers per run, or null for off. Refused for any other step, and turned on only while a provider tracks them.
+   */
+  setResearchHelpers: same((s, now, a) => setResearchHelpers(s, str(a, "step"), numOrNull(a, "cap"), now)),
+  /** The owner saw the helper agents that started on a run where none is allowed: the run leaves Needs you. */
+  markSubagentsSeen: same((s, now, a) => markSubagentsSeen(s, str(a, "runId"), now)),
 
   // the owner's budgets
   /** Both budgets in dollars, each a positive number or null (not set). */

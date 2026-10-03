@@ -16,6 +16,7 @@ import * as M from "../src/domain/model";
 import { LEAD_REPLY_SCHEMA } from "../src/domain/model/leadReplySchema";
 import * as P from "../src/domain/peReview";
 import { stepAccess } from "../src/domain/pipeline";
+import { reportSubagent } from "../src/domain/subagents";
 import * as R from "../src/domain/studio/runs";
 import { evidenceSummary } from "../src/domain/studio/evidence";
 import * as S from "../src/domain/studio/studio";
@@ -1136,6 +1137,8 @@ export class Scheduler {
           return fail(`studio.json was refused: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
+      case "subagent":
+        return reportSubagent(s, e.attemptId, e.subagent, now);
       default:
         return s;
     }
@@ -1255,6 +1258,8 @@ export class Scheduler {
         }),
         outputs: step.outputs,
         limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
+        // Resolved at dispatch and recorded in the snapshot (ORC-031): only a read-only research step may have it.
+        ...(a.snapshot.allowSubagents && access === "read" ? { allowSubagents: { ...a.snapshot.allowSubagents } } : {}),
       });
       // Notes written into the instructions ("via start") are confirmed when the runtime reports the run started:
       // a run that fails before it starts settles them as not delivered.
@@ -1467,6 +1472,8 @@ export class Scheduler {
     if (e.type === "context") return M.reportRunContext(s, e.attemptId, { scope: e.scope, conventions: e.conventions, decisions: e.decisions });
     if (e.type === "checks-health") return C.reportChecksHealth(s, e.health, now, { startedAt: e.startedAt });
     if (e.type === "studio-media") return this.applyMedia(s, e, now);
+    // A subagent of a task run or a lead run (ORC-031): recorded on its run, allowed or not.
+    if (e.type === "subagent") return reportSubagent(s, e.attemptId, e.subagent, now);
     if (s.leadRuns.some((r) => r.id === e.attemptId)) return this.applyLeadEvent(s, e, now);
     switch (e.type) {
       case "started": {
@@ -1511,7 +1518,7 @@ export class Scheduler {
     return a && isProvider(a.snapshot.provider) && this.adapters[a.snapshot.provider] instanceof FakeAdapter ? true : undefined;
   }
 
-  private applyLeadEvent(s: State, e: AdapterEvent, now: string): State {
+  private applyLeadEvent(s: State, e: Exclude<AdapterEvent, { type: "subagent" }>, now: string): State {
     switch (e.type) {
       case "started":
         return M.reportLeadStarted(s, e.attemptId, { sessionId: e.sessionId, actualModel: e.model });
