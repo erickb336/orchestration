@@ -53,5 +53,20 @@ The diff `c969f24..219b463`, read by a reviewer that did not write it: **3 high,
 - **Medium:** clean-up ran while the container was alive and could follow a planted link onto the Mac; the setup probe never tried the Docker VM's own address and counted "connection refused" as unreachable; the owner's chosen option was kept by its id only; a new project inherited the old environment; a dev container without prepare commands broke the checks and reported "prepared"; the claim that pass 5 finding 8 is closed was too broad.
 - **Low:** the safety notes did not describe E2; no disk limit on the mounted folders; some IPv6 forms of local addresses passed the proxy's check; the prepare step faked a check assignment, and a JVM-specific environment variable was a language code path.
 
-**The fix round:** F2 fixes the environment findings (3, 4, 5, 8, 10, 11, 12, 13); F1 fixes the terminal session and the domain (1, 2, 6, 7, 9). The ORC-029 pull request follows the fixes.
+**The fix round, as built.** Two workers fixed all 13 findings, each with a test that failed before its fix.
+
+- **F1, the terminal session and the domain (1, 2, 6, 7, 9):**
+  - 1: the service tests each Wait pattern in a worker thread with a 0.25 s limit, and a slower pattern fails with "use a simpler pattern". The review's pattern now answers in 263 ms, and the event loop is blocked for at most 2 ms. Plain text only was rejected, because the same tape runs in VHS, where Wait takes a regular expression. RE2 was rejected: its packages download or build a binary, or have no release since 2022.
+  - 2: the cursor stops at the session's width, a line holds at most that width, the Waits see the last 500 lines and the transcript keeps the last 20,000. The review's 16 KB of output now adds 0.2 MB, not 605 MB.
+  - 6: the owner's option counts as kept only when its id, name and approach are unchanged. Otherwise the update waits for the owner. The change-order brief now shows the chosen option word for word, so the lead can keep it.
+  - 7: a new project clears the old environment, and also the notes queued for the old project's tasks.
+  - 9: the pass 5 design says finding 8 is closed only for a project with an environment and Docker.
+- **F2, the project environment (3, 4, 5, 8, 10, 11, 12, 13):** the choices and the measurements are in `project-environment.md`.
+  - 3: a dev container is used only after the owner confirms its digest (the file and the Dockerfile it names), from Settings › Environment or Needs you. A new or changed one falls back to the confirmed image, with the reason. New projects protect `.devcontainer/**`, `.devcontainer.json` and Dockerfiles. A Dockerfile's `# syntax=` line and `RUN --mount` are refused, whatever the builder. "The confirmed image always wins" was rejected, because a project with no confirmed image would still run an agent's dev container.
+  - 4: the copy is removed only after Docker lists no container that mounted it, and the walk never follows a link.
+  - 5: the probe tries every gateway of the private network on port 22, and only no route or a time-out counts as unreachable.
+  - 8: with no environment prepare commands, the checks' own prepare commands run in the prepare phase; with neither, the record and the card say "none".
+  - 10: the safety notes describe E2 and these fixes. 11: an 8 GB limit on the mounted folders. 12: every IPv6 form of a local address is private. 13: the prepare step has its own module, and the JVM variable is gone.
+- **Checks after both merged:** `npm test` 2,211 passed and 1 skipped; the typecheck, the build and the integration scenario pass; the three browser passes (the pre-flight, the floor, Design and reality) and the three simulated trials pass. F2 ran the real Docker tests: 14 of 14.
+- **Not verified:** the Settings card in a browser; a BuildKit build on a machine with buildx; a Docker engine that ignores the isolated network mode; the Java row of the image table; a real lead's change-order answer with the new brief line.
 
