@@ -2,7 +2,8 @@
 // a tiny fixture repository (a static page served by a two-line Node server, and a Node CLI) is installed, previewed
 // and captured, and the PNGs and the GIF come back; a hostile page and a hostile CLI reach neither the network nor this
 // computer, their install hooks never run although the install has the network, and the files they plant do not come
-// back; a preview that does not start says so. Skipped, with the reason, without Docker or the image.
+// back; a preview that does not start says so. Then the same step in each project's own environment (unit E2): the
+// Node, Python and Go fixtures and the hostile one. Skipped, with the reason, without Docker or the image.
 
 import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
