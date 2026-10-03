@@ -1,0 +1,21 @@
+/* The pre-flight (ORC-029 pass 6): the blueprint, the first Lock in, what the factory will do, how it runs, and your agreement. */
+.pf-head { display: grid; gap: var(--space-1); }
+.pf-grid { align-items: start; }
+.pf-card .k-card__body { display: grid; gap: var(--space-4); }
+.pf-card section h3 { font-size: var(--fs-body); margin: 0 0 var(--space-2); }
+
+/* The blueprint: each approved part with its PE review, and what is still open. */
+.pf-items, .pf-open, .pf-started { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+.pf-items li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-1) var(--space-3); font-size: var(--fs-meta); }
+.pf-open li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-2); align-items: start; font-size: var(--fs-meta); overflow-wrap: anywhere; }
+
+/* How the factory runs: two choices side by side, then where it pauses. */
+.pf-choices { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+@media (max-width: 860px) { .pf-choices { grid-template-columns: minmax(0, 1fr); } }
+.pf-q { display: grid; gap: var(--space-2); align-content: start; min-width: 0; }
+.pf-q__label { font-size: var(--fs-meta); font-weight: 600; }
+.pf-q .k-seg { flex-wrap: wrap; }
+
+/* After the start, and the way in from Home, Vision and Settings. */
+.pf-started { gap: var(--space-1); }
+.pf-link { display: grid; gap: var(--space-1); justify-items: start; }
