@@ -40,15 +40,12 @@ export const MIN_AGE_MS = 60 * 60_000;
 
 /**
  * The folder name the Claude CLI gives a working folder under <config>/projects (Claude Agent SDK 0.3.285, core.mjs):
- * every character other than an ASCII letter or digit becomes "-". A name longer than 200 characters is cut to 200,
- * then gets "-" and the base-36 hash of the whole path.
+ * every character other than an ASCII letter or digit becomes "-". The CLI cuts a name longer than 200 characters to
+ * 200 and adds "-" and a hash of the path. Housekeeping compares only the start of a name with an owned folder's name
+ * shorter than 200 characters, so it needs no hash.
  */
-export function claudeProjectDirName(path: string): string {
-  const name = path.replace(/[^a-zA-Z0-9]/g, "-");
-  if (name.length <= 200) return name;
-  let h = 0;
-  for (let i = 0; i < path.length; i++) h = ((h << 5) - h + path.charCodeAt(i)) | 0;
-  return `${name.slice(0, 200)}-${Math.abs(h).toString(36)}`;
+export function claudeProjectName(path: string): string {
+  return path.replace(/[^a-zA-Z0-9]/g, "-");
 }
 
 /** The recorder's container names (studio/container.ts, containerName): what it records, the service's pid, 12 hex digits. */
@@ -272,7 +269,7 @@ export class Housekeeping {
     const config = this.o.env.CLAUDE_CONFIG_DIR ? resolve(this.o.env.CLAUDE_CONFIG_DIR) : join(this.o.home, ".claude");
     const root = join(config, "projects");
     const owned = await ownedPaths(this.o.ownedFolders);
-    const prefixes = owned.map(claudeProjectDirName).filter((p) => p.length < 200);
+    const prefixes = owned.map(claudeProjectName).filter((p) => p.length < 200);
     for (const e of await listDir(root)) {
       if (!e.isDirectory()) continue; // a link is never followed
       if (!prefixes.some((p) => e.name === p || e.name.startsWith(`${p}-`))) continue;

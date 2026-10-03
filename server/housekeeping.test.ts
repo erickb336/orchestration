@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SweepReport } from "../src/api";
-import { Housekeeping, MIN_AGE_MS, claudeProjectDirName, dockerTime, orphanContainer, sweepMessage, transcriptCwd, type DockerOps, type HousekeepingOptions } from "./housekeeping";
+import { Housekeeping, MIN_AGE_MS, claudeProjectName, dockerTime, orphanContainer, sweepMessage, transcriptCwd, type DockerOps, type HousekeepingOptions } from "./housekeeping";
 import type { ArchiveOutcome } from "./runtimes/codex";
 import { STAGE_SWEEP_AGE_MS } from "./studio/container";
 
@@ -44,7 +44,7 @@ function codexThread(n: number, originator: string, mtime = OLD): string {
 
 /** A Claude session folder for a working folder: a transcript that ran there (or only `memory/`, as a run with no saved session left). */
 function claudeFolder(cwd: string, o: { transcriptCwd?: string; memoryOnly?: boolean; mtime?: number } = {}): string {
-  const name = claudeProjectDirName(cwd);
+  const name = claudeProjectName(cwd);
   const dir = join(home, ".claude", "projects", name);
   mkdirSync(dir, { recursive: true });
   if (o.memoryOnly) mkdirSync(join(dir, "memory"));
@@ -90,37 +90,48 @@ function keeper(o: Partial<HousekeepingOptions> = {}) {
 
 describe("the Claude CLI's folder names", () => {
   it("encodes a working folder as the CLI does, on names seen on the owner's computer", () => {
-    expect(claudeProjectDirName("/Users/erickb336/workspace/Orchestration")).toBe("-Users-erickb336-workspace-Orchestration");
-    expect(claudeProjectDirName("/Users/erickb336/workspace/Orchestration/.claude/worktrees/charming-hertz-b98519")).toBe("-Users-erickb336-workspace-Orchestration--claude-worktrees-charming-hertz-b98519");
-    expect(claudeProjectDirName("/private/tmp/claude-501/-Users-erickb336-workspace-Orchestration/27ba951d-3efc-4000-b54e-66e81d19db2f/scratchpad")).toBe(
+    expect(claudeProjectName("/Users/erickb336/workspace/Orchestration")).toBe("-Users-erickb336-workspace-Orchestration");
+    expect(claudeProjectName("/Users/erickb336/workspace/Orchestration/.claude/worktrees/charming-hertz-b98519")).toBe("-Users-erickb336-workspace-Orchestration--claude-worktrees-charming-hertz-b98519");
+    expect(claudeProjectName("/private/tmp/claude-501/-Users-erickb336-workspace-Orchestration/27ba951d-3efc-4000-b54e-66e81d19db2f/scratchpad")).toBe(
       "-private-tmp-claude-501--Users-erickb336-workspace-Orchestration-27ba951d-3efc-4000-b54e-66e81d19db2f-scratchpad",
     );
-    expect(claudeProjectDirName("/Users/erickb336/.orchestration/worktrees/orchestration/p-1/run-1035")).toBe("-Users-erickb336--orchestration-worktrees-orchestration-p-1-run-1035");
+    expect(claudeProjectName("/Users/erickb336/.orchestration/worktrees/orchestration/p-1/run-1035")).toBe("-Users-erickb336--orchestration-worktrees-orchestration-p-1-run-1035");
   });
 
-  it("is the name under which the Claude Agent SDK finds a session, a long path's hash included", async () => {
+  it("is the name under which the Claude Agent SDK finds a session", async () => {
+    // For a name of 200 characters or fewer the SDK looks only in the folder of that exact name (a longer one it also
+    // finds by its first 200 characters and the transcript's cwd, so it cannot prove the name).
     const config = join(home, "claude-config");
     const before = process.env.CLAUDE_CONFIG_DIR;
     process.env.CLAUDE_CONFIG_DIR = config;
     try {
       const { listSessions } = await import("@anthropic-ai/claude-agent-sdk");
-      const short = join(data, "worktrees", "orchestration", "p-1", "run-12");
-      const long = join(data, "worktrees", "a-long-folder-name-".repeat(12), "run-1");
-      expect(claudeProjectDirName(long).length).toBeGreaterThan(200);
-      for (const [i, dir] of [short, long].entries()) {
-        const sid = `6f1c2b8e-0000-4000-8000-00000000000${i}`;
-        const folder = join(config, "projects", claudeProjectDirName(dir));
-        mkdirSync(folder, { recursive: true });
-        writeFileSync(join(folder, `${sid}.jsonl`), JSON.stringify({ type: "user", message: { role: "user", content: "hello" }, uuid: `u-${i}`, parentUuid: null, timestamp: new Date().toISOString(), sessionId: sid, cwd: dir }) + "\n");
-        expect((await listSessions({ dir, includeWorktrees: false })).map((s) => s.sessionId)).toEqual([sid]);
-      }
-      // A near miss (another hash) is not the CLI's name: the SDK finds nothing there.
-      const other = join(data, "worktrees", "a-long-folder-name-".repeat(12), "run-2");
-      expect(await listSessions({ dir: other, includeWorktrees: false })).toEqual([]);
+      const session = (folder: string, sid: string, cwd: string) => {
+        mkdirSync(join(config, "projects", folder), { recursive: true });
+        const line = { type: "user", message: { role: "user", content: "hello" }, uuid: `u-${sid}`, parentUuid: null, timestamp: new Date().toISOString(), sessionId: sid, cwd };
+        writeFileSync(join(config, "projects", folder, `${sid}.jsonl`), JSON.stringify(line) + "\n");
+      };
+      const dir = join(data, "worktrees", "orchestration", "p-1.x", "run_12");
+      session(claudeProjectName(dir), "6f1c2b8e-0000-4000-8000-000000000001", dir);
+      expect((await listSessions({ dir, includeWorktrees: false })).map((s) => s.sessionId)).toEqual(["6f1c2b8e-0000-4000-8000-000000000001"]);
+      // A near miss: "." and "_" kept. The SDK finds nothing under it.
+      const near = join(data, "worktrees", "orchestration", "p-1.x", "run_13");
+      session(near.replace(/[^a-zA-Z0-9._]/g, "-"), "6f1c2b8e-0000-4000-8000-000000000002", near);
+      expect(await listSessions({ dir: near, includeWorktrees: false })).toEqual([]);
     } finally {
       if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
       else process.env.CLAUDE_CONFIG_DIR = before;
     }
+  });
+
+  it("finds a long working folder's session by the start of its name, as the CLI cuts it", async () => {
+    const cwd = join(data, "worktrees", "a-long-folder-name-".repeat(12), "run-1");
+    const cut = `${claudeProjectName(cwd).slice(0, 200)}-i03ip8`; // the CLI: 200 characters, "-" and a hash
+    const dir = join(home, ".claude", "projects", cut);
+    mkdirSync(join(dir, "memory"), { recursive: true });
+    setTime(join(dir, "memory"), OLD);
+    setTime(dir, OLD);
+    expect((await keeper().hk.find()).claudeFolders.map((f) => f.name)).toEqual([cut]);
   });
 
   it("reads a transcript's first cwd from its complete lines only", () => {
@@ -194,7 +205,7 @@ describe("a sweep", () => {
     mkdirSync(ownFolder);
     writeFileSync(join(ownFolder, "notes.md"), "mine");
     mkdirSync(join(home, ".claude", "projects"), { recursive: true });
-    const linkName = claudeProjectDirName(join(data, "worktrees", "x", "run-1"));
+    const linkName = claudeProjectName(join(data, "worktrees", "x", "run-1"));
     symlinkSync(ownFolder, join(home, ".claude", "projects", linkName));
 
     const { hk } = keeper();
@@ -209,7 +220,7 @@ describe("a sweep", () => {
     mkdirSync(join(home, ".codex"));
     symlinkSync(target, join(home, ".codex", "sessions"));
     rmSync(join(home, ".claude", "projects"), { recursive: true });
-    mkdirSync(join(elsewhere, "projects", claudeProjectDirName(join(data, "worktrees", "y"))), { recursive: true });
+    mkdirSync(join(elsewhere, "projects", claudeProjectName(join(data, "worktrees", "y"))), { recursive: true });
     symlinkSync(join(elsewhere, "projects"), join(home, ".claude", "projects"));
     expect(await hk.find()).toMatchObject({ codexThreads: [], claudeFolders: [] });
   });
