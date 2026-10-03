@@ -205,6 +205,12 @@ describe("dropping an item, and discarding the draft", () => {
     ]);
     expect(B.currentBlueprint(s)?.reason).toBe("locked in: dropped Invite sheet v1");
     expect(B.validateBlueprintRefs(s, [inviteItem])).toEqual([inviteItem]);
+    // Approving the round again leaves the dropped item dropped; approving the artifact on its own brings it back, with its id.
+    const invite = B.draftItems(s).find((i) => i.id === inviteItem)!.artifactId;
+    expect(() => run(s, "approveRound", { round: 1 }, at(9))).toThrow("Round 1 is already in the blueprint as it stands.");
+    s = approve(s, invite, 1);
+    expect(B.draftItems(s).find((i) => i.id === inviteItem)?.status).toBe("approved");
+    expect(B.draftChanges(s).added.map((i) => i.id)).toEqual([inviteItem]);
   });
 
   it("discarding puts the draft back to the version in force, on the draft revision the owner saw; refused with no draft", () => {

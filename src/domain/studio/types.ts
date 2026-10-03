@@ -1,11 +1,12 @@
 // The vision studio and the blueprint (ORC-029, docs/design/ORC-029-pass2-design.md section 2c).
 //
 // In Vision the lead runs rounds: a designer makes artifacts (screens, terminal demos, contracts, flow maps), the PE
-// judges each option's feasibility before the owner sees it, and the owner marks, pins and picks. What the owner
-// approves becomes the blueprint, versioned, which the factory builds from; a blueprint revision after the factory
-// started that touches a task is a change order. The rules live in studio.ts (rounds, artifacts, feedback, PE review, probes) and
-// blueprint.ts (approval, open items, change orders, task specs' references). The containers exist from state
-// format 19.
+// judges each option's feasibility before the owner sees it, and the owner marks, pins and picks. Vision stays open
+// while the factory runs (pass 5). What the owner approves goes into the blueprint's draft; the owner's Lock in puts
+// the draft into force as a blueprint revision, which the factory builds from (Start the factory is the first Lock
+// in); a Lock in while building that touches a task or brings new work is a change order. The rules live in studio.ts
+// (rounds, artifacts, feedback, PE review, probes) and blueprint.ts (approval, the draft, Lock in and its summary,
+// open items, change orders, task specs' references). The containers exist from state format 19.
 
 import type { Device, GivenPrinciple, PeReviewState, ProseCheck, ProviderId } from "../types";
 

@@ -116,7 +116,8 @@ export function approveArtifact(state: State, input: { artifactId: string; versi
 /**
  * The owner approves a whole round into the draft: the newest version of each artifact made in that round. Each is
  * approved where it can be as it stands (with the owner's pick); otherwise it is listed as open, unless it is already
- * approved at an earlier version, which stays. What the owner marked Change is open; Drop is left out.
+ * approved at an earlier version, which stays. What the owner marked Change is open; Drop is left out. An item the
+ * owner dropped stays dropped: only approving that artifact on its own brings it back.
  */
 export function approveRound(state: State, n: number, now: string): State {
   if (!state.studio.rounds.some((r) => r.n === n)) throw new ControlError(`There is no round ${n}.`);
@@ -131,6 +132,7 @@ export function approveRound(state: State, n: number, now: string): State {
     if (fb?.mark === "drop") continue;
     const why = fb?.mark === "change" ? "you marked it Change" : approvalBlocker(s, a, fb?.pickedVariant);
     const existing = itemOf(items, a);
+    if (existing?.status === "dropped") continue;
     if (why && existing?.status === "approved") continue;
     const item = itemFor(s, items, a, chosenVariant(a, fb?.pickedVariant), why ? "open" : "approved");
     if (same(existing, item)) continue;

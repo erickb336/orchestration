@@ -337,10 +337,12 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
 };
 
 /**
- * Format 19's fields, added where a document lacks them. Format 19 is unreleased, and early builds of ORC-029 pass 2
- * wrote it before all of its fields existed, so this runs on every load of a format-19 database as well as in the
- * 18 → 19 upgrade. Idempotent. A change order without a handler takes the project's setting. Start records are
- * history and are never rewritten: an early start's settings carry `merge` where later ones carry `delivery`.
+ * Format 19's fields, added where a document lacks them. Format 19 is unreleased, and early builds of ORC-029 passes
+ * 2 to 4 wrote it before all of its fields existed, so this runs on every load of a format-19 database as well as in
+ * the 18 → 19 upgrade. Idempotent. A change order without a handler takes the project's setting. The blueprint's draft
+ * (pass 5) starts as a copy of the version in force, so the revisions stay in force and the draft holds no change.
+ * Start records are history and are never rewritten: an early start's settings carry `merge` where later ones carry
+ * `delivery`.
  */
 function normalize19(doc: Record<string, unknown>): Record<string, unknown> {
   const project = doc.project as Record<string, unknown>;
