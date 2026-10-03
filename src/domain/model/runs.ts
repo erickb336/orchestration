@@ -86,13 +86,14 @@ export function reportRunLost(state: State, attemptId: string, reason: string, n
   return s;
 }
 
-/** The runtime accepted the run. */
-export function reportRunStarted(state: State, attemptId: string, info: { sessionId?: string; actualModel?: string }): State {
+/** The runtime accepted the run. `simulated`: the fake runtime runs it (a known $0 however it ends, lost included). */
+export function reportRunStarted(state: State, attemptId: string, info: { sessionId?: string; actualModel?: string; simulated?: true }): State {
   const s = draft(state);
   const a = s.attempts.find((x) => x.id === attemptId);
   if (!a || !isActive(a)) return s;
   if (info.sessionId) a.sessionId = info.sessionId;
   if (info.actualModel) a.actualModel = info.actualModel;
+  if (info.simulated) a.simulated = true;
   return s;
 }
 

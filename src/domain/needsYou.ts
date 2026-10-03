@@ -117,7 +117,7 @@ export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[]
   const items: NeedsYouEntry[] = [];
   // The costs with no full record count at an estimate (spend.ts), which the budgets show: only the stop waits for you.
   const stop = budgetStop(state);
-  if (stop) items.push({ kind: "open", key: "budget", what: stop.why, detail: budgetDetail(stop.spend.unknown), action: "Settings", href: "#/settings/project/budgets" });
+  if (stop) items.push({ kind: "open", key: "budget", what: stop.why, detail: budgetDetail(state, stop.spend.unknown), action: "Settings", href: "#/settings/project/budgets" });
   // A run's agent started the provider's own subagents where none is allowed (ORC-031): the owner knows, until they mark it as seen.
   for (const x of slippedThrough(state)) {
     const task = x.taskId ? state.tasks.find((t) => t.id === x.taskId) : undefined;
@@ -184,10 +184,24 @@ function helperDetail(name: string, count: number): string {
   return `${name} started ${count === 1 ? "a helper agent" : `${count} helper agents`}. The provider should have switched them off. They are counted and shown on the run, and their cost counts in the budget. Mark them as seen once you know why.`;
 }
 
+/**
+ * A run in the owner's words, never its internal id ("lead-1127"): a task run by its task and step ("WT-002 S1"), a
+ * lead run, a Vision run by its kind; a helper by the run that started it. `UnknownCost.runId` names a helper as
+ * "<run> helper <id>" or "<run> unlisted helper <n>".
+ */
+function runWords(s: State, runId: string): string {
+  const id = runId.split(" ")[0];
+  const helper = id !== runId;
+  const a = s.attempts.find((x) => x.id === id);
+  const studio = a ? undefined : s.studio.runs.find((x) => x.id === id);
+  const run = a ? `${a.taskId} ${a.stepId}` : studio ? `a ${studio.kind === "pe" ? "PE" : studio.kind} run in Vision` : "a lead run";
+  return helper ? `a helper of ${run}` : run;
+}
+
 /** What the budget stop means, and the runs it cannot count, if any (the first five are named). */
-function budgetDetail(unknown: UnknownCost[]): string {
+function budgetDetail(s: State, unknown: UnknownCost[]): string {
   const none = unknown.filter((u) => u.countedUsd === null);
-  const named = none.slice(0, 5).map((u) => `${u.runId} (${u.provider} · ${u.model}, ${u.reason === "no-price" ? "no price" : "no usage recorded"})`);
+  const named = none.slice(0, 5).map((u) => `${runWords(s, u.runId)} (${M.providerLabel(u.provider)} · ${u.model}, ${u.reason === "no-price" ? "no price" : "no usage recorded"})`);
   const notCounted = none.length ? ` Not counted: ${named.join(", ")}${none.length > 5 ? ` and ${none.length - 5} more` : ""}.` : "";
   return `Estimated at the providers' published prices. Nothing new starts; running work finishes. Raise the budget, or continue past it.${notCounted}`;
 }

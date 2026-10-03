@@ -151,6 +151,10 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
   let s = draft(state);
   const r = getLeadRun(s, runId);
   if (!r || (r.outcome !== "running" && r.outcome !== "stopping")) return s;
+  // What the run cost, however it ends: its usage, its model, and whether the fake runtime ran it (a known $0).
+  if (run.usage) r.usage = run.usage;
+  if (run.actualModel) r.actualModel = run.actualModel;
+  if (run.simulated) r.simulated = true;
   if (r.outcome === "stopping") {
     // Finished after a stop request: keep the reply for the record, but create nothing.
     r.outcome = "stopped";
@@ -160,8 +164,6 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
   }
   r.outcome = "completed";
   r.endedAt = now;
-  if (run.usage) r.usage = run.usage;
-  if (run.actualModel) r.actualModel = run.actualModel;
   const rejected: string[] = [];
   if (out.problem) {
     r.note = leadReplyNote(out.problem);
