@@ -361,6 +361,9 @@ function normalize19(doc: Record<string, unknown>): Record<string, unknown> {
   // tracks them until the service writes what its adapters say at start. Runs from before recorded none.
   project.researchHelpers ??= {};
   project.subagentProviders ??= [];
+  // The preview setting's install (ORC-029 pass 5) ran only on the recorder's path, which ORC-030 C3 removed: evidence
+  // runs only in the project's environment, whose prepare commands install. The rest of the setting stays.
+  if (project.preview) delete (project.preview as { install?: unknown }).install;
   doc.studio ??= emptyStudio();
   // Studio runs (pass 3a) came after the first format-19 builds: none were recorded before them.
   (doc.studio as { runs?: unknown[] }).runs ??= [];

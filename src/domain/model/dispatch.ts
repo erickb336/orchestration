@@ -6,7 +6,7 @@ import * as F from "../findings";
 import { peReviewHold } from "../peReview";
 import { budgetStop } from "../spend";
 import { allowSubagentsForStep } from "../subagents";
-import { captureItems, evidenceSummary, notSetUpRun, type EvidenceSnapshot } from "../studio/evidence";
+import { captureItems, evidenceSummary, notSetUpReason, notSetUpRun, type EvidenceSnapshot } from "../studio/evidence";
 import { type Attempt, type CheckRunRecord, type ProviderId, type State, type Task, DEFAULT_CHECKS, isServiceRole } from "../types";
 import { acceptedOutput, consumedInputs } from "./artifacts";
 import {
@@ -206,8 +206,9 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
       }
       // A Capture evidence step (ORC-029 pass 5) is run by the service too: the screens, terminal demos and TUIs the
       // task's spec cites, on the newest code change it reads (the commit the checks before it ran on). With nothing to
-      // capture it settles by skipping. Without the project's preview setting it completes in this same transaction,
-      // every item "not set up", and nothing runs. One capture at a time: the recorder runs one container at a time.
+      // capture it settles by skipping. Without the project's preview setting, or an environment to run it in, it
+      // completes in this same transaction, every item "not set up" with what to set, and nothing runs. One capture at
+      // a time: the recorder's browser runs one container at a time.
       if (st.role === "evidence") {
         const target = C.checkTargetOf(s, t, st);
         const items = target ? captureItems(s, t) : [];
@@ -221,6 +222,7 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
         if (deferred) continue;
         if (activeCaptures(s).length) continue;
         const preview = s.project.preview;
+        const notSetUp = notSetUpReason(s);
         const snap: EvidenceSnapshot = { target, items, ...(preview ? { preview: structuredClone(preview) } : {}) };
         const attemptId = nextId(s, "run");
         s.attempts.push({
@@ -231,7 +233,7 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
             provider: "service",
             model: "evidence",
             source: "service",
-            routingReason: preview ? `Run by the service in the recorder's container (preview r${preview.rev})` : "No preview setting: recorded as not set up; nothing runs",
+            routingReason: notSetUp ? "Not set up: recorded as not set up; nothing runs" : `Run by the service in the project's environment (preview r${preview!.rev}, environment r${s.project.environment!.rev})`,
             specRev: spec.rev,
             stepRev: st.revision,
             visionRev: vision.rev,
@@ -250,9 +252,9 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
         st.state = "running";
         if (t.lifecycle === "ready") t.lifecycle = "active";
         touch(t, now);
-        event(s, now, "lead", "dispatch", `Dispatched ${st.id} (evidence) to the service as ${attemptId} on ${target.ref.slice(0, 12)}: ${items.map((i) => i.itemId).join(", ")}${preview ? "" : "; no preview setting, so every item is recorded as not set up"}`, t.id);
-        if (!preview) {
-          const run = notSetUpRun(snap, now);
+        event(s, now, "lead", "dispatch", `Dispatched ${st.id} (evidence) to the service as ${attemptId} on ${target.ref.slice(0, 12)}: ${items.map((i) => i.itemId).join(", ")}${notSetUp ? `; every item is recorded as not set up: ${notSetUp}` : ""}`, t.id);
+        if (notSetUp) {
+          const run = notSetUpRun(snap, now, notSetUp);
           reused.push({ attemptId, outputs: [{ name: st.outputs[0].name, summary: evidenceSummary(run), evidence: run }] });
         }
         continue;

@@ -1,5 +1,5 @@
-// ORC-029 pass 5, evidence of what the factory built: the owner's preview setting (only the owner's command sets it,
-// and it is checked like the check commands), what a capture run captures (the screens, demos and TUIs the task's spec
+// ORC-029 pass 5, evidence of what the factory built: the owner's preview setting (only the owner's command sets it;
+// it runs only in the project's environment, so only its shape is checked), what a capture run captures (the screens, demos and TUIs the task's spec
 // cites), and the record per blueprint item: the newest run's evidence, naming its commit and design version, or why
 // there is none.
 
@@ -10,8 +10,10 @@ import { buildSeed } from "../seed";
 import type { Artifact, SpecContent, State } from "../types";
 import type { BlueprintItem } from "./types";
 import * as E from "./evidence";
+import { IMAGE_TABLE } from "../environment";
 
 const T0 = Date.parse("2026-10-01T12:00:00Z");
+const IMAGE = IMAGE_TABLE[0].image;
 const at = (sec: number) => new Date(T0 + sec * 1000).toISOString();
 const fresh = () => M.initProject(buildSeed(T0, { inFlightRuns: false }), { name: "Trips", repoPath: "/tmp/trips", vision: "Weekend trips for a small group of friends.", focus: "" }, at(0));
 const failure = (fn: () => unknown): Error => {
@@ -35,23 +37,17 @@ describe("the preview setting", () => {
     return r.refused;
   };
 
-  it("takes npm ci --ignore-scripts when no install is given, and runs none for an empty list", () => {
-    expect(ok({ preview: ["npm", "run", "preview", "--", "--port", "4173"], port: 4173 })).toEqual({ install: ["npm", "ci", "--ignore-scripts"], preview: ["npm", "run", "preview", "--", "--port", "4173"], port: 4173 });
-    expect(ok({ install: [], cliEntry: "bin/trips.js" })).toEqual({ install: [], cliEntry: "bin/trips.js" });
+  it("has no install: the project's environment prepares the copy (ORC-030 C3)", () => {
+    expect(ok({ preview: ["npm", "run", "preview", "--", "--port", "4173"], port: 4173 })).toEqual({ preview: ["npm", "run", "preview", "--", "--port", "4173"], port: 4173 });
+    expect(ok({ cliEntry: "bin/trips.js" })).toEqual({ cliEntry: "bin/trips.js" });
+    expect(refused({})).toMatch(/Give the preview command and its port, or the CLI entry/);
   });
 
-  it("gives the network only to a download with every install hook off", () => {
-    expect(refused({ install: ["npm", "ci"] })).toMatch(/--ignore-scripts/);
-    expect(refused({ install: ["npm", "ci", "--ignore-scripts", "--no-ignore-scripts"] })).toMatch(/network/);
-    expect(refused({ install: ["npm", "run", "build"] })).toMatch(/prepare command/);
-    expect(refused({ install: ["bun", "install", "--ignore-scripts"] })).toMatch(/bun installs run offline/);
-    expect(refused({ install: ["node", "setup.js"] })).toMatch(/download by npm, pnpm or yarn/);
-    expect(ok({ install: ["pnpm", "install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile"] }).install[0]).toBe("pnpm");
-  });
-
-  it("checks the preview command like a check command, and wants its port", () => {
-    expect(refused({ preview: ["bash", "-c", "vite preview"], port: 4173 })).toMatch(/not one of the programs/);
-    expect(refused({ preview: ["node", "-e", "require('http')"], port: 4173 })).toMatch(/inline code/);
+  it("takes any program as the preview, for any language, and checks only the command's shape; it wants its port", () => {
+    // It runs only in the project's container with no network, as the environment's prepare commands do.
+    for (const preview of [["python3", "-m", "http.server", "8000"], ["go", "run", "./cmd/web"], ["bundle", "exec", "rails", "server"], ["bash", "-c", "vite preview"]]) expect(ok({ preview, port: 8000 }).preview).toEqual(preview);
+    expect(refused({ preview: ["--port", "4173"], port: 4173 })).toMatch(/^The preview command: the first argument is the program/);
+    expect(refused({ preview: ["npm", "run\npreview"], port: 4173 })).toMatch(/no newline/);
     expect(refused({ preview: ["npm", "run", "preview"] })).toMatch(/go together/);
     expect(refused({ port: 4173 })).toMatch(/go together/);
     expect(refused({ preview: ["npm", "run", "preview"], port: 80 })).toMatch(/1024 to 65535/);
@@ -67,12 +63,12 @@ describe("the preview setting", () => {
     let s = fresh();
     expect(s.project.preview).toBeUndefined();
     s = runCommand(s, "setPreview", { preview: { preview: ["npm", "run", "preview"], port: 4173, cliEntry: "bin/trips.js" } }, at(1)).state;
-    expect(s.project.preview).toEqual({ rev: 1, install: ["npm", "ci", "--ignore-scripts"], preview: ["npm", "run", "preview"], port: 4173, cliEntry: "bin/trips.js" });
-    expect(s.events.at(-1)).toMatchObject({ actor: "user", kind: "config", message: "Preview r1: install `npm ci --ignore-scripts`, preview `npm run preview` on port 4173, CLI entry `bin/trips.js`" });
+    expect(s.project.preview).toEqual({ rev: 1, preview: ["npm", "run", "preview"], port: 4173, cliEntry: "bin/trips.js" });
+    expect(s.events.at(-1)).toMatchObject({ actor: "user", kind: "config", message: "Preview r1: preview `npm run preview` on port 4173, CLI entry `bin/trips.js`" });
     expect(runCommand(s, "setPreview", { preview: { preview: ["npm", "run", "preview"], port: 4173, cliEntry: "bin/trips.js" } }, at(2)).state).toBe(s);
-    s = runCommand(s, "setPreview", { preview: { install: [], preview: ["npm", "run", "preview"], port: 4174 } }, at(3)).state;
-    expect(s.project.preview).toEqual({ rev: 2, install: [], preview: ["npm", "run", "preview"], port: 4174 });
-    expect(failure(() => runCommand(s, "setPreview", { preview: { install: ["npm", "ci"] } }, at(4)))).toBeInstanceOf(ControlError);
+    s = runCommand(s, "setPreview", { preview: { preview: ["npm", "run", "preview"], port: 4174 } }, at(3)).state;
+    expect(s.project.preview).toEqual({ rev: 2, preview: ["npm", "run", "preview"], port: 4174 });
+    expect(failure(() => runCommand(s, "setPreview", { preview: { port: 4174 } }, at(4)))).toBeInstanceOf(ControlError);
     s = runCommand(s, "setPreview", { preview: null }, at(5)).state;
     expect(s.project.preview).toBeUndefined();
     expect(s.events.at(-1)?.message).toMatch(/Preview cleared/);
@@ -128,9 +124,19 @@ describe("what a capture run captures", () => {
   });
 
   it("without a preview setting every item records not set up, and the summary says so", () => {
-    const run = E.notSetUpRun({ target: { artifactId: "art-1", ref: SHA }, items: [item("bi-1"), item("bi-3")] }, at(20));
+    const run = E.notSetUpRun({ target: { artifactId: "art-1", ref: SHA }, items: [item("bi-1"), item("bi-3")] }, at(20), E.notSetUpReason(fresh())!);
     expect(run.items.map((i) => i.status === "none" && i.reason)).toEqual(["not-set-up", "not-set-up"]);
     expect(E.evidenceSummary(run)).toMatch(/^Evidence of aaaaaaaaaaaa: 0 of 2 items captured\.\n- bi-1 Trip board \(screen v2\): no evidence, not set up\. The project has no preview setting/);
+  });
+
+  it("needs the preview setting and an environment: an image or a dev container the owner confirmed", () => {
+    let s = runCommand(fresh(), "setPreview", { preview: { preview: ["npm", "run", "preview"], port: 4173 } }, at(1)).state;
+    expect(E.notSetUpReason(s)).toBe("The project has no environment, so nothing ran: evidence runs only in the project's own container. Set an image, or confirm the repository's dev container, in Settings › How your project runs.");
+    // Prepare commands alone are no environment.
+    s = runCommand(s, "setEnvironment", { environment: { prepare: [["npm", "ci"]] } }, at(2)).state;
+    expect(E.notSetUpReason(s)).toMatch(/no environment/);
+    expect(E.notSetUpReason(runCommand(s, "setEnvironment", { environment: { image: IMAGE, prepare: [["npm", "ci"]] } }, at(3)).state)).toBeUndefined();
+    expect(E.notSetUpReason(runCommand(s, "setEnvironment", { environment: { devcontainer: { file: ".devcontainer/devcontainer.json", sha256: "d".repeat(64) } } }, at(3)).state)).toBeUndefined();
   });
 });
 
@@ -138,10 +144,11 @@ describe("the Capture evidence step of the Feature flow", () => {
   const running = (s: State, id: string) => M.activeAttempts(s, id);
   const step = (s: State, id: string, stepId: string) => s.tasks.find((t) => t.id === id)!.steps.find((x) => x.id === stepId)!;
   /** A Feature task citing `refs`, on a building project with checks off, run through design and implementation at SHA. */
-  function implemented(refs: string[], preview?: E.PreviewInput) {
+  function implemented(refs: string[], preview?: E.PreviewInput, environment?: object) {
     let s = buildSeed(T0, { inFlightRuns: false });
     for (const t of s.tasks) t.hold = true;
     if (preview) s = runCommand(s, "setPreview", { preview }, at(1)).state;
+    if (environment) s = runCommand(s, "setEnvironment", { environment }, at(1)).state;
     const c = taskCiting(withBlueprint(s), refs, 2);
     s = runCommand(c.s, "startHeldTask", { taskId: c.id }, at(3)).state;
     s = M.dispatchEligible(M.leadPromoteProposals(s, at(4)), at(4));
@@ -172,10 +179,21 @@ describe("the Capture evidence step of the Feature flow", () => {
     expect(E.itemEvidence(s, "bi-1")).toMatchObject({ status: "none", reason: "not-set-up", commit: SHA.slice(0, 12), from: { taskId: id } });
   });
 
-  it("with a preview setting, starts one service capture with its snapshot; it is not a check run, and its report becomes the artifact's record", () => {
-    let { s, id } = implemented(["bi-1"], { preview: ["npm", "run", "preview"], port: 4173 });
+  it("with a preview setting but no environment, records every cited item as not set up at once, saying what to set", () => {
+    const { s, id } = implemented(["bi-1", "bi-3"], { preview: ["npm", "run", "preview"], port: 4173, cliEntry: "bin/trips.js" });
+    const art = s.artifacts.find((a) => a.taskId === id && a.stepId === "E1")!;
+    expect(art.evidence?.items.map((i) => i.status === "none" && `${i.reason}: ${i.detail}`)).toEqual([
+      "not-set-up: The project has no environment, so nothing ran: evidence runs only in the project's own container. Set an image, or confirm the repository's dev container, in Settings › How your project runs.",
+      "not-set-up: The project has no environment, so nothing ran: evidence runs only in the project's own container. Set an image, or confirm the repository's dev container, in Settings › How your project runs.",
+    ]);
+    expect(step(s, id, "E1").state).toBe("done");
+    expect(M.activeServiceAttempts(s)).toEqual([]);
+  });
+
+  it("with a preview setting and an environment, starts one service capture with its snapshot; it is not a check run, and its report becomes the artifact's record", () => {
+    let { s, id } = implemented(["bi-1"], { preview: ["npm", "run", "preview"], port: 4173 }, { image: IMAGE });
     const cap = running(s, id).find((a) => a.stepId === "E1")!;
-    expect(cap.snapshot).toMatchObject({ provider: "service", model: "evidence", evidence: { target: { ref: SHA.slice(0, 12) }, items: [item("bi-1")], preview: { rev: 1, install: E.DEFAULT_INSTALL, preview: ["npm", "run", "preview"], port: 4173 } } });
+    expect(cap.snapshot).toMatchObject({ provider: "service", model: "evidence", routingReason: "Run by the service in the project's environment (preview r1, environment r1)", evidence: { target: { ref: SHA.slice(0, 12) }, items: [item("bi-1")], preview: { rev: 1, preview: ["npm", "run", "preview"], port: 4173 } } });
     expect(M.activeServiceAttempts(s)).toEqual([]);
     // The UX review waits for the evidence.
     expect(step(s, id, "S4").state).toBe("pending");

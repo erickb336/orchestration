@@ -3,12 +3,12 @@
 // form shows the same words the service would answer with. Commands are lists of arguments: a field is split at
 // spaces, and quotes keep an argument with spaces whole.
 
-import { DEFAULT_INSTALL, normalizePreview, type PreviewInput } from "../../domain/studio/evidence";
+import { normalizePreview, type PreviewInput } from "../../domain/studio/evidence";
 import type { State } from "../../domain/types";
 import type { SendResult } from "../store";
 
-export type PreviewDraft = { previewInstall: string; previewCommand: string; previewPort: string; previewCli: string };
-export const PREVIEW_KEYS: readonly (keyof PreviewDraft)[] = ["previewInstall", "previewCommand", "previewPort", "previewCli"];
+export type PreviewDraft = { previewCommand: string; previewPort: string; previewCli: string };
+export const PREVIEW_KEYS: readonly (keyof PreviewDraft)[] = ["previewCommand", "previewPort", "previewCli"];
 
 /** An argument list as one line: an argument with a space or a quote is quoted. */
 export const argvLine = (argv: readonly string[]) => argv.map((a) => (a === "" || /[\s"']/.test(a) ? JSON.stringify(a) : a)).join(" ");
@@ -39,23 +39,19 @@ export function splitArgv(line: string): string[] {
   return out;
 }
 
-/** The fields as the project has them; with no setting yet, the install the service would use, and the rest empty. */
+/** The fields as the project has them; empty with no setting yet. */
 export function livePreview(s: State): PreviewDraft {
   const p = s.project.preview;
-  if (!p) return { previewInstall: argvLine(DEFAULT_INSTALL), previewCommand: "", previewPort: "", previewCli: "" };
-  return { previewInstall: argvLine(p.install), previewCommand: p.preview ? argvLine(p.preview) : "", previewPort: p.port === undefined ? "" : String(p.port), previewCli: p.cliEntry ?? "" };
+  return { previewCommand: p?.preview ? argvLine(p.preview) : "", previewPort: p?.port === undefined ? "" : String(p.port), previewCli: p?.cliEntry ?? "" };
 }
 
-/**
- * What the form saves: the setting, or null (no preview command, no port and no CLI entry: nothing to capture, so
- * the setting is cleared). An empty install is no install.
- */
+/** What the form saves: the setting, or null (no preview command, no port and no CLI entry: nothing to capture, so the setting is cleared). */
 export function previewInput(v: PreviewDraft): PreviewInput | null {
   const command = v.previewCommand.trim();
   const port = v.previewPort.trim();
   const cli = v.previewCli.trim();
   if (!command && !port && !cli) return null;
-  return { install: splitArgv(v.previewInstall), ...(command ? { preview: splitArgv(command) } : {}), ...(port ? { port: Number(port) } : {}), ...(cli ? { cliEntry: cli } : {}) };
+  return { ...(command ? { preview: splitArgv(command) } : {}), ...(port ? { port: Number(port) } : {}), ...(cli ? { cliEntry: cli } : {}) };
 }
 
 /** Why the domain refuses the form's setting, in its words; undefined when it takes it. */

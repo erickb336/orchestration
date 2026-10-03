@@ -121,23 +121,24 @@ describe("Settings › Advanced: the intro", () => {
 });
 
 describe("Settings › Project › Preview for evidence", () => {
-  it("not set up: the form says so and offers the install the service would use", () => {
+  it("not set up: the form says so, and has no install (the environment's prepare commands install)", () => {
     const { s } = blueprintScene();
-    expect(livePreview(s)).toEqual({ previewInstall: "npm ci --ignore-scripts", previewCommand: "", previewPort: "", previewCli: "" });
+    expect(livePreview(s)).toEqual({ previewCommand: "", previewPort: "", previewCli: "" });
     const text = visible(renderScreen(<ProjectSection current onDirty={noop} />, s));
     expect(text).toContain(
-      "Preview for evidence The service runs your built product to show each screen and each CLI demo beside its design. It runs in the recorder's container on a copy of the change: the install with the network, then everything else with no network. Not set up Capture runs record \"not set up\", and nothing runs.",
+      "Preview for evidence The service runs your built product to show each screen and each CLI demo beside its design. It runs in your project's environment on a copy of the change, with no network. Not set up Capture runs record \"not set up\", and nothing runs.",
     );
-    for (const label of ["Install command", "Preview command", "Port", "CLI entry"]) expect(text).toContain(label);
+    for (const label of ["Preview command", "Port", "CLI entry"]) expect(text).toContain(label);
+    expect(text).not.toContain("Install command");
   });
 
   it("saves through setPreview: the commands as argument lists, the port and the CLI entry; then shows the setting", async () => {
     const { s } = blueprintScene();
-    const v: PreviewDraft = { previewInstall: "npm ci --ignore-scripts", previewCommand: 'npm run preview -- --port 4173 --host "127.0.0.1"', previewPort: "4173", previewCli: "bin/trips.js" };
+    const v: PreviewDraft = { previewCommand: 'npm run preview -- --port 4173 --host "127.0.0.1"', previewPort: "4173", previewCli: "bin/trips.js" };
     const r = await save(s, (send) => previewSteps(v, new Set(["previewCommand", "previewPort", "previewCli"]), send));
-    expect(r.sent).toEqual([["setPreview", { preview: { install: ["npm", "ci", "--ignore-scripts"], preview: ["npm", "run", "preview", "--", "--port", "4173", "--host", "127.0.0.1"], port: 4173, cliEntry: "bin/trips.js" } }]]);
-    expect(r.state.project.preview).toEqual({ rev: 1, install: ["npm", "ci", "--ignore-scripts"], preview: ["npm", "run", "preview", "--", "--port", "4173", "--host", "127.0.0.1"], port: 4173, cliEntry: "bin/trips.js" });
-    expect(visible(renderScreen(<ProjectSection current onDirty={noop} />, r.state))).toContain("Set up (r1) install `npm ci --ignore-scripts`, preview `npm run preview -- --port 4173 --host 127.0.0.1` on port 4173, CLI entry `bin/trips.js`");
+    expect(r.sent).toEqual([["setPreview", { preview: { preview: ["npm", "run", "preview", "--", "--port", "4173", "--host", "127.0.0.1"], port: 4173, cliEntry: "bin/trips.js" } }]]);
+    expect(r.state.project.preview).toEqual({ rev: 1, preview: ["npm", "run", "preview", "--", "--port", "4173", "--host", "127.0.0.1"], port: 4173, cliEntry: "bin/trips.js" });
+    expect(visible(renderScreen(<ProjectSection current onDirty={noop} />, r.state))).toContain("Set up (r1) preview `npm run preview -- --port 4173 --host 127.0.0.1` on port 4173, CLI entry `bin/trips.js`");
     // Emptying the preview command, the port and the CLI entry clears the setting.
     const off = await save(r.state, (send) => previewSteps({ ...livePreview(r.state), previewCommand: "", previewPort: "", previewCli: "" }, new Set(["previewCommand"]), send));
     expect(off.sent).toEqual([["setPreview", { preview: null }]]);
@@ -151,7 +152,7 @@ describe("Settings › Project › Preview for evidence", () => {
     const cases: [Partial<PreviewDraft>, string][] = [
       [{ previewCommand: "npm run preview", previewPort: "" }, "The preview command and its port go together: give both, or neither for a product with no screens."],
       [{ previewCommand: "npm run preview", previewPort: "80" }, "The port is a whole number from 1024 to 65535."],
-      [{ previewInstall: "npm run build", previewCli: "bin/trips.js" }, 'The install: a prepare command with npm is "npm ci", "npm install", "npm i" or "npm rebuild".'],
+      [{ previewCommand: "--port 4173", previewPort: "4173" }, "The preview command: the first argument is the program, not an option."],
       [{ previewCli: "../outside.js" }, 'The CLI entry "../outside.js" is not a file path inside the repository (letters, digits, ".", "_", "-", " " and "/").'],
     ];
     for (const [over, words] of cases) {

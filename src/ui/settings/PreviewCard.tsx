@@ -16,16 +16,13 @@ export function PreviewCard({ v, set }: { v: PreviewDraft; set: (p: Partial<Prev
     <SettingsCard
       id="preview"
       title="Preview for evidence"
-      help="The service runs your built product to show each screen and each CLI demo beside its design. It runs in the recorder's container on a copy of the change: the install with the network, then everything else with no network."
+      help="The service runs your built product to show each screen and each CLI demo beside its design. It runs in your project's environment on a copy of the change, with no network."
     >
       <div className="s-status">
         <StatePill tone={live ? "done" : "neutral"}>{live ? `Set up (r${live.rev})` : "Not set up"}</StatePill>
         <span className="muted">{live ? previewWords(live) : 'Capture runs record "not set up", and nothing runs.'}</span>
       </div>
       <div className="s-fields s-fields--wide">
-        <Field label="Install command" hint='A download by npm, pnpm or yarn, with install scripts off. The only step with the network. Empty: no install.'>
-          <Input type="text" className="s-mono" value={v.previewInstall} placeholder="npm ci --ignore-scripts" onChange={(e) => set({ previewInstall: e.target.value })} />
-        </Field>
         <Field label="Preview command" hint="What serves the built screens. Empty for a product with no screens.">
           <Input type="text" className="s-mono" value={v.previewCommand} placeholder="npm run preview" onChange={(e) => set({ previewCommand: e.target.value })} />
         </Field>

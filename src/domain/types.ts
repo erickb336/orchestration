@@ -393,8 +393,9 @@ export interface Project {
   /** The checks sandbox as last probed. Observed; written only by the service. */
   checksHealth?: ChecksHealth;
   /**
-   * How the service runs the built product to capture evidence of it (ORC-029 pass 5): the install, the preview and
-   * its port, the CLI's entry. Optional; absent, capture runs record "not set up". Only the owner's `setPreview` writes it.
+   * How the service runs the built product to capture evidence of it (ORC-029 pass 5), in the project's environment:
+   * the preview and its port, the CLI's entry. Optional; absent, or without an environment, capture runs record "not
+   * set up". Only the owner's `setPreview` writes it.
    */
   preview?: PreviewSetting;
   /**
