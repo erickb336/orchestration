@@ -52,6 +52,19 @@ describe("the argument lists", () => {
     expect(values(args, "--cap-drop")).toEqual(["ALL"]);
   });
 
+  it("no tool or language has a variable of its own, and the phases after the prepare keep the image's own values (review finding 13)", () => {
+    const prep = values(phaseArgs({ ...base, phase: { kind: "prepare", privateNet: "orc-env-net-1-abc", proxy: "orc-env-proxy-1-abc" } }), "--env");
+    expect(prep.map((e) => e.slice(0, e.indexOf("=")))).toEqual(["HOME", "TMPDIR", "LANG", "CI", "NO_COLOR", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "XDG_CACHE_HOME"]);
+    // An image that sets its own JVM options and its own proxy keeps them in the run, preview and session phases.
+    const imageEnv = { HTTPS_PROXY: "http://corp-proxy:8080" };
+    for (const phase of [{ kind: "run" }, { kind: "preview", port: 8000 }, { kind: "session" }] as const) {
+      const env = values(phaseArgs({ ...base, cache: undefined, phase, imageEnv }), "--env");
+      expect(env, phase.kind).toContain("HTTPS_PROXY=http://corp-proxy:8080");
+      expect(env, phase.kind).toContain("HTTP_PROXY=");
+      expect(env.join(" "), phase.kind).not.toMatch(/JAVA_TOOL_OPTIONS/);
+    }
+  });
+
   it("preview (unit E2): --network none, detached, PORT set, the run's hardening and its one mount", () => {
     const args = phaseArgs({ ...base, name: "orc-env-preview-1-abc", cache: undefined, argv: ["python3", "serve.py"], phase: { kind: "preview", port: 8000 } });
     expect(args.slice(0, 2)).toEqual(["run", "--detach"]);

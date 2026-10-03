@@ -16,6 +16,7 @@ import { DEFAULT_INSTALL, type CaptureItem, type ItemCapture } from "../../src/d
 import type { CheckRunReport } from "../checks";
 import { removeTree } from "../environment/copy";
 import { EnvironmentChecks } from "../environment/runner";
+import { PreparedEnvironments } from "../environment/prepared";
 import type { AdapterEvent } from "../runtimes/types";
 import { RECORDER_IMAGE, defaultRecorderRoot, dockerEnv, dockerReady, runDocker } from "./container";
 import { captureEvidence } from "./evidence";
@@ -203,7 +204,8 @@ const DEMO: CaptureItem = { itemId: "bi-2", kind: "terminal-demo", title: "Fixtu
 describe(`capturing evidence in the project's environment${skipReason}`, () => {
   const TEST_ID = `evtest-${Math.random().toString(36).slice(2, 8)}`;
   let envRoot = "";
-  let lender: EnvironmentChecks;
+  let lender: PreparedEnvironments;
+  let checks: EnvironmentChecks;
   const row = (label: string) => IMAGE_TABLE.find((r) => r.label === label)!;
   const settingPlan = (label: string, prepare: string[][]): EnvironmentPlan => environmentPlan(environmentSource(undefined, { rev: 1, image: row(label).image, prepare, hosts: [] }).source!, { rev: 1, prepare, hosts: [] });
   const envContainersLeft = () => (ready.ok ? execFileSync(ready.docker, ["ps", "--all", "--filter", `name=orc-env-`, "--format", "{{.Names}}"], { encoding: "utf8" }).trim().split("\n").filter((n) => n.startsWith(`orc-env-preview-${process.pid}-`) || n.startsWith(`orc-env-session-${process.pid}-`)) : []);
@@ -212,7 +214,8 @@ describe(`capturing evidence in the project's environment${skipReason}`, () => {
     if (!ready.ok || envRoot) return;
     // Under the home folder: Colima shares only it with its VM.
     envRoot = mkdtempSync(join(homedir(), ".cache", "orchestrator-env-e2-test-"));
-    lender = new EnvironmentChecks({ root: envRoot, fallback: () => ({ start: () => { throw new Error("handed to the host sandbox"); } }) as never, log: (m) => console.log(m) });
+    lender = new PreparedEnvironments({ root: envRoot, log: (m) => console.log(m) });
+    checks = new EnvironmentChecks({ environments: lender, fallback: () => ({ start: () => { throw new Error("handed to the host sandbox"); } }) as never, log: (m) => console.log(m) });
   });
   afterEach(() => {
     // Nothing a capture made stays behind: its stage folders and its containers are gone.
@@ -292,16 +295,16 @@ describe(`capturing evidence in the project's environment${skipReason}`, () => {
       const project = `${TEST_ID}-reuse`;
       const workspace = change(join(ENV_FIXTURES, "node"));
       const id = "chk-reuse";
-      const checks = await new Promise<AdapterEvent>((res) => {
-        const off = lender.onEvent((e) => {
+      const checked = await new Promise<AdapterEvent>((res) => {
+        const off = checks.onEvent((e) => {
           if (e.attemptId !== id || (e.type !== "completed" && e.type !== "failed" && e.type !== "stopped")) return;
           off();
           res(e);
         });
-        lender.start({ attemptId: id, taskId: "T1", stepId: "C1", workspace, target: SHA, commands: [{ id: "test", label: "npm test", kind: "check", argv: ["npm", "test"], timeoutMs: 600_000 }], runTimeoutMs: 1_500_000, sandbox: "none", prepareNetwork: true, env: {}, tmpDir: join(dir, "chk.tmp"), cacheDir: join(dir, "chk.cache"), logDir: join(dir, "chk.logs"), environment: { plan, project } });
+        checks.start({ attemptId: id, taskId: "T1", stepId: "C1", workspace, target: SHA, commands: [{ id: "test", label: "npm test", kind: "check", argv: ["npm", "test"], timeoutMs: 600_000 }], runTimeoutMs: 1_500_000, sandbox: "none", prepareNetwork: true, env: {}, tmpDir: join(dir, "chk.tmp"), cacheDir: join(dir, "chk.cache"), logDir: join(dir, "chk.logs"), environment: { plan, project } });
       });
-      if (checks.type !== "completed") throw new Error(JSON.stringify(checks).slice(0, 400));
-      const record = (checks.checks as CheckRunReport).environment as { prepare: string; key: string };
+      if (checked.type !== "completed") throw new Error(JSON.stringify(checked).slice(0, 400));
+      const record = (checked.checks as CheckRunReport).environment as { prepare: string; key: string };
       expect(record.prepare).toBe("ran");
 
       const out = join(dir, "evidence");

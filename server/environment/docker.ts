@@ -44,21 +44,12 @@ export const PROXY_LIMITS = { pids: 64, memoryBytes: 128 * 1024 * 1024, cpus: 0.
 export const LABEL = "orchestrator.environment";
 
 /**
- * The variables that send a tool's HTTPS through a proxy (data: the conventional names, and the JVM's options).
- * Tools that ignore them reach nothing: the private network has no other way out.
+ * The variables that send a tool's HTTPS through a proxy: the conventional names, which most package managers read.
+ * A tool that ignores them reaches nothing, because the private network has no other way out; the proxy's refusals
+ * show in the prepare's log. No tool or language has a variable of its own here.
  */
-export const proxyEnv = (proxy: string): Record<string, string> => {
-  const url = `http://${proxy}:${PROXY_PORT}`;
-  return {
-    HTTPS_PROXY: url,
-    https_proxy: url,
-    HTTP_PROXY: url,
-    http_proxy: url,
-    NO_PROXY: "",
-    no_proxy: "",
-    JAVA_TOOL_OPTIONS: `-Dhttps.proxyHost=${proxy} -Dhttps.proxyPort=${PROXY_PORT} -Dhttp.proxyHost=${proxy} -Dhttp.proxyPort=${PROXY_PORT}`,
-  };
-};
+export const PROXY_VARIABLES: readonly string[] = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"];
+export const proxyEnv = (proxy: string): Record<string, string> => Object.fromEntries(PROXY_VARIABLES.map((k) => [k, /^no_proxy$/i.test(k) ? "" : `http://${proxy}:${PROXY_PORT}`]));
 
 const NAME = /^[a-z0-9][a-z0-9_.-]{0,62}$/;
 /** A host path a `--mount` can name: absolute, with no comma (the option's separator), quote or control character. */
@@ -145,6 +136,11 @@ export interface PhaseSpec {
    * detached, serving on `port` (unit E2). session: no network, made with a terminal for the service to attach to.
    */
   phase: { kind: "prepare"; privateNet: string; proxy: string } | { kind: "run" } | { kind: "preview"; port: number } | { kind: "session" };
+  /**
+   * The base image's own values of the proxy variables. The prepared image keeps what its prepare container had, so
+   * the phases after the prepare set each proxy variable back: to the image's own value, or empty when it had none.
+   */
+  imageEnv?: Record<string, string>;
 }
 
 /** A session's terminal: VHS's terminal type and prompt, and CI and NO_COLOR emptied (the prepared image keeps its prepare's). */
@@ -166,8 +162,8 @@ export function phaseArgs(s: PhaseSpec): string[] {
     CI: "1",
     NO_COLOR: "1",
     // prepare: through the proxy, with a download cache shared by the project's prepares. The others: the proxy
-    // variables are emptied, because the prepared image keeps the variables its prepare container had.
-    ...(s.phase.kind === "prepare" ? { ...proxyEnv(s.phase.proxy), XDG_CACHE_HOME: `${CACHE}/xdg` } : { ...Object.fromEntries(Object.keys(proxyEnv("x")).map((k) => [k, ""])), XDG_CACHE_HOME: `${HOME}/.cache` }),
+    // variables go back to the base image's own values, because the prepared image keeps its prepare container's.
+    ...(s.phase.kind === "prepare" ? { ...proxyEnv(s.phase.proxy), XDG_CACHE_HOME: `${CACHE}/xdg` } : { ...Object.fromEntries(PROXY_VARIABLES.map((k) => [k, s.imageEnv?.[k] ?? ""])), XDG_CACHE_HOME: `${HOME}/.cache` }),
     ...(s.phase.kind === "preview" ? { PORT: String(s.phase.port), BROWSER: "none" } : {}),
     ...(s.phase.kind === "session" ? SESSION_ENV : {}),
   };

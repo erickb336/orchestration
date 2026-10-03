@@ -16,6 +16,7 @@ import { dockerEnv, findDocker, runDocker } from "../studio/container";
 import { removeTree } from "./copy";
 import { PROXY_IMAGE } from "./docker";
 import { EnvironmentChecks } from "./runner";
+import { PreparedEnvironments } from "./prepared";
 
 const FIXTURES = new URL("./fixtures/", import.meta.url).pathname;
 const docker = findDocker(process.env);
@@ -31,6 +32,7 @@ const TEST_ID = `envtest-${Math.random().toString(36).slice(2, 8)}`;
 let root = "";
 let scratch = "";
 let runner: EnvironmentChecks;
+let environments: PreparedEnvironments;
 const timings: string[] = [];
 
 beforeAll(() => {
@@ -38,7 +40,8 @@ beforeAll(() => {
   // Under the home folder: Colima shares only it with its VM.
   root = mkdtempSync(join(homedir(), ".cache", "orchestrator-env-test-"));
   scratch = mkdtempSync(join(tmpdir(), "orc-env-real-"));
-  runner = new EnvironmentChecks({ root, fallback: () => ({ start: () => { throw new Error("handed to the host sandbox"); } }) as never, log: (m) => console.log(m) });
+  environments = new PreparedEnvironments({ root, log: (m) => console.log(m) });
+  runner = new EnvironmentChecks({ environments, fallback: () => ({ start: () => { throw new Error("handed to the host sandbox"); } }) as never, log: (m) => console.log(m) });
 });
 afterAll(async () => {
   if (ready) {
@@ -90,7 +93,7 @@ const read = (t: TestReport | undefined) => (t?.status === "read" ? t.counts : t
 describe(`the project environment, in Docker${skipReason}`, () => {
   it.skipIf(!ready)("proves its network on this machine before the first run", async () => {
     const t0 = Date.now();
-    const r = await runner.ready();
+    const r = await environments.ready();
     timings.push(`setup probe: ${((Date.now() - t0) / 1000).toFixed(1)} s`);
     expect(r).toMatchObject({ ok: true });
   }, 120_000);

@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { CaptureItem } from "../../src/domain/studio/evidence";
 import type { EnvironmentAssignment } from "../checks";
-import type { PreparedOutcome } from "../environment/runner";
+import type { PreparedOutcome } from "../environment/prepared";
 import { RECORDER_IMAGE, containerArgs, dockerSocket } from "./container";
 import { CAPTURE_PLAN, CAPTURE_SCRIPT, MAX_PLANNED_SCREENS, captureArgs, captureEvidence, checkCapturePlan, collectCapture, installArgs, parseCaptureOutput, readCapturePlan, readPlainFile, type CaptureJob, type EnvironmentLender } from "./evidence";
 
@@ -268,8 +268,8 @@ describe("which path a capture takes (unit E2)", () => {
       async withPrepared(o, use) {
         calls.push({ workspace: o.workspace, sha: o.sha, environment: o.environment, files: readdirSync(o.workspace, { recursive: true }).map(String).sort() });
         if (answer) return answer as never;
-        const value = await use({ docker: "/nonexistent/docker", denv: { DOCKER_HOST: "tcp://127.0.0.1:2375" }, work: o.workspace, image: RECORD.imageId, record: RECORD, track: () => {}, untrack: () => {} });
-        return { ok: true, value, record: RECORD };
+        const value = await use({ docker: "/nonexistent/docker", denv: { DOCKER_HOST: "tcp://127.0.0.1:2375" }, work: o.workspace, image: RECORD.imageId, imageEnv: {}, record: RECORD, run: () => Promise.reject(new Error("the capture runs no check")), track: () => {}, untrack: () => {} });
+        return { ok: true, value, record: RECORD, prepare: [] };
       },
     };
     return { l, calls };
@@ -277,7 +277,7 @@ describe("which path a capture takes (unit E2)", () => {
   const job = (o: Partial<CaptureJob>): CaptureJob => ({ source: o.source ?? change(), sha: "f".repeat(40), items: [SCREEN, CLI], preview: { rev: 3, install: ["npm", "ci", "--ignore-scripts"], preview: ["python3", "serve.py"], port: 8000 }, outDir: join(dir, "out"), root: join(dir, "root"), docker: "/nonexistent/docker", env: { PATH: "/nonexistent" }, ...o });
 
   it("with an environment: prepared there from a copy of the change, and the recorder's install never runs", async () => {
-    const { l, calls } = lender({ ok: false, reason: "prepare-failed", detail: "The prepare failed (Prepare: python3 -m pip install: failed, exit 1).", log: "ERROR: No matching distribution", record: { ...RECORD, prepare: "failed" } });
+    const { l, calls } = lender({ ok: false, reason: "prepare-failed", detail: "The prepare failed (Prepare: python3 -m pip install: failed, exit 1).", log: "ERROR: No matching distribution", record: { ...RECORD, prepare: "failed" }, prepare: [] });
     const r = await captureEvidence(job({ environment: ENV, lender: l }));
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ sha: "f".repeat(40), environment: ENV });
@@ -303,7 +303,7 @@ describe("which path a capture takes (unit E2)", () => {
   });
 
   it("with an environment that cannot run: every item says why, and the recorder is not tried instead", async () => {
-    const { l } = lender({ ok: false, reason: "unavailable", detail: "Docker is not running" });
+    const { l } = lender({ ok: false, reason: "unavailable", detail: "Docker is not running", prepare: [] });
     const r = await captureEvidence(job({ environment: ENV, lender: l }));
     expect(r.path).toEqual({ via: "environment", from: "setting", image: RECORD.image });
     expect(r.items.map((i) => (i.status === "none" ? [i.reason, i.detail] : i.status))).toEqual([
@@ -314,7 +314,7 @@ describe("which path a capture takes (unit E2)", () => {
 
   it("a tape a session cannot type is refused for its item only, in the environment; the recorder's VHS still takes it", async () => {
     const tape = `${TAPE}Ctrl+Shift+Left\n`;
-    const env = await captureEvidence(job({ source: change(tape), environment: ENV, lender: lender({ ok: false, reason: "unavailable", detail: "x" }).l }));
+    const env = await captureEvidence(job({ source: change(tape), environment: ENV, lender: lender({ ok: false, reason: "unavailable", detail: "x", prepare: [] }).l }));
     expect(env.items.map((i) => (i.status === "none" ? [i.itemId, i.reason] : i.status))).toEqual([
       ["bi-1", "unavailable"],
       ["bi-3", "invalid-plan"],

@@ -3,7 +3,7 @@
 // commit, by one of two paths (the record names which):
 //
 //   environment  a project with an environment (docs/design/project-environment.md, unit E2). The copy is prepared as
-//                its checks prepare it (the environment runner's withPrepared, reusing the prepared image by its key).
+//                its checks prepare it (server/environment/prepared.ts, reusing the prepared image by its key).
 //                The preview runs in the project's image with no network; the recorder's Chromium joins that
 //                container's network (one loopback, nothing else) and takes the screenshots. Each CLI tape is typed
 //                into a pseudo-terminal in the project's image, with no network, and the service records it as an
@@ -27,7 +27,7 @@ import { isInsidePath, versionsOf } from "../../src/domain/studio/studio";
 import type { Artifact, State } from "../../src/domain/types";
 import { NO_SCRIPTS_ENV, type EnvironmentAssignment } from "../checks";
 import { envName, phaseArgs } from "../environment/docker";
-import { EnvironmentChecks, type PreparedCopy, type PreparedOutcome } from "../environment/runner";
+import { sharedEnvironments, type PreparedCopy, type PreparedEnvironments } from "../environment/prepared";
 import { OUT, RECORDER_IMAGE, WORK, attachTty, containerArgs, containerName, defaultRecorderRoot, dockerEnv, dockerSocket, makeStage, probeRecorder, removeStage, resizeTty, runDocker, startRecording, type RunningContainer } from "./container";
 import type { AdapterEvent } from "../runtimes/types";
 import { MAGIC, projectStudioDir, versionDir as serveVersionDir } from "./serve";
@@ -667,27 +667,14 @@ export interface CaptureJob {
   signal?: AbortSignal;
   /** The project's environment, when it has one: the capture then runs there (unit E2), never in the recorder's install. */
   environment?: EnvironmentAssignment;
-  /** What prepares the environment (default: an environment runner of this process); a stand-in in tests. */
+  /** What prepares the environment (default: this process's environments, shared with the checks); a stand-in in tests. */
   lender?: EnvironmentLender;
   /** Names this capture's folder in the environment's root. */
   attemptId?: string;
 }
 
-/** What the capture needs of the project's environment: its prepare, lent as the checks run it (EnvironmentChecks). */
-export interface EnvironmentLender {
-  withPrepared<T>(o: { attemptId: string; workspace: string; sha: string; environment: EnvironmentAssignment; logDir: string; signal?: AbortSignal; note?: (msg: string) => void }, use: (p: PreparedCopy) => Promise<T>): Promise<PreparedOutcome<T>>;
-}
-
-let sharedLender: EnvironmentLender | undefined;
-/** This process's lender: an environment runner that only lends (it never runs checks), so it shares the environment's turn and prepared images. */
-function defaultLender(log: (msg: string) => void): EnvironmentLender {
-  return (sharedLender ??= new EnvironmentChecks({
-    log,
-    fallback: () => {
-      throw new Error("the capture of evidence never hands a run to the host sandbox");
-    },
-  }));
-}
+/** What the capture needs of the project's environment: a copy of the change, prepared as the checks prepare it. */
+export type EnvironmentLender = Pick<PreparedEnvironments, "withPrepared">;
 
 const sha256 = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 const TEXT_TYPES = new Set(["txt"]);
@@ -763,7 +750,7 @@ async function captureInEnvironment(c: EnvironmentCapture): Promise<void> {
     else sessions.push(t as PlannedTerminal & { session: TapeSession });
   }
   if (!c.screens.length && !sessions.length) return;
-  const lender = job.lender ?? defaultLender(c.log);
+  const lender = job.lender ?? sharedEnvironments(c.log);
   const out = await lender.withPrepared(
     { attemptId: job.attemptId ?? `ev-${randomBytes(6).toString("hex")}`, workspace: c.stage.work, sha: job.sha, environment: job.environment!, logDir: join(c.stage.dir, "logs"), ...(job.signal ? { signal: job.signal } : {}), note: (m) => c.log(`evidence: ${m}`) },
     async (p) => {
@@ -797,7 +784,7 @@ async function screensInEnvironment(c: EnvironmentCapture, p: PreparedCopy): Pro
   const app = envName("preview");
   p.track(app);
   try {
-    const started = await runDocker(p.docker, phaseArgs({ name: app, image: p.image, work: p.work, argv: job.preview.preview!, phase: { kind: "preview", port } }), { env: p.denv, timeoutMs: 60_000 });
+    const started = await runDocker(p.docker, phaseArgs({ name: app, image: p.image, work: p.work, argv: job.preview.preview!, phase: { kind: "preview", port }, imageEnv: p.imageEnv }), { env: p.denv, timeoutMs: 60_000 });
     if (started.code !== 0) return c.none(items, "preview-did-not-start", `The preview's container did not start: ${lastLine(started.stderr) || `exit ${started.code ?? "?"}`}`, started.stderr);
     const empty = join(stage.dir, "browser");
     mkdirSync(empty, { mode: 0o700 });
@@ -870,7 +857,7 @@ async function sessionInEnvironment(c: EnvironmentCapture, p: PreparedCopy, t: P
   p.track(name);
   let stream: Awaited<ReturnType<typeof attachTty>> | undefined;
   try {
-    const made = await runDocker(p.docker, phaseArgs({ name, image: p.image, work: p.work, argv: ["bash", "--noprofile", "--norc", "-i"], phase: { kind: "session" } }), { env: p.denv, timeoutMs: 60_000 });
+    const made = await runDocker(p.docker, phaseArgs({ name, image: p.image, work: p.work, argv: ["bash", "--noprofile", "--norc", "-i"], phase: { kind: "session" }, imageEnv: p.imageEnv }), { env: p.denv, timeoutMs: 60_000 });
     if (made.code !== 0) return c.none(item, "capture-failed", `The session's container was not made: ${lastLine(made.stderr) || `exit ${made.code ?? "?"}`}`, made.stderr);
     stream = await attachTty(socket, name);
     stream.on("error", () => {});

@@ -7,7 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CheckRunners, DirectChecks, type CheckAssignment, type CheckRunner } from "../checks";
 import type { AdapterEvent } from "../runtimes/types";
-import { EnvironmentChecks, judgeEnvProbe } from "./runner";
+import { EnvironmentChecks } from "./runner";
+import { PreparedEnvironments, judgeEnvProbe } from "./prepared";
 import { removeTree } from "./copy";
 
 const plan = { source: { from: "setting" as const, image: "python:3.13@sha256:" + "a".repeat(64) }, prepare: [["make"]], hosts: ["pypi.org"] };
@@ -31,7 +32,7 @@ describe("without Docker", () => {
   it("hands the run to the host sandbox, with the reason, and says so", async () => {
     const dir = mkdtempSync(join(tmpdir(), "orc-env-unit-"));
     const host = stub();
-    const env = new EnvironmentChecks({ docker: "/nonexistent/docker", root: dir, fallback: () => host });
+    const env = new EnvironmentChecks({ environments: new PreparedEnvironments({ docker: "/nonexistent/docker", root: dir }), fallback: () => host });
     const events: AdapterEvent[] = [];
     env.onEvent((e) => events.push(e));
     const a = assignment(dir);
