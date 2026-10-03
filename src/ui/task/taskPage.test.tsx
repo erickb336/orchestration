@@ -236,6 +236,9 @@ describe("the task page's words (ORC-030 pass C2)", () => {
     expect(html).not.toContain(">Pause<");
     expect(t).toContain("Approach: Count the days from the dates. Your spec.");
     expect(t).not.toContain("as the lead recommended");
+    // Its own approach is "your spec" under Needs you too: the lead recommended nothing.
+    expect(t).toContain("A: As described your spec selected");
+    expect(t).not.toContain("recommended by the lead");
     // A started task can be paused (WT-007 runs its review); a ready one that has not started cannot.
     expect(page(s, "WT-007")).toContain(">Pause<");
     expect(task(s, "WT-003").lifecycle).not.toBe("active");
