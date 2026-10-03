@@ -166,13 +166,20 @@ export class Housekeeping {
     return { running: !!this.running, everyHours: SWEEP_EVERY_MS / 3_600_000, ownerApps: this.o.ownerAppsAllowed, ...(this.last ? { last: this.last } : {}) };
   }
 
-  /** One sweep. A sweep asked for while one runs gets that one's report: two never run at once. */
+  /** One sweep. A sweep asked for while one runs gets that one's report: two never run at once. Never rejects. */
   sweep(trigger: SweepReport["trigger"]): Promise<SweepReport> {
     if (this.running) return this.running;
-    const run = this.run(trigger).finally(() => {
-      this.running = undefined;
-      this.o.changed?.();
-    });
+    const run = this.run(trigger)
+      .catch((e: unknown) => {
+        const r: SweepReport = { at: new Date(this.now()).toISOString(), trigger, ownerApps: false, archived: 0, trashed: 0, containers: 0, stages: 0, held: 0, recent: 0, notes: [`The sweep stopped: ${e instanceof Error ? e.message : String(e)}`] };
+        this.last = r;
+        this.o.log?.(`Housekeeping: ${r.notes[0]}`);
+        return r;
+      })
+      .finally(() => {
+        this.running = undefined;
+        this.o.changed?.();
+      });
     this.running = run;
     this.o.changed?.();
     return run;

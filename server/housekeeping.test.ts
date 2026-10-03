@@ -8,9 +8,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { SweepReport } from "../src/api";
+import type { AddressInfo } from "node:net";
+import { CLIENT_HEADER, type StatePayload, type SweepReport } from "../src/api";
 import { Housekeeping, MIN_AGE_MS, claudeProjectName, dockerTime, orphanContainer, sweepMessage, transcriptCwd, type DockerOps, type HousekeepingOptions } from "./housekeeping";
+import { createHttpServer } from "./http";
 import type { ArchiveOutcome } from "./runtimes/codex";
+import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
+import { Scheduler } from "./scheduler";
 import { Store } from "./store";
 import { STAGE_SWEEP_AGE_MS } from "./studio/container";
 
@@ -227,6 +231,20 @@ describe("a sweep", () => {
     expect(await hk.find()).toMatchObject({ codexThreads: [], claudeFolders: [] });
   });
 
+  it("never rejects: a sweep that stops says why, and the next one runs", async () => {
+    let fail = true;
+    const { hk } = keeper({
+      ownerApps: () => {
+        if (fail) throw new Error("the database is closed");
+        return true;
+      },
+    });
+    expect(await hk.sweep("timer")).toMatchObject({ notes: ["The sweep stopped: the database is closed"], archived: 0 });
+    expect(hk.status()).toMatchObject({ running: false, last: { notes: ["The sweep stopped: the database is closed"] } });
+    fail = false;
+    expect((await hk.sweep("timer")).notes).toEqual([]);
+  });
+
   it("never runs two at once: a second request gets the running sweep", async () => {
     codexThread(1, "orchestration");
     let release!: () => void;
@@ -314,6 +332,39 @@ describe("the recorder's containers", () => {
   it("reads Docker's creation time", () => {
     expect(dockerTime("2026-10-02 19:48:03 -0700 PDT")).toBe(Date.parse("2026-10-03T02:48:03Z"));
     expect(dockerTime("about an hour ago")).toBeNaN();
+  });
+});
+
+describe("the service", () => {
+  it("shows the last sweep in its payload and sweeps on POST /api/maintenance/housekeeping", async () => {
+    codexThread(1, "orchestration");
+    const store = new Store(join(home, "db.sqlite"));
+    const config = defaultFakeConfig();
+    const scheduler = new Scheduler(store, { claude: new FakeAdapter("claude", config), codex: new FakeAdapter("codex", config) });
+    const { hk } = keeper({ ownerApps: () => store.read().state.project.housekeepOwnerApps, changed: () => store.emit() });
+    // A free port first: the service accepts only its own address as the Host.
+    const probe = createHttpServer({ store, scheduler, startedAt: "", allowedHosts: [] });
+    await new Promise<void>((r) => probe.listen(0, "127.0.0.1", r));
+    const port = (probe.address() as AddressInfo).port;
+    await new Promise((r) => probe.close(r));
+    const server = createHttpServer({ store, scheduler, fakeConfig: config, startedAt: new Date().toISOString(), allowedHosts: [`127.0.0.1:${port}`], housekeeping: hk });
+    await new Promise<void>((r) => server.listen(port, "127.0.0.1", r));
+    const call = (path: string, init?: RequestInit) => fetch(`http://127.0.0.1:${port}${path}`, init);
+    try {
+      const before = (await (await call("/api/state")).json()) as StatePayload;
+      expect(before.service.housekeeping).toEqual({ running: false, everyHours: 6, ownerApps: true });
+      const r = await call("/api/maintenance/housekeeping", { method: "POST", headers: { "Content-Type": "application/json", [CLIENT_HEADER]: "1" }, body: "{}" });
+      expect(r.status).toBe(200);
+      expect(((await r.json()) as { report: SweepReport }).report).toMatchObject({ trigger: "owner", archived: 1 });
+      const after = (await (await call("/api/state")).json()) as StatePayload;
+      expect(after.service.housekeeping).toMatchObject({ running: false, last: { trigger: "owner", archived: 1 } });
+      // Without the client header, nothing is swept.
+      expect((await call("/api/maintenance/housekeeping", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).status).toBe(403);
+    } finally {
+      server.closeAllConnections();
+      server.close();
+      store.close();
+    }
   });
 });
 
