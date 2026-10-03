@@ -33,7 +33,32 @@ Rejected:
 
 ## Units
 
-1. **E1, the environment and the prepare phase:** the environment's source, the image table, the egress proxy (a mature, maintained, open-source proxy, pinned; or a small allowlist proxy in the service if none fits: decide and justify), the two phases, and the checks in the project's container when Docker is present. Real tests with a Node, a Python and a Go fixture, and a hostile fixture whose install code tries to reach a host that is not a registry and the Mac.
+1. **E1, the environment and the prepare phase (built, 2026-10-02):** the environment's source, the image table, the egress proxy, the two phases, and the checks in the project's container when Docker is present. Real tests with a Node, a Python and a Go fixture, and a hostile fixture whose install code tries to reach a host that is not a registry and the Mac. The decisions it made are below.
 2. **E2, evidence in the project's environment:** screens over the private network, and CLIs recorded as asciicasts, for the same three fixtures.
+
+## E1 decisions
+
+**The egress proxy: a small allowlist proxy, in the official Node image.** Compared:
+
+| Option | Licence | Allowlist by name, CONNECT only | Refuses IP literals | Refuses a listed name that resolves to a private address | Fit |
+| --- | --- | --- | --- | --- | --- |
+| Squid (`ubuntu/squid`, pinned) | GPL-2.0 | Yes (`dstdomain`, `CONNECT`, `SSL_ports`) | Yes (`dstdomain -n`) | Yes, with a `dst` deny list | Mature, but runs as `proxy`, wants writable cache and log folders, and comes with a long default configuration to cut down. Not a permissive licence. |
+| tinyproxy | GPL-2.0 | Yes (filter, default deny, `ConnectPort 443`) | Only by the filter's pattern | No | No official image: it would be built from distribution packages, with the network, at build time. |
+| Envoy (pinned) | Apache-2.0 | Yes (CONNECT routes, dynamic forward proxy) | Yes, by route | Not without more filters | Mature and permissive, but about 100 lines of configuration for one rule, and a large image. |
+| **A small Node script (`server/environment/egress-proxy.mjs`)** | MIT (this project) | Yes, exact names, port 443 | Yes, before any lookup | Yes: it resolves the name, refuses a private or local address, and connects to the address it checked | About 150 lines, standard library only. The same file runs in the tests on this computer and, as an argument, in the official Node image that the recorder's Dockerfile already pins: no image to build. |
+
+The Node script is chosen: it is the only option that refuses a listed name resolving to this computer without extra parts, it is tested on the host with a canary, and it adds no image. Its risk is that it is code of our own; it does no TLS and no HTTP parsing beyond one request line.
+
+**Two networks per prepare.** The private network is `--internal` with the isolated gateway mode, so a container on it has no route out and cannot reach the Docker VM's address on it (measured: without the isolated mode, the VM's SSH port answered). The proxy joins it and a plain bridge network of its own. Container DNS on the private network does not resolve outside names (measured: `EAI_AGAIN`), so names are resolved only by the proxy.
+
+**The prepared image.** Toolchains write outside the copy (the Go image's `GOPATH` is `/go`; pip's `--user` installs go to `HOME`). So the prepare containers are not removed when they end: each is committed, and the run phase runs on the last image. Without this, the run phase would lose what the prepare installed, or each language would need its own folder list. `HOME` is `/var/tmp/home`, inside the image, so it is kept the same way. The image's root is therefore writable inside the containers (no `--read-only`); those writes never reach this computer.
+
+**Reuse: once per prepare key.** The key is a hash of the image's id, the prepare commands, the allowed hosts and the content of the prepare inputs (a data list of manifests and lockfiles, at any depth). A later commit with the same key reuses the prepared image and the entries the prepare added to the copy (found by comparing the copy before and after, so `node_modules`, `.venv` or `vendor/bundle` need no names). The newest three keys per project are kept.
+
+**What the checks' own prepare commands become.** In the environment, the prepare phase runs the environment's prepare commands; the checks' "prepare" commands (the host sandbox's npm installs) are not run there. They stay for the host sandbox. A Final checks step therefore does not reuse an environment run of the same commit by its command ids; it runs again, and the prepare is reused by its key.
+
+**Where the dev container is read.** At the trusted base, as the project conventions and the check suggestions are, so a change cannot choose the image its own checks run in. A `build.dockerfile`'s text comes from the trusted base too; the build context is the checked copy, and `RUN` steps have no network.
+
+**Not done in E1:** a sweep of what a crashed service leaves (labelled networks, containers and `runs/` folders under `~/.cache/orchestrator/environment`); the held state of checks still follows the host sandbox's probe; Rust, Ruby and Java rows of the table are proposed but not run.
 
 Both replace what they supersede: the Node-only evidence path and the npm-only network rule, when Docker is present.
