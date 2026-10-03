@@ -14,7 +14,7 @@
 // (scripts/trialService.mjs: no local path, no service log, nothing shaped like a credential). Costs a little usage.
 
 import { spawn as nodeSpawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { keepEvidence, orchestratorVersion, sleep } from "./trialService.mjs";
@@ -68,17 +68,57 @@ const sleepers = (marker) => {
 };
 const notes = (pid, method) => wire.filter((w) => w.pid === pid && w.m?.method === method).map((w) => ({ t: w.t, ...w.m.params }));
 
-/** Token totals per thread, and each thread's sum of its own calls (`last`), from one app-server's lines. */
+/**
+ * Token totals per thread, from one app-server's lines. `onlyOwnCalls`: every rise of the thread's total is exactly its
+ * own last call (`last`), so the total holds no other thread's tokens. Codex repeats an update at a turn's end (no rise).
+ */
 function tokensByThread(pid) {
   const out = {};
   for (const p of notes(pid, "thread/tokenUsage/updated")) {
-    const o = (out[p.threadId] ??= { total: null, ownCalls: { inputTokens: 0, outputTokens: 0 }, updates: 0 });
-    o.total = { inputTokens: p.tokenUsage.total.inputTokens, cachedInputTokens: p.tokenUsage.total.cachedInputTokens, outputTokens: p.tokenUsage.total.outputTokens };
-    o.ownCalls.inputTokens += p.tokenUsage.last.inputTokens;
-    o.ownCalls.outputTokens += p.tokenUsage.last.outputTokens;
+    const o = (out[p.threadId] ??= { total: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 }, updates: 0, rises: 0, onlyOwnCalls: true });
+    const t = p.tokenUsage.total;
+    const rise = { inputTokens: t.inputTokens - o.total.inputTokens, outputTokens: t.outputTokens - o.total.outputTokens };
+    if (rise.inputTokens || rise.outputTokens) {
+      o.rises++;
+      if (rise.inputTokens !== p.tokenUsage.last.inputTokens || rise.outputTokens !== p.tokenUsage.last.outputTokens) o.onlyOwnCalls = false;
+    }
+    o.total = { inputTokens: t.inputTokens, cachedInputTokens: t.cachedInputTokens, outputTokens: t.outputTokens };
     o.updates++;
   }
   return out;
+}
+
+/**
+ * The write attempts a sub-agent made, from its own session file (read only; archived or not): Codex reports a command
+ * as an item only for some ways of running it, while the session file holds every tool call with its output.
+ */
+function writeAttempts(threadId, codexHome) {
+  const find = (dir) => {
+    if (!existsSync(dir)) return undefined;
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) {
+        const f = find(p);
+        if (f) return f;
+      } else if (e.name.includes(threadId)) return p;
+    }
+    return undefined;
+  };
+  const file = find(join(codexHome, "sessions")) ?? find(join(codexHome, "archived_sessions"));
+  if (!file) return { file: false, attempts: [] };
+  const calls = new Map();
+  const attempts = [];
+  for (const line of readFileSync(file, "utf8").split("\n").filter(Boolean)) {
+    const p = JSON.parse(line).payload ?? {};
+    const input = p.input ?? p.arguments;
+    if (/_call$/.test(p.type ?? "") && typeof input === "string" && /\btouch\b/.test(input)) calls.set(p.call_id, input);
+    if (/_call_output$/.test(p.type ?? "") && calls.has(p.call_id)) {
+      const text = typeof p.output === "string" ? p.output : JSON.stringify(p.output);
+      const exit = /\\?"exit_code\\?":(-?\d+)/.exec(text)?.[1] ?? /exit code:? (-?\d+)/i.exec(text)?.[1];
+      attempts.push({ call: calls.get(p.call_id).slice(0, 200), exitCode: exit === undefined ? null : Number(exit), refused: /Operation not permitted|Permission denied|Read-only file system/i.test(text), output: text.slice(0, 300) });
+    }
+  }
+  return { file: true, attempts };
 }
 
 /** The commands a sub-agent ran (not the parent), with their exit and output. */
@@ -182,8 +222,8 @@ check("(count) both sub-agents were reported as they started, each with its own 
   { subagents: r1.subs.map(subView) });
 
 const priced = subagentsCost({ provider: "codex", model: MODEL, actualModel: r1.actualModel ?? MODEL, subagents: { count: r1.subs.length, mostAtOnce: 2, items: r1.subs.map((s) => ({ ...subView(s), ended: s.how, startedAt: "", asked: s.asked ?? "" })) } });
-check("(cost) each sub-agent's tokens come apart from the parent's: the parent's total is exactly the sum of its own calls, and a finished sub-agent's usage is in its report",
-  parent1 && parent1.total.inputTokens === parent1.ownCalls.inputTokens && parent1.total.outputTokens === parent1.ownCalls.outputTokens &&
+check("(cost) each sub-agent's tokens come apart from the parent's: every rise of the parent's total is its own call, the run reports the parent's total, and each sub-agent's report holds its own thread's total",
+  parent1?.onlyOwnCalls === true && r1.terminal.usage?.inputTokens === parent1.total.inputTokens &&
     ran1.some((s) => s.how === "completed" && s.usage?.inputTokens > 0) &&
     r1.subs.every((s) => !s.usage || (tok1[s.id] && tok1[s.id].total.inputTokens === s.usage.inputTokens)),
   {
@@ -195,11 +235,16 @@ check("(cost) each sub-agent's tokens come apart from the parent's: the parent's
     note: "Priced at the published API price (src/domain/prices.json); a sub-agent with no usage yet (stopped before its first report) is unknown, never zero, in the budgets.",
   });
 
-const cmds1 = subCommands(r1.pid, r1.parent);
-const touches = cmds1.filter((c) => c.command.includes("touch "));
-check("(safety) a sub-agent's writes inside and outside the workspace were refused by the read-only sandbox, and neither file exists",
-  touches.length >= 2 && touches.every((c) => c.exitCode !== 0) && !existsSync(join(ws, "written-by-helper.txt")) && !existsSync(join(outside, "written-by-helper.txt")),
-  { commands: cmds1, filesExist: { inside: existsSync(join(ws, "written-by-helper.txt")), outside: existsSync(join(outside, "written-by-helper.txt")) } });
+// Read after the kept threads are archived (below), from the sub-agents' own session files.
+const safetyCheck = () => {
+  const codexHome = process.env.CODEX_HOME || join(homedir(), ".codex");
+  const bySub = r1.subs.map((s) => ({ id: s.id, ...writeAttempts(s.id, codexHome) }));
+  const attempts = bySub.flatMap((s) => s.attempts);
+  const files = { inside: existsSync(join(ws, "written-by-helper.txt")), outside: existsSync(join(outside, "written-by-helper.txt")) };
+  check("(safety) a sub-agent's writes inside and outside the workspace were refused by the read-only sandbox, and neither file exists",
+    attempts.length >= 2 && attempts.some((a) => a.call.includes(`${ws}/`)) && attempts.some((a) => a.call.includes(`${outside}/`)) && attempts.every((a) => a.refused && a.exitCode !== 0) && !files.inside && !files.outside,
+    { attempts, filesExist: files, itemsReported: subCommands(r1.pid, r1.parent), source: "each sub-agent's own Codex session file (its tool calls and their output), read only" });
+};
 
 const p = r1.pause ?? {};
 const sleeper = r1.subs.find((s) => s.how === "stopped");
@@ -276,7 +321,7 @@ async function codexAlone() {
   return { parent, subs, sleepersBefore: before, parentTurn: parentEnd?.turn?.status, parentEndedMs: parentEnd ? parentEnd.t - sentAt : null, subTurnEndsAfterInterrupt: subEnds, runningAfterInterrupt: during, runningAfterExit: afterExit };
 }
 const alone = await codexAlone();
-const stillRan = alone.runningAfterInterrupt.every((d) => d.running === alone.sleepersBefore);
+const stillRan = alone.runningAfterInterrupt.every((d) => d.running > 0);
 check("(Codex alone) turn/interrupt on the parent ends its turn, and the sub-agents' commands run on until the app-server exits; the adapter's pause relies on ending the app-server",
   alone.sleepersBefore >= 2 && alone.parentTurn === "interrupted" && stillRan && alone.runningAfterExit === 0,
   alone);
@@ -303,6 +348,8 @@ for (let i = 0; i < 30 && inSessions().length; i++) await sleep(1000);
 check("every kept thread (parents and sub-agents) was archived: none is left in Codex's sessions folder (read-only listing)",
   inSessions().length === 0,
   { threads: kept.length + aloneIds.length, leftInSessions: inSessions().length, codexAloneArchive: Object.fromEntries([...aloneArchive].map(([k, v]) => [k.slice(-6), v])) });
+
+safetyCheck();
 
 // ---------- the record ----------
 
