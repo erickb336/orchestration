@@ -693,7 +693,7 @@ export function outcomeWords(r: PeReview): string {
  * A verdict's checks of the earlier asks on its variant (`due`): each due ask once, and nothing else, in the order
  * the asks were made. Throws a ControlError that says what is wrong.
  */
-function askChecks(due: PeVerdict[], given: AskCheck[], on: string): AskCheck[] {
+function askChecks(due: readonly { id: string }[], given: AskCheck[], on: string): AskCheck[] {
   for (const c of given) {
     if (!due.some((x) => x.id === c.ask)) throw new ControlError(`The verdict on ${on} checks "${agentLine(c.ask).slice(0, 30)}", which is not one of the PE's earlier asks on it in this round.`);
   }
@@ -701,6 +701,53 @@ function askChecks(due: PeVerdict[], given: AskCheck[], on: string): AskCheck[] 
   const missing = due.filter((x) => !given.some((c) => c.ask === x.id));
   if (missing.length) throw new ControlError(`The verdict on ${on} leaves out earlier ask ${missing.map((x) => x.id).join(", ")}: on a later pass, the PE first says whether each change it asked for is met.`);
   return due.map((x) => ({ ask: x.id, met: given.find((c) => c.ask === x.id)!.met }));
+}
+
+/** A verdict as the PE's run gave it, once checked: what a pass or a round records (`checkVerdict`). */
+export interface CheckedVerdict {
+  verdict: Verdict;
+  reasons: string;
+  change?: string;
+  earlier?: AskCheck[];
+  fromRevision?: true;
+  openCases?: OpenCase[];
+  budget?: BudgetEstimate;
+}
+
+/**
+ * One verdict of the PE's, checked by the rules of its loop (pass 4e), for the studio and for PE review of new work in
+ * the factory alike. `pass` counts from 1; `asks` are the changes the PE asked for earlier that this verdict checks
+ * (each by id, once); `on` names what it judges, for the messages. Reasons are required; feasible-if states its
+ * change; on a later pass a verdict that sends the work back has an earlier ask that is not met, or says the
+ * revision created the risk (`fromRevision`); open cases are at most 5. Throws a ControlError that says what is wrong.
+ */
+export function checkVerdict(v: VerdictInput, ctx: { pass: number; asks: readonly { id: string }[]; on: string }): CheckedVerdict {
+  const { pass, on } = ctx;
+  const reasons = required(agentText(v.reasons), 2000, "The verdict's reasons");
+  const change = v.change === undefined ? "" : capped(agentText(v.change), 1000, "The stated change");
+  if (v.verdict === "feasible-if" && !change) throw new ControlError("Feasible-if states the change that makes it feasible.");
+  const earlier = askChecks(ctx.asks, v.earlier ?? [], on);
+  // A later pass asks for no more than it asked before, unless the revision created a new risk (the loop converges).
+  if (pass > 1 && v.verdict !== "feasible" && !v.fromRevision && !earlier.some((c) => !c.met)) {
+    throw new ControlError(
+      `The verdict on ${on} sends it back, but ${earlier.length ? "it finds every earlier ask met" : "the PE asked for no change on it earlier in the round"}. On a later pass, a change is for an earlier ask that is not met, or for a risk this revision created ("fromRevision"); a missing feature or an undecided case is an open case for the owner.`,
+    );
+  }
+  if (v.fromRevision && (pass === 1 || v.verdict === "feasible")) throw new ControlError(`The verdict on ${on} says its change answers a risk the revision created, but it ${pass === 1 ? "is on the round's first take" : "asks for no change"}.`);
+  const openCases = (v.openCases ?? []).map((c) => {
+    const why = c.why === undefined ? "" : capped(agentLine(c.why), 300, "An open case's why");
+    return { text: required(agentLine(c.text), 300, "An open case"), ...(why ? { why } : {}) };
+  });
+  if (openCases.length > MAX_OPEN_CASES) throw new ControlError(`At most ${MAX_OPEN_CASES} open cases on one verdict; group related questions.`);
+  return {
+    verdict: v.verdict,
+    reasons,
+    ...(change ? { change } : {}),
+    ...(earlier.length ? { earlier } : {}),
+    ...(v.fromRevision ? { fromRevision: true as const } : {}),
+    ...(openCases.length ? { openCases } : {}),
+    ...(v.budget ? { budget: estimate(v.budget) } : {}),
+  };
 }
 
 /**
@@ -733,41 +780,16 @@ export function addPeVerdicts(state: State, input: PeVerdictsInput, now: string)
     if (missing.length) throw new ControlError(`The pass leaves out variant ${missing.join(", ")}: the PE judges every option the owner will see.`);
   }
   const asks = earlierAsks(state, a);
-  const records: PeVerdict[] = vs.map((v) => {
-    const on = v.variant === undefined ? "the whole artifact" : `variant ${v.variant}`;
-    const reasons = required(agentText(v.reasons), 2000, "The verdict's reasons");
-    const change = v.change === undefined ? "" : capped(agentText(v.change), 1000, "The stated change");
-    if (v.verdict === "feasible-if" && !change) throw new ControlError("Feasible-if states the change that makes it feasible.");
-    const earlier = askChecks(asksOn(asks, v.variant), v.earlier ?? [], on);
-    // A later pass asks for no more than it asked before, unless the revision created a new risk (the loop converges).
-    if (pass > 1 && v.verdict !== "feasible" && !v.fromRevision && !earlier.some((c) => !c.met)) {
-      throw new ControlError(
-        `The verdict on ${on} sends it back, but ${earlier.length ? "it finds every earlier ask met" : "the PE asked for no change on it earlier in the round"}. On a later pass, a change is for an earlier ask that is not met, or for a risk this revision created ("fromRevision"); a missing feature or an undecided case is an open case for the owner.`,
-      );
-    }
-    if (v.fromRevision && (pass === 1 || v.verdict === "feasible")) throw new ControlError(`The verdict on ${on} says its change answers a risk the revision created, but it ${pass === 1 ? "is on the round's first take" : "asks for no change"}.`);
-    const openCases = (v.openCases ?? []).map((c) => {
-      const why = c.why === undefined ? "" : capped(agentLine(c.why), 300, "An open case's why");
-      return { text: required(agentLine(c.text), 300, "An open case"), ...(why ? { why } : {}) };
-    });
-    if (openCases.length > MAX_OPEN_CASES) throw new ControlError(`At most ${MAX_OPEN_CASES} open cases on one verdict; group related questions.`);
-    return {
-      id: "",
-      artifactId: a.id,
-      version: a.version,
-      ...(v.variant !== undefined ? { variant: v.variant } : {}),
-      pass,
-      verdict: v.verdict,
-      reasons,
-      ...(change ? { change } : {}),
-      ...(earlier.length ? { earlier } : {}),
-      ...(v.fromRevision ? { fromRevision: true as const } : {}),
-      ...(openCases.length ? { openCases } : {}),
-      ...(v.budget ? { budget: estimate(v.budget) } : {}),
-      at: now,
-      ...(input.by ? { by: { provider: input.by.provider, model: input.by.model, runId: input.by.runId } } : {}),
-    };
-  });
+  const records: PeVerdict[] = vs.map((v) => ({
+    id: "",
+    artifactId: a.id,
+    version: a.version,
+    ...(v.variant !== undefined ? { variant: v.variant } : {}),
+    pass,
+    ...checkVerdict(v, { pass, asks: asksOn(asks, v.variant), on: v.variant === undefined ? "the whole artifact" : `variant ${v.variant}` }),
+    at: now,
+    ...(input.by ? { by: { provider: input.by.provider, model: input.by.model, runId: input.by.runId } } : {}),
+  }));
   const s = draft(state);
   for (const r of records) s.studio.verdicts.push({ ...r, id: nextId(s, "pev") });
   const art = getArtifact(s, a.id, a.version);

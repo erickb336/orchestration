@@ -14,12 +14,14 @@ import * as D from "../src/domain/delivery";
 import * as F from "../src/domain/findings";
 import * as M from "../src/domain/model";
 import { LEAD_REPLY_SCHEMA } from "../src/domain/model/leadReplySchema";
+import * as P from "../src/domain/peReview";
 import * as R from "../src/domain/studio/runs";
 import * as S from "../src/domain/studio/studio";
 import { DESIGNER_KINDS } from "../src/domain/studio/types";
 import { REVIEW_ROLES, isProvider, type ChecksHealth, type Integration, type ProseCheck, type ProviderId, type Runner, type State, type Step, type Task } from "../src/domain/types";
 import { SimulatedChecks, checkEnv, type CheckAssignment, type CheckRunner } from "./checks";
 import { buildEnvelope, buildLeadEnvelope, capConventions, parseLeadOutput, parseOutputs, type ConventionsFile } from "./envelope";
+import { prototypeFolders, readsPrototypes } from "./factoryLink";
 import { SimulatedGitHub, type GitHubHost } from "./github";
 import { PrDriver } from "./prdelivery";
 import { checkLeadText, withLeadProse } from "./prose/record";
@@ -30,7 +32,7 @@ import type { AdapterEvent, Connection, ProviderHealth, RuntimeAdapter } from ".
 import { LeaseLostError, type Store } from "./store";
 import { ManifestError, readStaged, studioRoot, versionDir } from "./studio/artifacts";
 import { makeDemo, makeShots, type StudioMedia } from "./studio/media";
-import { PeAnswerError, checkPeAnswer, peEnvelope, readPeAnswer, recordPeRun } from "./studio/pe";
+import { PeAnswerError, checkPeAnswer, newWorkPeEnvelope, peEnvelope, readPeAnswer, recordNewWorkPeRun, recordPeRun } from "./studio/pe";
 import { repoGlance } from "./studio/existing";
 import { askForRevisions } from "./studio/revise";
 import { checkHandedIn, designerEnvelope, handedIn, importDesignerRun, prepareStaging, type HandedIn } from "./studio/runs";
@@ -572,7 +574,8 @@ export class Scheduler {
           // The PE reviews each designer version before the owner sees it: asked for once the version is imported
           // and its screenshots or recording are made (applied above), and again after a review ended without a verdict.
           // When its pass asks for changes, the designer revises the version, and the PE reviews the new one (the loop).
-          return askForRevisions(R.askForPeReviews(next, now), now);
+          // While building, the PE reviews new work before it starts (pass 5): a run for each piece that waits for one.
+          return P.askForNewWorkReviews(askForRevisions(R.askForPeReviews(next, now), now), now);
         },
         now,
         lease,
@@ -878,6 +881,7 @@ export class Scheduler {
     if (!this.dataDir) return "This service has no data directory for the studio";
     const adapter = this.adapterFor(run.provider);
     const limits = state.project.runLimits;
+    if (run.kind === "pe" && run.review) return this.launchNewWorkPe(state, run);
     if (run.kind === "pe") {
       try {
         const root = studioRoot(this.dataDir, state.project.id);
@@ -939,6 +943,50 @@ export class Scheduler {
       this.launched.delete(runId);
       if (checkout && this.workspaces) this.workspaces.remove(state.project.repoPath, checkout.path);
       return `Could not start the studio run: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  /**
+   * Start a PE run on new work in the factory (pass 5): read-only, in a checkout of the product (its own empty folder
+   * when there is no repository to read), with the approved prototypes the work cites as read roots. Isolated, with no
+   * connections and no shell, like the studio's runs.
+   */
+  private launchNewWorkPe(state: State, run: ReturnType<typeof R.getStudioRun> & object): string | undefined {
+    const adapter = this.adapterFor(run.provider);
+    const limits = state.project.runLimits;
+    let checkout: PreparedWorkspace | undefined;
+    try {
+      const root = studioRoot(this.dataDir!, state.project.id);
+      const tmp = join(root, run.workspace);
+      rmSync(tmp, { recursive: true, force: true });
+      mkdirSync(tmp, { recursive: true });
+      if (this.workspaces) checkout = this.workspaces.prepare({ repoPath: state.project.repoPath, projectId: state.project.id, attemptId: run.id, taskId: "STUDIO", stepId: "pe", access: "read" });
+      const task = state.tasks.find((t) => t.id === run.review!.taskId)!;
+      const protos = prototypeFolders(state, task, root);
+      this.launched.set(run.id, { provider: run.provider, access: "read", workspace: checkout, stepId: "pe", taskId: "STUDIO", tmp });
+      const folder = checkout?.path ?? tmp;
+      adapter.start({
+        attemptId: run.id,
+        taskId: "STUDIO",
+        stepId: "pe",
+        role: "pe",
+        provider: run.provider,
+        model: run.model,
+        workspace: { path: folder, access: "read", tmp, ...(protos.length ? { readRoots: protos } : {}) },
+        studio: true,
+        environment: "isolated",
+        connections: [],
+        prompt: newWorkPeEnvelope(state, run, { folder, checkout: checkout?.path, studioDir: root }),
+        outputs: [],
+        limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
+      });
+      return undefined;
+    } catch (e) {
+      const info = this.launched.get(run.id);
+      if (info?.tmp) rmSync(info.tmp, { recursive: true, force: true });
+      if (checkout && this.workspaces) this.workspaces.remove(state.project.repoPath, checkout.path);
+      this.launched.delete(run.id);
+      return `Could not start the PE run: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 
@@ -1052,7 +1100,8 @@ export class Scheduler {
         if (run.kind === "pe") {
           // The PE's verdicts, from its final message: checked, then recorded on the version it reviewed.
           try {
-            const r = recordPeRun(started, R.getStudioRun(started, run.id)!, readPeAnswer(e.finalText), now);
+            const mine = R.getStudioRun(started, run.id)!;
+            const r = mine.review ? recordNewWorkPeRun(started, mine, readPeAnswer(e.finalText), now) : recordPeRun(started, mine, readPeAnswer(e.finalText), now);
             // The check of its text goes on the run (never on the verdicts: the owner sees no score); the PE's next run is told what it broke.
             return withStudioProse(R.completeStudioRun(r.state, run.id, now, { usage: e.usage, actualModel: e.model, summary: r.summary }), run.id, this.studioProse.get(run.id));
           } catch (err) {
@@ -1152,6 +1201,9 @@ export class Scheduler {
       const conventions = this.conventionsFor(state, Date.now());
       const decisions = F.decisionsForStep(state, task, step).map((d) => d.id);
       this.launched.set(attemptId, { provider: a.snapshot.provider, access, workspace, stepId: step.id, taskId: task.id });
+      // The approved prototypes the task cites (pass 5): the designer starts from them, the UX reviewer compares with them.
+      const studioDir = this.dataDir ? studioRoot(this.dataDir, state.project.id) : undefined;
+      const protos = studioDir && readsPrototypes(step) ? prototypeFolders(state, task, studioDir) : [];
       // Queued before the run starts, so it is applied no later than any event from the run.
       this.queue.push({ type: "context", attemptId, ...(scope ? { scope } : {}), ...(conventions.length ? { conventions: conventions.map((c) => ({ file: c.file, blob: c.blob, bytes: c.bytes, truncated: c.truncated })) } : {}), ...(decisions.length ? { decisions } : {}) });
       adapter.start({
@@ -1161,7 +1213,7 @@ export class Scheduler {
         role: step.role,
         provider: isProvider(a.snapshot.provider) ? a.snapshot.provider : "claude",
         model: a.snapshot.model,
-        workspace: { path: workspace?.path ?? a.snapshot.workspace, access },
+        workspace: { path: workspace?.path ?? a.snapshot.workspace, access, ...(protos.length ? { readRoots: protos } : {}) },
         environment: a.snapshot.environment ?? "isolated",
         connections: a.snapshot.connections ?? [],
         prompt: buildEnvelope({
@@ -1176,6 +1228,7 @@ export class Scheduler {
           ...(step.coverageGap ? { coverageGap: step.coverageGap } : {}),
           ...(conventions.length ? { conventions } : {}),
           docs: this.visionDocs?.reader(state.project.id),
+          ...(studioDir ? { studioDir } : {}),
         }),
         outputs: step.outputs,
         limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },

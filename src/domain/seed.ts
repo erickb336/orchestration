@@ -435,6 +435,8 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true, che
       domains: ["screen"],
       factoryStarts: [],
       changeOrders: "lead",
+      // The sample started building before PE review of new work existed: off, as for any project from then.
+      peReviewsNewWork: false,
       prDelivery: structuredClone(DEFAULT_PR_DELIVERY),
       // With the `checks` option the sample has checks on with two simulated commands, so the demo shows the
       // loop; a real project starts with them off. Findings that need a decision go to the user.

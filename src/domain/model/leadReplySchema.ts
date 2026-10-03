@@ -65,6 +65,9 @@ const proposal = record({
   acceptance: list(text),
   flowId: orNull(text),
   priority: orNull(whole),
+  // ORC-029 pass 5: the approved blueprint items it builds, and the task the PE sent back that it revises.
+  blueprintRefs: orNull(list(text)),
+  revises: orNull(text),
 });
 
 // Each task entry gives exactly one of priority, defer and drop; the steering module checks that.

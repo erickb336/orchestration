@@ -5,7 +5,7 @@
 import * as D from "./delivery";
 import * as F from "./findings";
 import * as M from "./model";
-import { lastObjection, PE_REVIEW_HOLD, peReviewHold } from "./peReview";
+import { lastObjection, PE_OBJECTS_HOLD, PE_REVIEW_HOLD, peReviewHold, taskReviewHold } from "./peReview";
 import { budgetStop, buildingSpend, type UnknownCost } from "./spend";
 import { blueprintItems, openChangeOrders } from "./studio/blueprint";
 import type { ChangeOrder } from "./studio/types";
@@ -39,9 +39,10 @@ export function needsYouOf(state: State, task: Task, nowMs = Date.now()): NeedsY
   if (task.steps.some((st) => st.role === "checks" && st.state === "blocked" && st.blockedReason?.startsWith("Checks failed"))) return { what: "decide on failing checks", action: "Decide", href };
   if (F.openDecisions(state, "user").some((d) => d.taskId === task.id)) return { what: "decide a finding", action: "Decide", href };
   if (open && task.hold && task.holdReason) return { what: "review the step", action: "Open", href };
-  // PE review comes before your go-ahead: an objection after three rounds is yours; pending work is the PE's.
-  const review = open ? peReviewHold(task.peReview) : undefined;
-  if (review && review !== PE_REVIEW_HOLD) return { what: PE_OBJECTION, action: "Open", href };
+  // PE review comes before your go-ahead: an objection after three rounds is yours, and so is a review that could not
+  // finish; pending work is the PE's. The task's own review (a proposal) or a step's (a breakdown, a design).
+  const review = open ? taskReviewHold(task)?.hold : undefined;
+  if (review && review !== PE_REVIEW_HOLD) return { what: review === PE_OBJECTS_HOLD ? PE_OBJECTION : PE_UNFINISHED, action: "Open", href };
   if (review) return undefined;
   if (open && task.holdBeforeStart && task.lifecycle !== "active" && !task.heldForShaping && !task.hold && !M.deferredBy(state, task)) {
     return { what: M.currentSpec(task).content.options.length > 1 ? "choose an option" : "give the go-ahead", action: "Open", href };
@@ -54,6 +55,14 @@ export const PR_PROBLEM = "decide on the pull request";
 
 /** The "what" of new work the PE still objects to after three rounds; Home shows the objection under it. */
 export const PE_OBJECTION = "answer the PE's objection";
+/** The "what" of new work whose PE review could not finish (the PE could not run); Home shows why under it. */
+export const PE_UNFINISHED = "decide without the PE's review";
+
+/** What the owner reads under a PE objection: the review that holds the task, and its objection or why it ended. */
+function peDetail(task: Task): string | undefined {
+  const r = taskReviewHold(task)?.review;
+  return r ? lastObjection(r) : undefined;
+}
 
 /** One mark of the verdict line: "Code ✓", "Security ✓", "Checks ✓". */
 export interface VerdictMark {
@@ -125,7 +134,7 @@ export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[]
     const n = needsYouOf(state, task, nowMs);
     if (!n) continue;
     const pr = task.integration?.pr;
-    const open = (): NeedsYouEntry => ({ kind: "open", key: task.id, task, what: n.what, detail: n.what === PR_PROBLEM ? pr?.attention?.message : n.what === PE_OBJECTION && task.peReview ? lastObjection(task.peReview) : undefined, action: n.action, href: n.href });
+    const open = (): NeedsYouEntry => ({ kind: "open", key: task.id, task, what: n.what, detail: n.what === PR_PROBLEM ? pr?.attention?.message : n.what === PE_OBJECTION || n.what === PE_UNFINISHED ? peDetail(task) : undefined, action: n.action, href: n.href });
     if (n.what === "merge PR" && pr && mergeAsked(pr)) continue;
     if (n.what === "merge PR" && pr && mergeInPlace(state, task, pr, nowMs)) {
       items.push({ kind: "merge", key: task.id, task, pr, verdict: mergeVerdict(state, task, nowMs), simulated: !!pr.simulated });

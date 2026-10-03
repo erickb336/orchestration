@@ -1,6 +1,10 @@
 // Studio runs (ORC-029 pass 3): the agent runs of Vision, the designer's and the PE's (probes' come in pass 4).
 // Pure: each operation returns a new State; the service's scheduler dispatches, launches and reports them.
 //
+// One kind runs in the factory instead (pass 5): a PE run on new work (`review`), which has no round. It is asked
+// for by askForNewWorkReviews (src/domain/peReview.ts) and dispatched only while building; everything below about
+// Vision applies to the other runs.
+//
 // The PE's runs. The owner sees a designer's work only after PE review (the loop rule, studio.ts), so once a version
 // is imported, and its screenshots or recording are made, the service asks for a PE run on it (askForPeReviews). The
 // PE reads the version and returns a verdict per variant, which the service records with addPeVerdicts. By default
@@ -20,7 +24,8 @@ import { CONTROL_RE, stripInvisible, visibleOrEmpty } from "../model/textSafety"
 import { budgetStop } from "../spend";
 import { ControlError, PROVIDERS, roleDefaultFor, type ModelSelection, type ProviderId, type State } from "../types";
 import { artifactName, endReview, latestArtifacts, latestVersion, peReview, peRunsOf } from "./studio";
-import { isUnderWay, type StudioArtifact, type StudioRun, type StudioRunKind } from "./types";
+import { newWorkStaleReason } from "../peReview";
+import { isUnderWay, type NewWorkReviewRef, type StudioArtifact, type StudioRun, type StudioRunKind } from "./types";
 
 /** The longest brief a run takes, in characters. */
 const MAX_BRIEF = 20_000;
@@ -49,6 +54,8 @@ export const studioRunName = (r: StudioRun) => `${KIND_WORDS[r.kind]} run ${r.id
  * revises has a newer version than the one it was asked to revise.
  */
 export function staleReason(s: State, r: StudioRun): string | undefined {
+  // A PE run on new work in the factory: the work it reads must still wait for it, as it was.
+  if (r.review) return newWorkStaleReason(s, r.review);
   const round = s.studio.rounds.find((x) => x.n === r.round);
   if (!round || round.closedAt) return `round ${r.round} was closed`;
   if (r.artifactId !== undefined) {
@@ -62,7 +69,10 @@ export function staleReason(s: State, r: StudioRun): string | undefined {
 
 export interface StudioRunRequest {
   kind: StudioRunKind;
-  round: number;
+  /** The Vision round; absent for a PE run on new work in the factory (`review`). */
+  round?: number;
+  /** A PE run on new work in the factory (pass 5): what it reviews. Only while building. */
+  review?: NewWorkReviewRef;
   /** A designer's run: a new version of this artifact (a revision). The PE's: the artifact it reviews, at its newest version. */
   artifactId?: string;
   /** The provider and model; absent: the role's default (see peSelection for the PE), else the project's default. */
@@ -109,6 +119,7 @@ function resolveSelection(s: State, kind: StudioRunKind, given: ModelSelection |
  */
 export function requestStudioRun(state: State, req: StudioRunRequest, now: string): { state: State; runId: string } {
   if (req.kind === "probe") throw new ControlError("Probe runs cannot be asked for yet; they come in ORC-029 pass 4.");
+  if (req.review) return requestNewWorkRun(state, req, req.review, now);
   if (state.project.stage !== "shaping") throw new ControlError("Studio runs happen in Vision. Go back to vision first.");
   const round = state.studio.rounds.find((r) => r.n === req.round);
   if (!round) throw new ControlError(`There is no round ${req.round}.`);
@@ -125,9 +136,7 @@ export function requestStudioRun(state: State, req: StudioRunRequest, now: strin
     if (base.round !== round.n) throw new ControlError(`${artifactName(base)} is from round ${base.round}; the PE reviews it in that round.`);
     if (!req.selection) note = peSelection(state, base).note;
   }
-  const brief = visibleOrEmpty(stripInvisible(req.brief.replace(CONTROL_G, "")).replace(/\r\n?/g, "\n").trim());
-  if (!brief) throw new ControlError("The brief is empty.");
-  if (brief.length > MAX_BRIEF) throw new ControlError(`The brief is over ${MAX_BRIEF} characters.`);
+  const brief = cleanBrief(req.brief);
   const { provider, model } = resolveSelection(state, req.kind, req.selection ?? (req.kind === "pe" ? peSelection(state, base!).selection : undefined));
   const s = draft(state);
   const id = nextId(s, "studio");
@@ -150,6 +159,35 @@ export function requestStudioRun(state: State, req: StudioRunRequest, now: strin
   event(s, now, req.fromLead ? "lead" : "system", "vision", `${studioRunName(run)} asked for in round ${round.n}${what}, on ${providerLabel(provider)} · ${model}${note ? ` (${note})` : ""}`);
   return { state: s, runId: id };
 }
+
+function cleanBrief(raw: string): string {
+  const brief = visibleOrEmpty(stripInvisible(raw.replace(CONTROL_G, "")).replace(/\r\n?/g, "\n").trim());
+  if (!brief) throw new ControlError("The brief is empty.");
+  if (brief.length > MAX_BRIEF) throw new ControlError(`The brief is over ${MAX_BRIEF} characters.`);
+  return brief;
+}
+
+/**
+ * A PE run on new work in the factory (pass 5, asked for by the service: askForNewWorkReviews in peReview.ts). Only
+ * while building, on work that waits for it as it is now. Queued: dispatched while building, like task steps.
+ */
+function requestNewWorkRun(state: State, req: StudioRunRequest, review: NewWorkReviewRef, now: string): { state: State; runId: string } {
+  if (req.kind !== "pe") throw new ControlError("Only the PE reviews new work in the factory.");
+  if (state.project.stage !== "building") throw new ControlError("PE review of new work happens in the factory.");
+  const stale = newWorkStaleReason(state, review);
+  if (stale) throw new ControlError(`Nothing to review: ${stale}.`);
+  const brief = cleanBrief(req.brief);
+  const { provider, model } = resolveSelection(state, "pe", req.selection);
+  const s = draft(state);
+  const id = nextId(s, "studio");
+  const run: StudioRun = { id, kind: "pe", review: { ...review }, provider, model, status: "queued", brief, askedAt: now, workspace: `staging/${id}` };
+  s.studio.runs.push(run);
+  event(s, now, "system", "decision", `${studioRunName(run)} asked for, reviewing ${reviewName(review)}, on ${providerLabel(provider)} · ${model}`, review.taskId);
+  return { state: s, runId: id };
+}
+
+/** "T-005 (spec r2)", "T-007 S1 v2": the new work a PE run reviews. */
+export const reviewName = (r: NewWorkReviewRef) => (r.stepId === undefined ? `${r.taskId} (spec r${r.specRev})` : `${r.taskId} ${r.stepId} v${r.version}`);
 
 // ---------- the PE's runs, asked for by the service ----------
 
@@ -238,13 +276,16 @@ function fail(s: State, r: StudioRun, note: string, now: string) {
  * whose provider is unavailable fails with the reason (nothing is substituted). Studio runs share the worker limits
  * with task runs. Returns the runs started, which the scheduler launches.
  */
+/** A run starts only in its stage: the studio's in Vision, a PE run on new work in the factory. It waits, queued, in the other. */
+const inItsStage = (s: State, r: StudioRun) => s.project.stage === (r.review ? "building" : "shaping");
+
 export function dispatchStudioRuns(state: State, now: string, opts: StudioDispatchOptions = {}): { state: State; started: string[] } {
-  if (state.project.hold || state.project.stage !== "shaping" || !state.studio.runs.some((r) => r.status === "queued")) return { state, started: [] };
+  if (state.project.hold || !state.studio.runs.some((r) => r.status === "queued" && inItsStage(state, r))) return { state, started: [] };
   if (budgetStop(state)) return { state, started: [] };
   const s = draft(state);
   const started: string[] = [];
   for (const r of s.studio.runs) {
-    if (r.status !== "queued") continue;
+    if (r.status !== "queued" || !inItsStage(s, r)) continue;
     const stale = staleReason(s, r);
     if (stale) {
       fail(s, r, `not started: ${stale}`, now);
@@ -262,7 +303,7 @@ export function dispatchStudioRuns(state: State, now: string, opts: StudioDispat
     r.startedAt = now;
     if (opts.simulated?.includes(r.provider)) r.simulated = true;
     started.push(r.id);
-    event(s, now, "lead", "dispatch", `${studioRunName(r)} started for round ${r.round} on ${providerLabel(r.provider)} · ${r.model}${r.simulated ? " (simulated)" : ""}`);
+    event(s, now, "lead", "dispatch", `${studioRunName(r)} started ${r.review ? `reviewing ${reviewName(r.review)}` : `for round ${r.round}`} on ${providerLabel(r.provider)} · ${r.model}${r.simulated ? " (simulated)" : ""}`);
   }
   return { state: s, started };
 }
@@ -317,7 +358,8 @@ export function reportStudioRunStopped(state: State, id: string, now: string, op
     const again: StudioRun = {
       id: nextId(s, "studio"),
       kind: r.kind,
-      round: r.round,
+      ...(r.round !== undefined ? { round: r.round } : {}),
+      ...(r.review ? { review: { ...r.review } } : {}),
       ...(r.artifactId !== undefined ? { artifactId: r.artifactId, baseVersion: r.baseVersion } : {}),
       provider: r.provider,
       model: r.model,

@@ -270,6 +270,8 @@ class DemoBuilder {
         domains: ["screen"],
         factoryStarts: [],
         changeOrders: "lead",
+        // The demo's factory started before PE review of new work existed (ORC-030 retakes the demo).
+        peReviewsNewWork: false,
         shapingSince: at(4340),
         checks: structuredClone(DEFAULT_CHECKS),
         triage: { askUserBy: "user" },

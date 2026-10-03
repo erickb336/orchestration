@@ -20,7 +20,7 @@
 import { sameSha } from "../checks";
 import * as M from "../model";
 import type { Artifact, State, Task, TestCaseResult, TestReport } from "../types";
-import { blueprintItems } from "./blueprint";
+import { blueprintItems, ruleTag } from "./blueprint";
 import { versionsOf } from "./studio";
 import type { BlueprintItem, StudioArtifact, StudioArtifactKind, VariantRules } from "./types";
 
@@ -28,8 +28,7 @@ import type { BlueprintItem, StudioArtifact, StudioArtifactKind, VariantRules } 
 
 const TAG_RE = /\[(bi-\d{1,9})[ _]([A-Za-z0-9_-]{1,20})\]/g;
 
-/** The tag a test carries for one rule or example of a blueprint item: "[bi-12 R3]". */
-export const ruleTag = (itemId: string, lineId: string) => `[${itemId} ${lineId}]`;
+export { ruleTag };
 
 /** Every tag in a test's name or suite, written as `ruleTag` writes it. */
 export function tagsIn(text: string): string[] {

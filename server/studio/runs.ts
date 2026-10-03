@@ -218,6 +218,8 @@ export function checkHandedIn(given: HandedIn | { refused: string } | undefined,
 export function importDesignerRun(state: State, runId: string, given: HandedIn, root: string, now: string): { state: State; summary: string; imported: { artifactId: string; version: number }[] } {
   const run = R.getStudioRun(state, runId);
   if (!run) throw new Error(`Unknown studio run ${runId}.`);
+  const round = run.round;
+  if (round === undefined) throw new Error(`Studio run ${runId} is not a designer's run in a round.`);
   const staged = given.artifacts;
   const revising = run.artifactId === undefined ? undefined : S.latestVersion(state, run.artifactId);
   if (revising && staged.length !== 1) throw new ManifestError(`a revision hands in exactly one artifact, the new version of ${revising.title}; it listed ${staged.length}.`);
@@ -242,7 +244,7 @@ export function importDesignerRun(state: State, runId: string, given: HandedIn, 
         s,
         {
           ...(run.artifactId !== undefined ? { artifactId: run.artifactId } : {}),
-          round: run.round,
+          round,
           kind: a.kind,
           title: a.title,
           variants: a.variants.map((v) => ({ id: v.id, label: v.label, entry: v.entry })),

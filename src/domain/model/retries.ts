@@ -28,9 +28,10 @@ export function rerunStep(state: State, taskId: string, stepId: string, now: str
 
 /**
  * Rerun a finished step on a draft state: it goes back to pending, everything downstream is invalidated and
- * downstream runs in flight are stopped. Also used by a note that reruns a finished step.
+ * downstream runs in flight are stopped. Also used by a note that reruns a finished step, and by the service when the
+ * PE sends a step's output back for revision (`actor` "system").
  */
-export function rerunInto(s: State, t: Task, st: Step, now: string, actor: "user" | "lead", detail?: string) {
+export function rerunInto(s: State, t: Task, st: Step, now: string, actor: "user" | "lead" | "system", detail?: string) {
   const stepId = st.id;
   if (st.state !== "done") throw new ControlError(`${stepId} has not completed.`);
   st.state = "pending";

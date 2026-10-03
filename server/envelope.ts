@@ -18,6 +18,7 @@ import { testedItems } from "../src/domain/studio/ruleResults";
 import * as S from "../src/domain/studio/studio";
 import { DOCUMENT_KINDS, isUnderWay, type Feedback, type PeVerdict, type RoundFocus, type StudioArtifact } from "../src/domain/studio/types";
 import { clip, truncate } from "../src/domain/text";
+import { leadBlueprintSection, newWorkNote, peChangeSection, peQuestionsSection, sentBackSection, stepBlueprintSection } from "./factoryLink";
 import { lastLeadProse } from "./prose/record";
 import type { RepoGlance } from "./studio/existing";
 import {
@@ -101,6 +102,8 @@ interface EnvelopeInput {
   conventions?: ConventionsFile[];
   /** Reads the stored copies of the vision documents; without it their text cannot be shown. */
   docs?: VisionDocReader;
+  /** The project's studio folder, where the approved prototypes are (ORC-029 pass 5); without it their paths are left out. */
+  studioDir?: string;
 }
 
 /** The caps on the conventions section, per file and in total. */
@@ -373,7 +376,7 @@ ${settled.map((d) => `- ${d.findingId} "${d.finding.title}"${d.finding.file ? ` 
 `;
 }
 
-export function buildEnvelope({ state, task, step, attemptId, access, seed, changeUnderReview, changedPaths, coverageGap, conventions, docs }: EnvelopeInput): string {
+export function buildEnvelope({ state, task, step, attemptId, access, seed, changeUnderReview, changedPaths, coverageGap, conventions, docs, studioDir }: EnvelopeInput): string {
   const vision = M.currentVision(state);
   const spec = M.currentSpec(task);
   const c = spec.content;
@@ -443,7 +446,7 @@ ${list(c.scopeExcluded)}
 Acceptance criteria:
 ${list(c.acceptance)}
 
-${acceptanceTestsSection(state, task, step)}${principlesSection(givenPrinciples(state, task, step, attemptId))}${conventionsSection(conventions, `you are the ${step.role.replace("_", " ")} of one step of one task`)}## Inputs from earlier steps
+${stepBlueprintSection(state, task, step, studioDir)}${acceptanceTestsSection(state, task, step)}${peChangeSection(task, step)}${principlesSection(givenPrinciples(state, task, step, attemptId))}${conventionsSection(conventions, `you are the ${step.role.replace("_", " ")} of one step of one task`)}## Inputs from earlier steps
 ${inputText}
 
 ${notesReceivedSections(state, inputs)}${repairSections(state, task, step, inputs)}${reviewNote(changeUnderReview)}${changedFilesSection(changedPaths, coverageGap, step.role)}${settledSection(state, task, step.role)}${childrenNote(state, task, step)}${seedNote(seed)}## Workspace rules
@@ -1446,7 +1449,7 @@ ${coverageLines(state)}${draftHistory(state)}`
   ]`
     : "";
 
-  return `# Lead run ${run.id} (${run.trigger === "planning" ? "planning" : run.trigger === "decisions" ? "decisions on findings" : "reply to the user"})${canSteer ? `\nSteering mode: ${mode}` : ""}${shaping ? "\nProject stage: shaping" : ""}
+  return `# Lead run ${run.id} (${run.trigger === "planning" ? "planning" : run.trigger === "decisions" ? "decisions on findings" : run.trigger === "pe-review" ? "revisions for the PE" : "reply to the user"})${canSteer ? `\nSteering mode: ${mode}` : ""}${shaping ? "\nProject stage: shaping" : ""}
 
 You are the lead of the project "${p.name}". You own the backlog within the vision below: you decide what is worth doing next, specify it clearly, and pick the approach. Workers (designers, coders, reviewers on Claude or Codex) carry tasks out through each task's pipeline. You do not edit files: ${access === "read" ? "your working directory is a read-only checkout of the repository, which you may read to ground your proposals" : "you have no workspace"}.
 
@@ -1455,8 +1458,8 @@ ${vision.text || "(not written yet)"}
 Current focus: ${vision.focus || "(none)"}${focusLine}
 Focus history (newest first):
 ${focusHistory(state)}
-${visionDocsSection(state, "lead", docs)}${projectWordsSection(state)}${shapingBrief}${studioBrief}
-${principlesSection(LEAD_PRINCIPLES.map((id) => ({ id })), PRINCIPLES_WORD_CAP, LEAD_PRINCIPLES_HEADER)}${conventionsSection(conventions, "your role is the lead of this orchestration service")}${decisionsSection(state)}
+${visionDocsSection(state, "lead", docs)}${projectWordsSection(state)}${leadBlueprintSection(state)}${shapingBrief}${studioBrief}
+${principlesSection(LEAD_PRINCIPLES.map((id) => ({ id })), PRINCIPLES_WORD_CAP, LEAD_PRINCIPLES_HEADER)}${conventionsSection(conventions, "your role is the lead of this orchestration service")}${decisionsSection(state)}${sentBackSection(state, run)}${peQuestionsSection(state)}
 ## Open work (root tasks by priority; child tasks follow their root)
 ${board}
 
@@ -1481,7 +1484,7 @@ ${notesSection(state, Date.parse(run.startedAt))}
 ${convo || "(no messages yet)"}
 
 ## ${pending.length ? "Messages to answer now" : "This run"}
-${pending.length ? pending.map((m) => `- ${fromTask(m)}${clip(m.text, 2000)}`).join("\n") : run.trigger === "planning" ? "Planning check: propose the most useful next work, or nothing if nothing is clearly worth doing." : run.trigger === "decisions" ? `Decide the findings listed under "Decisions waiting for you"${peDecisionsOpen ? ' and "Decisions you make as the PE"' : ""}; work on those tasks waits for you. Propose nothing unless a decision needs a follow-up task.` : "No new messages."}
+${pending.length ? pending.map((m) => `- ${fromTask(m)}${clip(m.text, 2000)}`).join("\n") : run.trigger === "planning" ? "Planning check: propose the most useful next work, or nothing if nothing is clearly worth doing." : run.trigger === "decisions" ? `Decide the findings listed under "Decisions waiting for you"${peDecisionsOpen ? ' and "Decisions you make as the PE"' : ""}; work on those tasks waits for you. Propose nothing unless a decision needs a follow-up task.` : run.trigger === "pe-review" ? 'Revise the work listed under "Work the PE sent back", or leave it for the user. Propose nothing new.' : "No new messages."}
 
 ## Rules for proposals
 - Propose at most ${maxProposals} task(s). Proposing nothing is fine when nothing is clearly worth doing; say why in your reply.
@@ -1489,7 +1492,7 @@ ${pending.length ? pending.map((m) => `- ${fromTask(m)}${clip(m.text, 2000)}`).j
 - Each proposal needs 2–4 options with trade-offs. When only one approach is sensible, include deferring as the other option and explain.
 - Choose "recommendedOptionId" yourself; it becomes the selected approach unless the user overrides it.
 - Give concrete, observable acceptance checks.
-
+${newWorkNote(state)}
 ## Flows
 Pick "flowId" from these, or leave it out for the default ("${defaultFlow}").
 ${flows}
@@ -1519,7 +1522,9 @@ The fields:
       "uncertainty": "<what you do not know, and what would change the decision>",
       "acceptance": ["<observable check>"],
       "flowId": "<flow id>",
-      "priority": 3
+      "priority": 3,
+      "blueprintRefs": ["<the id of an approved blueprint item it builds>"],
+      "revises": "<only to revise work the PE sent back: its task id>"
     }
   ]${steerContract}${visionContract}${decisionsContract}
 }
