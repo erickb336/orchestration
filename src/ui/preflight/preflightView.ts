@@ -1,28 +1,28 @@
-// The pre-flight (ORC-029 pass 6, screen 7 of the pass 1 prototype) in words, as pure functions over the state: the
-// blueprint by focus with PE review on each approved item, what is still open, what the factory will do, the settings
-// the owner chooses here, and the `startFactory` command for what the screen showed. Start the factory is the first
-// Lock in, so the screen also shows the Lock in summary (lockInView.ts). The facts are the domain's: the request
-// (`startFactoryRequest`), the plan (`startFactoryPlan`), the blocker (`startFactoryBlocker`) and the record
-// (`factoryStarts`). An unknown cost is "no estimate", never $0.
+// The pre-flight (ORC-029 pass 6, screen 7 of the pass 1 prototype) in words, as pure functions over the state: one
+// list of the parts the start puts into force (ORC-030 C1: focus, new or changed, the PE's verdict and estimate), what
+// is still open, what the factory will do (the tasks, the agents in one line, the budgets beside the PE's estimate),
+// the settings the owner chooses here, and the `startFactory` command for what the screen showed. Start the factory is
+// the first Lock in, so the screen also holds the Lock in summary's facts (lockInView.ts). The facts are the domain's:
+// the request (`startFactoryRequest`), the plan (`startFactoryPlan`), the blocker (`startFactoryBlocker`) and the
+// record (`factoryStarts`). An unknown cost is "no estimate", never $0.
 
 import * as M from "../../domain/model";
+import { buildingSpend } from "../../domain/spend";
 import * as B from "../../domain/studio/blueprint";
 import { unfinishedProbes } from "../../domain/studio/studio";
 import type { RoundFocus } from "../../domain/studio/types";
 import { ROLES, SHAPING_AREA_LABEL, roleDefaultFor, type FactorySettings, type RoleId, type State } from "../../domain/types";
-import { ROLE_LABEL, fmtTime } from "../common";
+import { fmtTime } from "../common";
 import type { Tone } from "../kit";
 import { factorySettingsText } from "../settingsText";
 import { itemName } from "../studio/draftView";
-import { FOCUS_LABEL, peView } from "../studio/studioView";
+import { FOCUS_LABEL, peView, usdRange } from "../studio/studioView";
 
 /** The pre-flight's place: under Vision, where the factory is started. */
 export const PREFLIGHT_HASH = "#/vision/pre-flight";
 
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const usd = (n: number) => `$${n.toFixed(2)}`;
-/** "Code reviewer" → "code reviewer"; an initialism ("PE", "UX reviewer") stays. */
-const lowerFirst = (l: string) => (/^[A-Z]{2}/.test(l) ? l : `${l[0].toLowerCase()}${l.slice(1)}`);
 const list = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`);
 
 // ---------- what the owner saw (compare-and-set) ----------
@@ -45,24 +45,23 @@ export function seenNow(s: State): Seen {
 
 export const sameSeen = (a: Seen, b: Seen) => a.draftRev === b.draftRev && a.summaryDigest === b.summaryDigest && a.visionRev === b.visionRev && a.open.join("\n") === b.open.join("\n");
 
+/**
+ * Whether the screen moved only because the owner saved the budgets on it (ORC-030 a-pre-budgets): the draft, the
+ * vision and what is open are as the screen showed them, and the budgets are the ones the owner saved. The screen then
+ * shows the new summary without the stale banner, and keeps the agreement: the owner sees the budgets they typed.
+ */
+export function ownBudgetsSaved(now: Seen, seen: Seen, budgets: State["project"]["budgets"], saved: State["project"]["budgets"] | null): boolean {
+  if (!saved || sameSeen(now, seen)) return false;
+  const rest = now.draftRev === seen.draftRev && now.visionRev === seen.visionRev && now.open.join("\n") === seen.open.join("\n");
+  return rest && budgets.buildingUsd === saved.buildingUsd && budgets.maintenanceUsdPerMonth === saved.maintenanceUsdPerMonth;
+}
+
 /** The `startFactory` command for what the screen showed and the settings chosen on it. A changed draft, summary or vision is refused. */
 export function startFactoryCommand(seen: Seen, settings: FactorySettings) {
   return { name: "startFactory" as const, args: { agreed: true as const, draftRev: seen.draftRev, summaryDigest: seen.summaryDigest, visionRev: seen.visionRev, settings, acceptOpen: seen.open } };
 }
 
-// ---------- the blueprint ----------
-
-export interface BlueprintLine {
-  itemId: string;
-  name: string;
-  /** PE review of the approved version, as the studio words it: "PE: agreed", "PE: not reviewed". */
-  pe: { word: string; tone: Tone; why: string };
-}
-
-export interface FocusGroup {
-  focus: string;
-  items: BlueprintLine[];
-}
+// ---------- the blueprint: one list of parts, then what is open ----------
 
 export interface OpenLine {
   key: string;
@@ -71,19 +70,52 @@ export interface OpenLine {
 
 const FOCUS_ORDER: RoundFocus[] = ["experience", "data", "flows", "material"];
 
-/** What the draft approves, by the focus of the round that made each part, each with its PE review. */
-export function blueprintByFocus(s: State): FocusGroup[] {
-  const groups = new Map<RoundFocus, BlueprintLine[]>();
-  for (const item of B.draftItems(s)) {
-    if (item.status !== "approved") continue;
+/**
+ * One line per part the start puts into force (ORC-030 a-pre-one-list): the part, the focus of the round that made it,
+ * whether it is new or changed (or dropped), the PE's verdict on it, and the PE's estimate for it. In the order of
+ * the rounds' focus, then of the draft. It stands for both "The blueprint" and the first Lock in's "What changes".
+ */
+export interface PartLine {
+  itemId: string;
+  name: string;
+  focus: string;
+  change: "new" | "changed" | "dropped";
+  /** PE review of the version, as the studio words it ("PE: agreed"); none for a dropped part. */
+  pe?: { word: string; tone: Tone; why: string };
+  /** The PE's estimate for the part: "building $3–$5, maintenance $0.40–$0.80 a month", or "no estimate". */
+  estimate?: string;
+}
+
+export function partLines(s: State): PartLine[] {
+  const c = B.draftChanges(s);
+  const estimates = new Map(B.lockInSummary(s).budgets.items.map((e) => [e.itemId, e.estimate]));
+  const focusOf = (item: Parameters<typeof B.citedArtifact>[1]): RoundFocus => {
     const a = B.citedArtifact(s, item);
-    if (!a) continue;
-    const focus = s.studio.rounds.find((r) => r.n === a.round)?.focus ?? "material";
-    const v = peView(s, a, M.providerLabel);
-    const line = { itemId: item.id, name: itemName(s, item), pe: { word: `PE: ${v.state.toLowerCase()}`, tone: v.tone, why: v.text } };
-    groups.set(focus, [...(groups.get(focus) ?? []), line]);
-  }
-  return FOCUS_ORDER.filter((f) => groups.has(f)).map((f) => ({ focus: FOCUS_LABEL[f], items: groups.get(f)! }));
+    return (a && s.studio.rounds.find((r) => r.n === a.round)?.focus) ?? "material";
+  };
+  const line = (item: Parameters<typeof B.citedArtifact>[1], change: PartLine["change"]): PartLine & { order: number } => {
+    const a = B.citedArtifact(s, item);
+    const v = a && change !== "dropped" ? peView(s, a, M.providerLabel) : undefined;
+    const e = estimates.get(item.id);
+    const estimate =
+      change === "dropped"
+        ? undefined
+        : e && (e.buildUsd || e.maintenanceUsdPerMonth)
+          ? [e.buildUsd ? `building ${usdRange(e.buildUsd)}` : "building: no estimate", e.maintenanceUsdPerMonth ? `maintenance ${usdRange(e.maintenanceUsdPerMonth, true)}` : "maintenance: no estimate"].join(", ")
+          : "no estimate";
+    const focus = focusOf(item);
+    return { itemId: item.id, name: itemName(s, item), focus: FOCUS_LABEL[focus], change, ...(v ? { pe: { word: `PE: ${v.state.toLowerCase()}`, tone: v.tone, why: v.text } } : {}), ...(estimate ? { estimate } : {}), order: FOCUS_ORDER.indexOf(focus) };
+  };
+  const lines = [...c.added.map((i) => line(i, "new")), ...c.changed.map((x) => line(x.item, "changed")), ...c.dropped.map((i) => line(i, "dropped"))];
+  return lines.map((l, i) => ({ l, i })).sort((x, y) => x.l.order - y.l.order || x.i - y.i).map(({ l: { order: _, ...rest } }) => rest);
+}
+
+/** Under the list: how many of the parts no task builds yet, and who plans their tasks. Undefined when every part has one. */
+export function newWorkLine(s: State): string | undefined {
+  const n = B.lockInSummary(s).newWork.length;
+  if (!n) return undefined;
+  const all = n === partLines(s).filter((l) => l.change === "new").length;
+  return `${all ? (n === 1 ? "No task builds this part yet" : "No task builds these parts yet") : `${count(n, "part")} ${n === 1 ? "has" : "have"} no task yet`}. The lead plans the tasks after the start${s.project.peReviewsNewWork ? ", and the PE reviews them before they start" : ""}.`;
 }
 
 /** What is still open, by name: the vision's open areas, the draft's open items, and the probes without their evidence. */
@@ -123,32 +155,60 @@ export function plannedTasks(s: State, x: FactorySettings): { summary: string; t
   return { summary: `${count(tasks.length, "planned task")}: ${list([...byFlow].map(([flow, n]) => `${n} ${flow}`))}.`, tasks };
 }
 
-/** The roles and the provider and model each runs on, grouped: "Claude · auto: the lead, the coder and the code reviewer." */
-export function roleLines(s: State): string[] {
+/** What each role does, as a verb, for the agents' one line. The three reviewers review. */
+const ROLE_VERB: Record<Exclude<RoleId, "pe" | "checks" | "evidence">, string> = { lead: "leads", designer: "designs", coder: "codes", code_reviewer: "reviews", security_reviewer: "reviews", ux_reviewer: "reviews" };
+
+/**
+ * The agents in one line (ORC-030 a-pre-agents), from Settings › Agents: which provider does what, where the PE runs,
+ * and how many agents run at once. "Claude leads and designs, Codex codes, the PE reviews on the other provider; at
+ * most 3 agents at once." A provider that is not enabled says so.
+ */
+export function agentsLine(s: State): string {
   const p = s.project;
   const groups = new Map<string, string[]>();
-  let pe: string | undefined;
+  let pe = "the PE reviews on the other provider";
   for (const role of ROLES as RoleId[]) {
     const sel = role === "lead" ? p.leadSelection : (roleDefaultFor(p, role) ?? (role === "pe" ? undefined : p.defaultSelection));
-    if (!sel) {
-      pe = "The PE: the other provider than the one that made the work, so its review is independent.";
+    if (role === "pe") {
+      if (sel) pe = `the PE reviews on ${M.providerLabel(sel.provider)}${p.enabledProviders.includes(sel.provider) ? "" : " (not enabled)"}`;
       continue;
     }
-    const key = `${M.providerLabel(sel.provider)} · ${sel.model}${p.enabledProviders.includes(sel.provider) ? "" : " (not enabled)"}`;
-    groups.set(key, [...(groups.get(key) ?? []), `the ${lowerFirst(ROLE_LABEL[role])}`]);
+    if (!sel || !(role in ROLE_VERB)) continue;
+    const who = `${M.providerLabel(sel.provider)}${p.enabledProviders.includes(sel.provider) ? "" : " (not enabled)"}`;
+    const verb = ROLE_VERB[role as keyof typeof ROLE_VERB];
+    const verbs = groups.get(who) ?? [];
+    if (!verbs.includes(verb)) groups.set(who, [...verbs, verb]);
   }
-  return [...[...groups].map(([key, roles]) => `${key}: ${list(roles)}.`), ...(pe ? [pe] : [])];
+  const parts = [...groups].map(([who, verbs]) => `${who} ${list(verbs)}`);
+  // Commas between providers read well while each does one or two things; with three or more, semicolons keep them apart.
+  const sep = [...groups.values()].some((v) => v.length > 2) ? "; " : ", ";
+  return `${[...parts, pe].join(sep)}; at most ${count(p.workerLimit, "agent")} at once.`;
 }
 
-/** Agents at once and the run limits, from Settings › Agents. */
-export function limitLines(s: State): string[] {
-  const p = s.project;
-  const per = p.enabledProviders.map((x) => `${M.providerLabel(x)} at most ${p.providerLimits[x]}`);
-  const l = p.runLimits;
-  return [
-    `Up to ${count(p.workerLimit, "agent")} at once${per.length ? ` (${list(per)})` : ""}.`,
-    `Each run stops at ${count(l.maxTurns, "turn")} or ${count(l.timeoutMinutes, "minute")}; a Claude run also stops at ${usd(l.maxBudgetUsd)}.`,
-  ];
+// ---------- the budgets, on the pre-flight (ORC-030 a-pre-budgets) ----------
+
+/**
+ * Under each budget field: what the budget does, the spend so far, and the PE's estimate for the parts the start puts
+ * into force. An unknown cost is never $0: a run with no recorded cost says the spend may be higher.
+ */
+export function budgetsBeside(s: State, building: boolean): { building: string; maintenance: string } {
+  const b = B.lockInSummary(s).budgets;
+  const unknown = buildingSpend(s).unknown.length;
+  const missing = b.items.filter((e) => !e.estimate?.buildUsd).length;
+  const estimate = !b.items.length
+    ? "No part to estimate: the draft approves none."
+    : b.itemsTotal.buildUsd
+      ? `The PE's estimate for these parts: ${usdRange(b.itemsTotal.buildUsd)}.`
+      : `No total estimate from the PE: ${count(missing, "part")} ${missing === 1 ? "has" : "have"} none.`;
+  const m = b.maintenance.estimateUsdPerMonth;
+  return {
+    building: [
+      building ? "At it, the factory stops and asks you." : "Not set: the factory does not stop for cost.",
+      `${usd(b.building.spentUsd)} spent so far${unknown ? `; ${count(unknown, "run")} ${unknown === 1 ? "has" : "have"} no recorded cost, so the spend may be higher` : ""}.`,
+      estimate,
+    ].join(" "),
+    maintenance: [m === null ? "The PE's estimate: none yet." : `The PE's estimate: ${usd(m)} a month.`, b.itemsTotal.maintenanceUsdPerMonth ? `These parts add ${usdRange(b.itemsTotal.maintenanceUsdPerMonth, true)}.` : ""].filter(Boolean).join(" "),
+  };
 }
 
 // ---------- how the factory runs ----------

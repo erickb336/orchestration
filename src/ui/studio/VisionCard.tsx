@@ -32,6 +32,12 @@ export function revisionSource(v: VisionRevision): string {
   return v.author;
 }
 
+/** The card's line about the text in force: "r3, by you, 2 h ago", "r4, by the lead, just now". */
+export function revisionMeta(v: VisionRevision): string {
+  const by = v.author === "user" ? "you" : v.author === "lead" ? "the lead" : v.author;
+  return `r${v.rev}, by ${by}, ${relTime(v.at)}`;
+}
+
 /** The editor's hint while the factory runs: where an edit of the text goes, and where the focus goes. */
 export const VISION_DRAFT_HINT = "The factory runs, so your edit of the text goes into the draft, not into force. It goes into force with your next Lock in. A new focus applies at once.";
 
@@ -80,9 +86,7 @@ export function VisionCard() {
       className="st-vision"
       actions={
         <>
-          <span className="small muted">
-            r{vision.rev} · {revisionSource(vision)}, {relTime(vision.at)}
-          </span>
+          <span className="small muted">{revisionMeta(vision)}</span>
           {!editing && (
             <Button size="small" onClick={() => setEditing(true)}>
               {vision.text.trim() ? (draft.waiting ? "Edit the draft's text" : "Edit") : "Write the vision"}

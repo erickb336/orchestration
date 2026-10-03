@@ -15,10 +15,10 @@ import "./vision.css";
 const COVERAGE_LABEL = { clear: "clear", partial: "partly clear", open: "open" } as const;
 const plural = (n: number, one: string, many = `${one}s`) => (n === 1 ? one : many);
 
-/** "4 of 9 clear", or undefined before the lead reported which areas are clear. */
+/** "4 of 9", the areas the lead reported clear, or undefined before it reported any. */
 export function coverageCount(s: State): string | undefined {
   const c = M.coverageOf(s);
-  return c ? `${SHAPING_AREAS.filter((a) => c[a] === "clear").length} of ${SHAPING_AREAS.length} clear` : undefined;
+  return c ? `${SHAPING_AREAS.filter((a) => c[a] === "clear").length} of ${SHAPING_AREAS.length}` : undefined;
 }
 
 /** The nine areas a vision needs, each with the state the lead last reported. */
