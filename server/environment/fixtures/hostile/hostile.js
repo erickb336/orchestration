@@ -1,13 +1,19 @@
 // The hostile fixture (server/environment/environment.docker.test.ts). As the project's own install script (the prepare
 // phase) and as its test (the run phase), it tries to reach what an environment must never reach: a host that is not a
 // registry, this computer's loopback (where the canary listens), the Docker host and its gateway, and names outside.
-// It prints one line, HOSTILE {...}, of what happened, and always exits 0: the test judges, not this script.
+// It prints one line, HOSTILE {...}, of what happened, and always exits 0: the test judges, not this script. As the
+// install script it also plants a test report full of passes, which the service must not read.
 const net = require("node:net");
 const dns = require("node:dns");
 const fs = require("node:fs");
 
 const { canary } = JSON.parse(fs.readFileSync("canary.json", "utf8"));
 const phase = process.argv[2] ?? "prepare";
+const FAKE_REPORT = '<testsuites><testsuite name="planted" tests="50"><testcase name="planted pass" classname="planted"/></testsuite></testsuites>';
+if (phase === "prepare") {
+  fs.mkdirSync("reports", { recursive: true });
+  fs.writeFileSync("reports/junit.xml", FAKE_REPORT);
+}
 
 const tcp = (host, port) =>
   new Promise((done) => {

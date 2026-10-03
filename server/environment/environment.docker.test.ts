@@ -4,7 +4,7 @@
 // skipped, with the reason, when it is not running. Pulls official images by digest the first time.
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -139,7 +139,14 @@ describe(`the project environment, in Docker${skipReason}`, () => {
       expect(hits).toBe(1);
       hits = 0;
 
-      const r = await run("hostile", settingPlan("Node", [["npm", "ci"]]), ["npm", "test"], { before: (dir) => writeFileSync(join(dir, "canary.json"), JSON.stringify({ canary: port })), testReport: "reports/none.xml" });
+      // The change carries a report full of passes, and its install script plants another: neither may be read.
+      const plant = (dir: string) => {
+        writeFileSync(join(dir, "canary.json"), JSON.stringify({ canary: port }));
+        mkdirSync(join(dir, "reports"), { recursive: true });
+        writeFileSync(join(dir, "reports/junit.xml"), '<testsuites><testsuite name="carried" tests="9"><testcase name="carried pass" classname="carried"/></testsuite></testsuites>');
+      };
+      const r = await run("hostile", settingPlan("Node", [["npm", "ci"]]), ["npm", "test"], { before: plant });
+      expect(r.tests).toMatchObject({ status: "missing", path: "reports/junit.xml" });
       const line = (phase: string) => {
         const text = r.results.map((x) => x.excerpt).join("\n");
         const m = new RegExp(`HOSTILE (\\{"phase":"${phase}".*\\})`).exec(text);
