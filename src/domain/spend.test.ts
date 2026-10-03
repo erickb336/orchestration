@@ -211,7 +211,7 @@ describe("runs with no recorded cost, while a building budget is set", () => {
       detail:
         "The budget's stop counts each at its run limit, the most it could cost; one with no spend limit (Codex has none) stops new work until you raise the budget or continue past it. Runs: run-a (codex · gpt-x, no price), run-b (codex · gpt-x, no price), run-c (codex · gpt-x, no price).",
       action: "Settings",
-      href: "#/settings/project",
+      href: "#/settings/project/budgets",
     });
     // Once every run has a recorded cost there is nothing to say.
     expect(item(withRuns([codexRun("run-d", "gpt-6.1-sol", { inputTokens: 1000, outputTokens: 100 })]))).toBeUndefined();
@@ -298,7 +298,7 @@ describe("the budget stop", () => {
     const budget = Math.floor(spend.usd * 100) / 100;
     const at2 = M.setBudgets(s, { buildingUsd: budget, maintenanceUsdPerMonth: null }, at(2));
     const [first] = needsYouItems(at2, T0);
-    expect(first).toMatchObject({ kind: "open", key: "budget", what: `The building budget is reached: $${spend.usd.toFixed(2)} of $${budget.toFixed(2)}`, href: "#/settings/project" });
+    expect(first).toMatchObject({ kind: "open", key: "budget", what: `The building budget is reached: $${spend.usd.toFixed(2)} of $${budget.toFixed(2)}`, href: "#/settings/project/budgets" });
     expect(first.kind === "open" && first.detail).toBe("Estimated at the providers' published prices. Nothing new starts; running work finishes. Raise the budget, or continue past it.");
     // Below the budget there is nothing to ask about the stop.
     expect(needsYouItems(M.setBudgets(s, { buildingUsd: spend.usd + 1, maintenanceUsdPerMonth: null }, at(2)), T0).some((i) => i.key === "budget")).toBe(false);

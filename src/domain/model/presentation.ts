@@ -146,14 +146,14 @@ export function stateLabel(s: State, t: Task): string {
   // A Checks step that would start next waits while the sandbox is not ready; nothing runs unsandboxed by itself.
   if (t.lifecycle === "active" && active.length === 0 && C.checksHeld(s) && t.steps.some((st) => st.state === "pending" && st.role === "checks" && st.dependsOn.every((d) => isSettled(getStep(t, d))))) return C.HELD_LABEL;
   // While shaping, a step that would start next waits for Start building; nothing is paused.
-  if (t.lifecycle === "active" && active.length === 0) return s.project.stage === "shaping" ? "Next step waits (shaping)" : "Queued for next step";
+  if (t.lifecycle === "active" && active.length === 0) return s.project.stage === "shaping" ? "Next step waits (in Vision)" : "Queued for next step";
   if (col === "proposed" && waitingOn(s, t)) return waitingLabel(s, t);
   // The roadmap's own hold is named as such; the user's hold before start keeps its own label. What follows
   // Start building is decided by the involvement setting at that moment, so the label reads it now; a
   // dependency wait is shown under the shaping hold too.
   if (col === "ready" && t.heldForShaping) {
     const dep = waitingOn(s, t);
-    return `Planned; waits until you start building${dep ? ` and on ${dep}` : ""}, then ${startFactoryPlan(s).release ? "starts on Autopilot" : "waits for your go-ahead (your involvement setting)"}`;
+    return `Planned; waits until you start the factory${dep ? ` and on ${dep}` : ""}, then ${startFactoryPlan(s).release ? "starts on Autopilot" : "waits for your go-ahead (your involvement setting)"}`;
   }
   // PE review comes first: the involvement setting applies once the PE agreed (ORC-029 2e).
   const review = peReviewHold(t.peReview);
@@ -162,7 +162,7 @@ export function stateLabel(s: State, t: Task): string {
   if (col === "ready" && t.holdBeforeStart) return "Waiting for your go-ahead";
   // A dependency wait is shown before the stage, with shaping noted.
   if (col === "ready" && waitingOn(s, t)) return waitingLabel(s, t);
-  if (col === "ready" && s.project.stage === "shaping") return "Ready (shaping)";
+  if (col === "ready" && s.project.stage === "shaping") return "Ready (in Vision)";
   return col[0].toUpperCase() + col.slice(1);
 }
 
@@ -170,7 +170,7 @@ export function stateLabel(s: State, t: Task): string {
 function waitingLabel(s: State, t: Task): string {
   const dep = waitingOn(s, t)!;
   const d = s.tasks.find((x) => x.id === dep);
-  return `Waiting on ${dep}${d && deferredBy(s, d) ? " (deferred)" : ""}${s.project.stage === "shaping" ? " (shaping)" : ""}`;
+  return `Waiting on ${dep}${d && deferredBy(s, d) ? " (deferred)" : ""}${s.project.stage === "shaping" ? " (in Vision)" : ""}`;
 }
 
 /** Why runs on this task are stopping, derived from the stop requests and current desired state. */

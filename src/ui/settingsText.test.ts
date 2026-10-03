@@ -55,7 +55,7 @@ describe("involvementText (each mode with the numbers it sets)", () => {
   });
 });
 
-describe("factorySettingsText (what Start building records with your agreement)", () => {
+describe("factorySettingsText (what Start the factory records with your agreement)", () => {
   const points = { changeOrders: "lead", startEachTask: false } as const;
   it("names the mode, the delivery with who merges, and who decides findings", () => {
     expect(factorySettingsText({ autonomy: "manual", delivery: { mode: "off", merge: "user" }, pausePoints: { ...points, tradeoffs: "user" } })).toBe(

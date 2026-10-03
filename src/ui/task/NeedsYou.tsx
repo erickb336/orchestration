@@ -1,6 +1,6 @@
 // Everything the task needs from you, once, at the top of the page, each with the buttons
-// that settle it: a pull request to merge or keep, failing final checks, findings to decide, an approach to
-// choose, the go-ahead.
+// that settle it: a pull request to merge or keep, failing final checks, findings to decide, a PE objection to
+// overrule (with your reason), an approach to choose, the go-ahead.
 
 import { useState } from "react";
 import * as M from "../../domain/model";
@@ -9,6 +9,8 @@ import { PrPanel } from "../Delivery";
 import { DecisionControls, FindingText } from "../Findings";
 import { Actions, Button, Card, Chip, Field, Input, Row, Rows } from "../kit";
 import { useStore } from "../store";
+import { OverruleForm } from "../settings/OverrulesCard";
+import { OVERRULE_OTHERWISE } from "../settings/overrules";
 import { needsYouCount, needsYouItems, type NeedsYouItem } from "./needsYouItems";
 
 export const NEEDS_YOU_ID = "needs-you";
@@ -54,6 +56,16 @@ export function NeedsYouCard({ state, task, items, onCompare }: { state: State; 
                     </div>
                   ))}
                   <p className="t-decision__state">The repair fixes what you decide "Fix" and what the reviewer marked auto-fix.</p>
+                </div>
+              );
+            case "pe":
+              return (
+                <div key="pe" className="t-needs__item">
+                  <p className="t-what">{it.holds[0].kind === "objects" ? "Answer the PE's objection:" : "Decide without the PE's review:"}</p>
+                  {it.holds.map((h) => (
+                    <OverruleForm key={h.stepId ?? "spec"} hold={h} />
+                  ))}
+                  <p className="t-decision__state">{OVERRULE_OTHERWISE}</p>
                 </div>
               );
             case "choose":

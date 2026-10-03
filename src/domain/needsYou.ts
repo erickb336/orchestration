@@ -112,10 +112,10 @@ const mergeAsked = (pr: PrDelivery) => pr.mergeRequested?.headSha === pr.headSha
 export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[] {
   const items: NeedsYouEntry[] = [];
   const stop = budgetStop(state);
-  if (stop) items.push({ kind: "open", key: "budget", what: stop.why, detail: budgetDetail(), action: "Settings", href: "#/settings/project" });
+  if (stop) items.push({ kind: "open", key: "budget", what: stop.why, detail: budgetDetail(), action: "Settings", href: "#/settings/project/budgets" });
   // Apart from the stop: while a building budget is set, a run with no recorded cost is the owner's to know about.
   const unknown = state.project.budgets.buildingUsd === null ? [] : (stop?.spend ?? buildingSpend(state)).unknown;
-  if (unknown.length) items.push({ kind: "open", key: "budget-unknown", what: unknownCostLine(unknown), detail: unknownCostDetail(unknown), action: "Settings", href: "#/settings/project" });
+  if (unknown.length) items.push({ kind: "open", key: "budget-unknown", what: unknownCostLine(unknown), detail: unknownCostDetail(unknown), action: "Settings", href: "#/settings/project/budgets" });
   // A change order the lead answered that still waits for you: its updates for your go-ahead ("ask me first"), or what
   // the lead left (pass 5). "Open" goes to the change order's screen (#/tasks/change-order/<rev>).
   for (const co of openChangeOrders(state)) {

@@ -1,4 +1,6 @@
-// Real-run test of the runtime adapters. Runs a Codex worker and a Claude worker CONCURRENTLY against a
+// Real-run test of the runtime adapters. In Vision, it runs one studio round first (the lead opens it, a designer
+// makes an artifact, the PE reviews it, and the test approves it into the draft as the owner would), then starts the
+// factory with the pre-flight's own command. Then it runs a Codex worker and a Claude worker CONCURRENTLY against a
 // throwaway git repository, pauses and resumes each and then the whole project, sends a note to each
 // running worker, lets both finish, and writes an evidence file. It uses your own credentials from the
 // environment and costs a small amount of usage.
@@ -32,16 +34,23 @@ import { homedir, hostname, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { leaksIn, scrubHomePaths } from "./recordLeaks.mjs";
 
-// The domain's rules, loaded through tsx (the npm scripts start node with it).
-const domain = await Promise.all([import("../src/domain/findings.ts"), import("../src/domain/model.ts")]).catch((e) => {
+// The domain's rules, and the pre-flight's command, loaded through tsx (the npm scripts start node with it).
+const domain = await Promise.all([
+  import("../src/domain/findings.ts"),
+  import("../src/domain/model.ts"),
+  import("../src/domain/studio/studio.ts"),
+  import("../src/domain/studio/blueprint.ts"),
+  import("../src/domain/studio/types.ts"),
+  import("../src/ui/preflight/preflightView.ts"),
+]).catch((e) => {
   console.error(`Run this with \`npm run test:real\` or \`npm run test:integration\` (node --import tsx): ${e instanceof Error ? e.message : e}`);
   process.exit(2);
 });
-const [F, M] = domain;
+const [F, M, S, B, ST, PF] = domain;
 
 const FAKE = process.argv.includes("--fake");
 /** PASSED needs exactly this many checks, all passing: a check that silently stopped running fails the test. */
-const EXPECTED_CHECKS = 16;
+const EXPECTED_CHECKS = 17;
 const ROOT = resolve(import.meta.dirname, "..");
 const PORT = Number(process.env.ORCHESTRATION_TEST_PORT ?? 5399);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -153,24 +162,39 @@ async function main() {
     await until("sample runs stopped", (x) => x.state.attempts.every((a) => a.outcome !== "running" && a.outcome !== "stopping"), 60000);
   }
 
-  // Project and limits. The project begins in Vision; the scenario starts the factory the way the owner does, with
-  // their agreement recorded (ORC-029): Manual (the lead plans nothing), each task waits for a go-ahead (the
+  // Project and limits. The project begins in Vision. Before the start, one studio round (ORC-029 pass 6): the owner
+  // chooses the kind of product (greeting.js is a code product, so the designer makes its interface) and asks the lead
+  // for one small round; the lead opens it and asks for a designer run, the PE reviews what the designer made, and the
+  // test approves the round into the draft, as the owner would. Then the factory starts the way the owner starts it:
+  // the pre-flight's own command, naming what the pre-flight showed (the draft and vision revisions, the Lock in
+  // summary's digest, every open item). Settings: Manual (the lead plans nothing), each task waits for a go-ahead (the
   // scenario starts both itself), decisions on findings come to the owner (the scenario answers them), delivery off
   // (finished work stays on the integration branch, and you merge it).
   await cmd("initProject", { name: "Real-run test", repoPath: repo, vision: "Keep the greeting module small and correct.", focus: "Real-run test" });
   s = await state();
   const createdInVision = s.state.project.stage === "shaping" && s.state.project.factoryStarts.length === 0;
+  await studioRound();
+  s = await state();
   const settings = { autonomy: "manual", delivery: { mode: "off", merge: "user" }, pausePoints: { tradeoffs: "user", changeOrders: "user", startEachTask: true } };
-  // The owner's agreement as the pre-flight shows it (the blueprint draft's and the vision's revisions, every open item),
-  // with these settings. Start the factory is the first Lock in: the start names the blueprint revision then in force.
-  const agreement = { ...M.startFactoryRequest(s.state), settings };
-  await cmd("startFactory", agreement);
+  const seen = PF.seenNow(s.state);
+  const start = PF.startFactoryCommand(seen, settings);
+  await cmd(start.name, start.args);
   s = await state();
   const starts = s.state.project.factoryStarts;
+  const inForce = B.currentBlueprint(s.state);
   check(
-    "the factory started only from the owner's startFactory, with its record",
-    createdInVision && s.state.project.stage === "building" && starts.length === 1 && starts[0].by === "user" && starts[0].blueprintRev === (s.state.blueprint.revisions.at(-1)?.rev ?? 0) && starts[0].visionRev === agreement.visionRev && JSON.stringify(starts[0].settings) === JSON.stringify(settings) && JSON.stringify(starts[0].openItems) === JSON.stringify(agreement.acceptOpen),
-    { createdIn: createdInVision ? "shaping" : s.state.project.stage, start: starts[0] ?? null },
+    "the factory started only from the pre-flight's command, with its record and the Lock in summary it showed",
+    createdInVision &&
+      s.state.project.stage === "building" &&
+      starts.length === 1 &&
+      starts[0].by === "user" &&
+      starts[0].blueprintRev === (inForce?.rev ?? 0) &&
+      starts[0].visionRev === seen.visionRev &&
+      JSON.stringify(starts[0].settings) === JSON.stringify(settings) &&
+      JSON.stringify(starts[0].openItems) === JSON.stringify(seen.open) &&
+      !!inForce?.lockIn &&
+      B.summaryDigest(inForce.lockIn.summary) === seen.summaryDigest,
+    { createdIn: createdInVision ? "shaping" : s.state.project.stage, start: starts[0] ?? null, blueprintRev: inForce?.rev ?? null, itemsInForce: B.blueprintItems(s.state).map((i) => `${i.title} v${i.version} (${i.status})`) },
   );
   await cmd("setRunLimits", { maxTurns: 12, timeoutMinutes: 5, maxBudgetUsd: 0.5 });
   s = await state();
@@ -378,6 +402,54 @@ async function main() {
   check("managed repository main branch untouched, and nothing committed by the investigation", git("rev-list", "--count", "main") === "1" && git("status", "--porcelain") === "");
   evidence.ok = Object.values(evidence.checks).length === EXPECTED_CHECKS && Object.values(evidence.checks).every((c) => c.ok);
   if (Object.values(evidence.checks).length !== EXPECTED_CHECKS) log(`✗ ${Object.values(evidence.checks).length} checks ran; PASSED needs exactly ${EXPECTED_CHECKS}`);
+}
+
+/** What the owner asks the lead for in Vision: one small round, so the real run stays short and cheap. */
+const STUDIO_ASK = "Start the studio with one small round on greeting.js as it is today: one designer run, one artifact, one take. Keep it short.";
+
+/**
+ * Vision before the start: the owner's kind of product and message, the lead's round, the designer's artifact and the
+ * PE's review, then the owner's approval of the round into the draft. One check; the details go into the evidence.
+ */
+async function studioRound() {
+  await cmd("setDomains", { domains: ["code"] });
+  await cmd("postMessage", { text: STUDIO_ASK });
+  // Settled: the lead's message run is over, no studio run is under way, and what the round made is ready for the
+  // owner (its PE review is over). A round that made nothing settles too, so the check can say so.
+  const made = (x) => {
+    const round = x.state.studio.rounds.at(-1);
+    return { round, artifacts: round ? S.latestArtifacts(x.state).filter((a) => a.round === round.n) : [] };
+  };
+  const { s: designed } = await until(
+    "the studio round: the lead's round, the designer's artifact and the PE's review",
+    (x) => {
+      const leadDone = x.state.leadRuns.some((r) => r.trigger === "message") && !x.state.leadRuns.some((r) => r.outcome === "running" || r.outcome === "stopping");
+      const quiet = leadDone && !x.state.studio.runs.some(ST.isUnderWay);
+      return quiet && made(x).artifacts.every((a) => S.readyForOwner(x.state, a));
+    },
+    20 * 60000,
+    1000,
+  );
+  const { round, artifacts } = made(designed);
+  const runs = designed.state.studio.runs.filter((r) => (round && r.round === round.n) || artifacts.some((a) => a.id === r.artifactId));
+  const designers = runs.filter((r) => r.kind === "designer");
+  const pe = runs.filter((r) => r.kind === "pe");
+  const verdicts = designed.state.studio.verdicts.filter((v) => artifacts.some((a) => a.id === v.artifactId && a.version === v.version));
+  record("studio round settled", {
+    round: round ? { n: round.n, focus: round.focus, openedByLead: !!round.leadRunId } : null,
+    artifacts: artifacts.map((a) => ({ id: a.id, kind: a.kind, title: a.title, version: a.version, pe: S.peReview(designed.state, a).status })),
+    designerRuns: designers.map((r) => ({ id: r.id, provider: r.provider, model: r.model, status: r.status })),
+    peRuns: pe.map((r) => ({ id: r.id, provider: r.provider, model: r.model, status: r.status })),
+    verdicts: verdicts.map((v) => `${v.verdict}: ${v.reasons.slice(0, 160)}`),
+  });
+  if (round) await cmd("approveRound", { round: round.n });
+  const after = await state();
+  const items = B.draftItems(after.state).filter((i) => artifacts.some((a) => a.id === i.artifactId));
+  check(
+    "Vision: the lead opened a round, a designer made an artifact, the PE reviewed it, and the owner approved it into the draft",
+    !!round?.leadRunId && artifacts.length > 0 && designers.some((r) => r.status === "completed") && pe.some((r) => r.status === "completed") && verdicts.length > 0 && items.some((i) => i.status === "approved"),
+    { draft: items.map((i) => `${i.title} v${i.version} (${i.status})`), openItems: B.openBlueprintItems(after.state).map((o) => `${o.item.title}: ${o.why}`) },
+  );
 }
 
 /** The evidence as committed to docs/real-runs: the service log is left out (it can hold anything a process printed),

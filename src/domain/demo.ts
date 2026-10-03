@@ -231,7 +231,7 @@ class DemoBuilder {
     const draftId = `vd-${leadRunId}`;
     const visionText =
       "Weekend Trips helps a small group of friends plan a weekend hike together: pick a trail, share the plan, pack the right things, and keep the map working with no signal. It should feel calm and dependable on a phone at a trailhead. Fewer, clearer screens beat more features.";
-    const draftReason = "Drafted from the shaping conversation and the trail research note";
+    const draftReason = "Drafted from the conversation in Vision and the trail research note";
     return {
       version: 19,
       seq: 1001,
@@ -312,8 +312,8 @@ class DemoBuilder {
       studio: emptyStudio(),
       blueprint: emptyBlueprint(),
       events: [
-        { id: "ev-1", at: at(4340), actor: "system", kind: "config", message: `${DEMO_PROJECT_NAME} created; shaping the vision with the lead` },
-        { id: "ev-2", at: at(4332), actor: "lead", kind: "vision", message: `Lead run ${leadRunId} drafted the vision (${draftId}) from the shaping conversation: ${draftReason}. It waits for you to accept, edit or dismiss it.` },
+        { id: "ev-1", at: at(4340), actor: "system", kind: "config", message: `${DEMO_PROJECT_NAME} created; it starts in Vision` },
+        { id: "ev-2", at: at(4332), actor: "lead", kind: "vision", message: `Lead run ${leadRunId} drafted the vision (${draftId}) from the conversation in Vision: ${draftReason}. It waits for you to accept, edit or dismiss it.` },
         { id: "ev-3", at: at(4320), actor: "user", kind: "vision", message: `Vision r1 by you: accepted the lead's draft ${draftId}` },
       ],
     };
@@ -321,7 +321,7 @@ class DemoBuilder {
 
   /** Delivery as pull requests held for you, the project's checks on, and the simulated GitHub checked (all through the real commands). */
   private settings() {
-    this.event(4318, "user", "config", "Building started");
+    this.event(4318, "user", "config", "The factory started");
     this.s = D.setDeliveryMode(this.s, { mode: "pr" }, this.at(4317));
     this.preflight(4317);
     this.s = D.reportBaseFetched(this.s, SIM_BASE, this.at(4316));

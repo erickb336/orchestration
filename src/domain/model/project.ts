@@ -146,7 +146,7 @@ export function initProject(state: State, init: { name: string; repoPath: string
   s.studio = emptyStudio();
   s.blueprint = emptyBlueprint();
   s.project.lastPlanningAt = undefined;
-  event(s, now, "user", "vision", `Project "${s.project.name}" created for ${s.project.repoPath}; shaping the vision first`);
+  event(s, now, "user", "vision", `Project "${s.project.name}" created for ${s.project.repoPath}; it starts in Vision`);
   return s;
 }
 

@@ -1,5 +1,6 @@
 // Settings › Quality: the checks every change must pass ("On · 2 commands", Suggest from
-// repository, Edit commands, the test report), PE review of new work, the default flow and the six flows, and the
+// repository, Edit commands, the test report), PE review of new work and the overrules of its objections (each acts at
+// once), the default flow and the six flows, and the
 // principles agents work by. Flows and principles are read-only here: they change through their files in the
 // repository.
 
@@ -11,6 +12,7 @@ import { FlowSteps } from "../FlowPicker";
 import { defaultFlowNote } from "../flowView";
 import { useStore } from "../store";
 import { sendInOrder, useDraft } from "./draft";
+import { OverrulesCard } from "./OverrulesCard";
 import { PeReviewCard, peReviewSteps } from "./PeReviewCard";
 import { SettingsCard, SettingsSection } from "./parts";
 import type { SectionId } from "./sections";
@@ -47,7 +49,7 @@ export function QualitySection({ current, onDirty }: { current: boolean; onDirty
     <SettingsSection
       id="quality"
       title="Quality"
-      help="What every change must pass, what new work must pass before it starts, and the flows and principles the work follows. Changes here wait for Save; Suggest from repository only fills in the commands."
+      help="What every change must pass, what new work must pass before it starts, and the flows and principles the work follows. Changes here wait for Save; Suggest from repository only fills in the commands, and Overrule acts at once."
       current={current}
       draft={draft}
       invalid={invalid}
@@ -57,6 +59,8 @@ export function QualitySection({ current, onDirty }: { current: boolean; onDirty
       <ChecksCard v={v} set={draft.set} />
 
       <PeReviewCard on={v.peReviewsNewWork} set={(on) => draft.set({ peReviewsNewWork: on })} state={state} />
+
+      <OverrulesCard />
 
       <SettingsCard id="flows" title="Flows" help="Every task runs one of these; the lead picks one per task, and you can change it on the task page. They are read-only here and change through their files in flows/.">
         <Field label="Default flow" hint={note ?? "Used by the lead's proposals and breakdowns that name none, and preselected in New task."} width="medium">

@@ -67,7 +67,7 @@ describe("the pre-flight", () => {
     const { s, at } = preflightScene();
     const blank = M.initProject(s, { name: "Blank", repoPath: "/tmp/blank", vision: "", focus: "" }, at(401));
     const { html, text } = page(blank, { agreed: true });
-    expect(text).toContain("The factory cannot start yet. Write or accept a vision first. Shape the vision");
+    expect(text).toContain("The factory cannot start yet. Write or accept a vision first. Write the vision");
     expect(startButton(html)).toContain('aria-disabled="true"');
     expect(html).toContain('<span class="k-btn-reason"');
     expect(html).toMatch(/<input[^>]*disabled=""[^>]*type="checkbox"[^>]*\/><span class="k-check__text">I have reviewed the blueprint/);

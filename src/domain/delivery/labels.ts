@@ -22,7 +22,7 @@ export function prLabel(s: State, t: Task, nowMs: number): PrLabel | undefined {
   const sim: { simulated?: true } = pr.simulated ? { simulated: true } : {};
   // While shaping, delivery says what it waits for, never "queued" or "preparing".
   const shaping = s.project.stage === "shaping" && !s.project.hold;
-  const WAITS = "waits until you start building (shaping)";
+  const WAITS = "waits until you start the factory";
   if (i.status !== "integrated") return { text: shaping ? `pull request ${pr.n + 1} ${WAITS}` : `preparing pull request ${pr.n + 1}`, tone: "plain", ...sim };
   const name = pr.number ? `PR #${pr.number}` : "PR";
   const plain = (what: string): PrLabel => ({ text: `${name} ${what}`, tone: "plain", ...sim });

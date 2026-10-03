@@ -106,7 +106,7 @@ describe("A. shaping end to end", () => {
     expect(r.trigger).toBe("message");
     const prompt = claude.runs.get(r.id)!.prompt;
     expect(prompt).toContain("Project stage: shaping");
-    expect(prompt).toContain("## Shaping the vision");
+    expect(prompt).toContain("## Draft the vision with the user");
     expect(prompt).toContain('"vision": {');
     expect(prompt).toContain("(not written yet)");
     claude.reply(r.id, "Here is a first draft and one planned task.", [proposal({ title: "One-command local dev", priority: 1 })], undefined, visionDraft());
@@ -121,7 +121,7 @@ describe("A. shaping end to end", () => {
     tick();
     tick();
     expect(M.activeAttempts(state())).toHaveLength(0); // still nothing runs, the user task included
-    expect(M.stateLabel(state(), task(planned.id))).toBe("Planned; waits until you start building, then starts on Autopilot");
+    expect(M.stateLabel(state(), task(planned.id))).toBe("Planned; waits until you start the factory, then starts on Autopilot");
     expect(state().leadRuns.filter((x) => x.trigger === "planning")).toHaveLength(0);
 
     const refused = failure(() => cmd("startFactory", startFactoryArgs(state())));
@@ -242,7 +242,7 @@ describe("C. a project in Vision with a run in flight stops nothing", () => {
     expect(state().artifacts.some((x) => x.attemptId === a.id)).toBe(true);
     for (let i = 0; i < 3; i++) tick();
     expect(M.activeAttempts(state())).toHaveLength(0);
-    expect(M.stateLabel(state(), task(id))).toBe("Next step waits (shaping)");
+    expect(M.stateLabel(state(), task(id))).toBe("Next step waits (in Vision)");
     expect(M.stateLabel(state(), task(id))).not.toMatch(/Paused/);
     cmd("startFactory", startFactoryArgs(state()));
     tick();
@@ -339,7 +339,7 @@ describe("F. coverage and questions", () => {
   it("a shaping reply with a draft, questions and coverage is stored and survives a reopen of the store; the answers arrive as one message", () => {
     init("shaping");
     const r = ask("I want fast note capture on my phone.");
-    expect(claude.runs.get(r.id)!.prompt).toContain("## Shaping the vision");
+    expect(claude.runs.get(r.id)!.prompt).toContain("## Draft the vision with the user");
     expect(claude.runs.get(r.id)!.prompt).toContain('"coverage": {');
     expect(claude.runs.get(r.id)!.prompt).toContain('"questions": [');
     expect(claude.runs.get(r.id)!.prompt).toContain("- intent: Intent and why now — open (not reported yet)");

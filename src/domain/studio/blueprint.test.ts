@@ -350,6 +350,29 @@ describe("the Lock in summary", () => {
     expect(B.currentBlueprint(done)!.lockIn).toEqual({ by: "user", summary: seen });
   });
 
+  it("holds while costs tick: a run that finishes while the owner reads changes the spend, not the agreement", () => {
+    const { s: base, search } = locked();
+    const changed = revised(base, search, 7);
+    const s = approve(runCommand(changed.s, "setBudgets", { buildingUsd: 40, maintenanceUsdPerMonth: 10 }, at(8)).state, search, changed.version);
+    const seen = B.lockInSummary(s);
+    const shown = { draftRev: seen.draftRev, summaryDigest: B.summaryDigest(seen) };
+    // Two lead runs finish while the owner reads: one with a reported cost, one on a model with no price (no recorded cost).
+    const finish = (x: State, sec: number, usage: Parameters<typeof M.reportLeadStopped>[4]) => {
+      const r = M.startLeadRun(M.postMessage(x, "What next?", at(sec)), { provider: "claude", model: "claude-sample-large", trigger: "message" }, at(sec));
+      return M.reportLeadStopped(r.state, r.runId, at(sec + 1), false, usage);
+    };
+    const ticked = finish(finish(s, 9, { costUsd: 0.3 }), 11, { inputTokens: 100, outputTokens: 10 });
+    const now = B.lockInSummary(ticked).budgets.building;
+    expect([now.spentUsd - seen.budgets.building.spentUsd, now.unknownRuns - seen.budgets.building.unknownRuns]).toEqual([0.3, 1]);
+    expect(B.summaryDigest(B.lockInSummary(ticked))).toBe(shown.summaryDigest);
+    // The agreement holds, and the record keeps the spend at the Lock in.
+    const done = run(ticked, "lockIn", shown, at(13)).state;
+    expect(B.currentBlueprint(done)!.lockIn!.summary.budgets.building).toEqual(now);
+    // A change to what the owner agrees to still makes it stale: a new building budget.
+    const budgeted = runCommand(ticked, "setBudgets", { buildingUsd: 50, maintenanceUsdPerMonth: 10 }, at(13)).state;
+    expect(() => run(budgeted, "lockIn", shown, at(14))).toThrow(StaleWriteError);
+  });
+
   it("states the budgets: the spend and maintenance so far, the PE's estimate of each added or changed item, or none (never $0)", () => {
     const { s: base, search } = locked();
     let s = runCommand(base, "setBudgets", { buildingUsd: 40, maintenanceUsdPerMonth: 10 }, at(6)).state;
@@ -401,7 +424,7 @@ describe("Start the factory: the first Lock in", () => {
     expect(B.blueprintItems(s).map((i) => i.title)).toEqual(["Trail search"]);
     expect(B.draftChanges(s).open.map((i) => i.id)).toEqual([open.id]);
     expect(s.blueprint.changeOrders).toEqual([]);
-    expect(s.events.at(-1)?.message).toBe(`Building started: you agreed to vision r1 and blueprint r1 with 9 open areas confirmed (${areas.join(", ")}) and 1 open blueprint item confirmed (Trip plan)`);
+    expect(s.events.at(-1)?.message).toBe(`The factory started: you agreed to vision r1 and blueprint r1 with 9 open areas confirmed (${areas.join(", ")}) and 1 open blueprint item confirmed (Trip plan)`);
   });
 
   it("with nothing approved, starts with nothing in force: no revision", () => {

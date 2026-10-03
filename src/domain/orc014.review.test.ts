@@ -253,10 +253,10 @@ describe("Start building's labels tell the truth", () => {
     const { state, id, dep } = roadmap();
     const a = autopilot(state);
     expect(M.startFactoryPlan(a)).toMatchObject({ release: true, roadmap: [expect.objectContaining({ id })], userHeld: [] });
-    expect(M.stateLabel(a, a.tasks.find((t) => t.id === id)!)).toBe(`Planned; waits until you start building and on ${dep}, then starts on Autopilot`);
+    expect(M.stateLabel(a, a.tasks.find((t) => t.id === id)!)).toBe(`Planned; waits until you start the factory and on ${dep}, then starts on Autopilot`);
     const c = checkin(a);
     expect(M.startFactoryPlan(c).release).toBe(false);
-    expect(M.stateLabel(c, c.tasks.find((t) => t.id === id)!)).toBe(`Planned; waits until you start building and on ${dep}, then waits for your go-ahead (your involvement setting)`);
+    expect(M.stateLabel(c, c.tasks.find((t) => t.id === id)!)).toBe(`Planned; waits until you start the factory and on ${dep}, then waits for your go-ahead (your involvement setting)`);
     // The setting changed after the proposal: what Start building does follows the setting now, as the label said.
     const started = startFactoryAsOwner(c, at(4)).tasks.find((t) => t.id === id)!;
     expect(started.holdBeforeStart).toBe(true);

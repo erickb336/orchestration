@@ -68,7 +68,7 @@ describe("the roadmap hold is its own flag", () => {
     expect(held.events.at(-2)!.message).toMatch(/No longer held by the roadmap/);
     const p = promote(held);
     expect(M.stateLabel(p, task(p, a.id))).toBe("Waiting for your go-ahead");
-    expect(M.stateLabel(p, task(p, b.id))).toBe("Planned; waits until you start building, then starts on Autopilot");
+    expect(M.stateLabel(p, task(p, b.id))).toBe("Planned; waits until you start the factory, then starts on Autopilot");
     const built = startFactoryAsOwner(p, at(5));
     expect(task(built, a.id).holdBeforeStart).toBe(true); // never overridden
     expect(task(built, b.id)).toMatchObject({ holdBeforeStart: false });
@@ -84,11 +84,11 @@ describe("the roadmap hold is its own flag", () => {
     const [t] = M.roadmapTasks(c);
     expect(t).toMatchObject({ heldForShaping: true, holdBeforeStart: true });
     const p = promote(c);
-    expect(M.stateLabel(p, task(p, t.id))).toBe("Planned; waits until you start building, then waits for your go-ahead (your involvement setting)");
+    expect(M.stateLabel(p, task(p, t.id))).toBe("Planned; waits until you start the factory, then waits for your go-ahead (your involvement setting)");
     const started = M.startHeldTask(p, t.id, at(5));
     expect(task(started, t.id).holdBeforeStart).toBe(false);
     expect(task(started, t.id).heldForShaping).toBeUndefined();
-    expect(started.events.at(-1)!.message).toMatch(/once you start building/);
+    expect(started.events.at(-1)!.message).toMatch(/once you start the factory/);
     expect(running(promote(started, 6), t.id)).toHaveLength(0); // the stage still holds it
     const built = startFactoryAsOwner(started, at(7));
     expect(task(built, t.id).holdBeforeStart).toBe(false); // the user's release stands, whatever the involvement setting
@@ -191,7 +191,7 @@ describe("no empty vision while building", () => {
     expect(M.currentVision(empty).text).toBe("");
     expect(M.startFactoryBlocker(empty)).toBe("Write or accept a vision first.");
     expect(seed().project.stage).toBe("building"); // the sample keeps working as before
-    expect(() => M.editVision(seed(), 1, "   ", "f", "clear", at(1))).toThrow("The vision cannot be empty while building.");
+    expect(() => M.editVision(seed(), 1, "   ", "f", "clear", at(1))).toThrow("The vision cannot be empty while the factory runs.");
     expect(M.currentVision(seed()).rev).toBe(1);
     const cleared = M.editVision(shaping(seed()), 1, "", "", "clear", at(1));
     expect(M.currentVision(cleared)).toMatchObject({ rev: 2, text: "" });
@@ -229,11 +229,11 @@ describe("a no-op accept, and a dependency wait while shaping", () => {
 
   it("a dependency wait is shown while shaping, with shaping noted, before the stage's own label", () => {
     const s = shaping(seed());
-    expect(M.stateLabel(s, task(s, "EX-007"))).toBe("Waiting on EX-002 (shaping)");
+    expect(M.stateLabel(s, task(s, "EX-007"))).toBe("Waiting on EX-002 (in Vision)");
     const ready = { ...s, tasks: s.tasks.map((t) => (t.id === "EX-007" ? { ...t, lifecycle: "ready" as const } : t)) };
-    expect(M.stateLabel(ready, task(ready, "EX-007"))).toBe("Waiting on EX-002 (shaping)");
+    expect(M.stateLabel(ready, task(ready, "EX-007"))).toBe("Waiting on EX-002 (in Vision)");
     expect(M.stateLabel(seed(), task(seed(), "EX-007"))).toBe("Waiting on EX-002");
     const free = { ...ready, tasks: ready.tasks.map((t) => (t.id === "EX-007" ? { ...t, dependsOn: [] } : t)) };
-    expect(M.stateLabel(free, task(free, "EX-007"))).toBe("Ready (shaping)");
+    expect(M.stateLabel(free, task(free, "EX-007"))).toBe("Ready (in Vision)");
   });
 });

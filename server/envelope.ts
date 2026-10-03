@@ -1478,7 +1478,7 @@ export function buildLeadEnvelope(state: State, run: LeadRun, access: "read", do
   // Steering is available only to runs that answer user messages, never decided by the trigger.
   const canSteer = run.messageIds.length > 0;
   const mode = p.steeringMode;
-  // The shaping brief, coverage and the areas' questions go to message runs while shaping. The studio brief and the
+  // The Vision brief (the stage value is "shaping"), coverage and the areas' questions go to message runs while shaping. The studio brief and the
   // vision draft go to message runs in either stage (ORC-029 pass 5, r10): Vision stays open while the factory runs, on
   // the draft. A planning run never drafts (the domain refuses).
   const shaping = p.stage === "shaping";
@@ -1593,14 +1593,14 @@ Planning runs cannot steer. Serve the current focus; do not re-propose deferred 
   const studioBrief = canDraft ? studioBriefSection(state, repo) : "";
   const shapingBrief = shaping
     ? `
-## Shaping the vision
-Project stage: shaping. No worker step runs and no planning run starts until the user starts building; nothing is paused. You are the user's active partner in shaping the vision: a discovery interview in which you also contribute ideas. Each turn:
+## Draft the vision with the user
+Project stage: shaping (the user sees it as Vision; say Vision, never shaping). No worker step runs and no planning run starts until the user starts the factory; nothing is paused. You are the user's active partner in working out the vision: a discovery interview in which you also contribute ideas. Each turn:
 - Restate what you understand so far in a few lines ("Here is what I understand…"), point out contradictions, and label anything you assume as an assumption.
 - Ask 3–5 targeted questions about the most important open areas, each with a one-line reason why it matters. Ground them in what you already know: the conversation, the vision text, the vision documents (the "Vision documents" section above holds the user's own material: read it before asking, and cite the document a question or a draft rests on), and the repository you can read. When the code or the documents answer a question, say what you found instead of asking. Ask about intent first (why, for whom, what outcome); keep solution ideas separate. Prefer concrete questions: offer 2–3 options or examples where that helps the user answer quickly.
 - Keep a living draft. From the first exchange that gives you enough to start, propose the whole vision in "vision" and improve it every turn: fill gaps with proposed defaults, each marked "(assumption)" for the user to confirm or change. Do not wait for full coverage; the coverage and the open questions say what is still uncertain. The draft replaces the current text, so keep what already stands and still holds. The user accepts, edits or dismisses each draft; it never applies by itself, and a newer draft replaces one still open. Do not resend a draft the user dismissed unless they ask.
 - For open areas, offer options with a recommendation ("I'd suggest A, because …; alternatives: B, C") so the user can answer by picking.
 - Suggest what the user may not have considered: edge cases, users they did not mention, risks, success measures, a smaller first milestone, and non-goals that keep scope in check. Ground each suggestion in the conversation, the documents or the repository.
-- Once intent and scope are at least partly clear, propose a first roadmap as proposals and say how each serves the vision. They are held until the user starts building; on Autopilot they start then.
+- Once intent and scope are at least partly clear, propose a first roadmap as proposals and say how each serves the vision. They are held until the user starts the factory; on Autopilot they start then.
 - Report "coverage" for every area below ("clear", "partial" or "open"); an area you leave out counts as open. Steering still applies to the focus and priorities. Never start work.
 
 Areas, with the coverage you last reported:
