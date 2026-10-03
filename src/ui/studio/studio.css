@@ -302,6 +302,8 @@ h6.st-doc__h { font-size: var(--fs-meta); color: var(--muted); }
 .st-vision__more { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); align-items: start; }
 .st-vision__more > .k-disc[open] { flex-basis: 100%; }
 .st-vision .v-questions h3 { margin: var(--space-2) 0; font-size: var(--fs-body); }
+/* The lead's draft of the vision waits for you here; its comparison scrolls inside, so the studio stays near the top. */
+.st-vision .v-draft .diff { max-height: 12rem; }
 
 /* Home's one line of the vision: the label, the text (cut to one line), and the links; they wrap on a phone. */
 .st-visionline { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); padding-block: var(--space-2); }

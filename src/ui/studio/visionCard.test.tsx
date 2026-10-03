@@ -126,10 +126,15 @@ describe("Home's line of the vision", () => {
     const s = inVision(buildSeed(Date.parse("2026-10-02T09:00:00Z"), { inFlightRuns: false }), "2026-10-02T09:00:00.000Z");
     const asked = M.postMessage(s, "Hikers who lose signal.", "2026-10-02T09:01:00.000Z");
     const run = M.startLeadRun(asked, { provider: "claude", model: "auto", trigger: "message" }, "2026-10-02T09:02:00.000Z");
-    const drafted = M.completeLeadRun(run.state, run.runId, { reply: "A draft.", proposals: [], vision: { text: "Hikers plan trips offline.", focus: "Offline", reason: "From your message" } }, "2026-10-02T09:03:00.000Z");
+    const question = { question: "Who is this for first?", why: "The first users decide the first milestone.", area: "audience", options: ["Just you", "A small team"] };
+    const drafted = M.completeLeadRun(run.state, run.runId, { reply: "A draft.", proposals: [], vision: { text: "Hikers plan trips offline.", focus: "Offline", reason: "From your message" }, questions: [question] }, "2026-10-02T09:03:00.000Z");
     expect(M.openVisionDraft(drafted)).toBeDefined();
     expect(visible(renderScreen(<VisionLine />, drafted))).toContain("The lead drafted a new vision Open Vision");
-    // In Vision, the draft itself is in the card, to accept, edit or dismiss.
-    expect(card(drafted).text).toContain("The lead drafted a vision");
+    // In Vision, the draft itself is in the card, to accept, edit or dismiss; the lead's questions are one click away.
+    const { html, text } = card(drafted);
+    expect(text).toContain("The lead drafted a vision");
+    expect(text).toContain("Accept as r2");
+    expect(html).toMatch(/<details class="k-disc"><summary class="k-disc__summary">The lead&#x27;s questions<span class="k-count">1<\/span><\/summary>/);
+    expect(text).toContain("Who is this for first?");
   });
 });

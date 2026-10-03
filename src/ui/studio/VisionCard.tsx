@@ -134,8 +134,13 @@ export function VisionCard() {
             <span className="muted">Focus:</span> {vision.focus || <span className="muted">none</span>}
           </p>
         )}
-        {asked && <QuestionsForm key={asked.message.id} questions={asked.questions} />}
         <div className="st-vision__more">
+          {/* The lead's questions about the vision (from the conversation), answerable here, one click away so the studio stays near the top. */}
+          {asked && (
+            <Disclosure label="The lead's questions" count={asked.questions.length}>
+              <QuestionsForm key={asked.message.id} questions={asked.questions} />
+            </Disclosure>
+          )}
           <Disclosure label="History" count={state.project.visions.length} open={history} onToggle={setHistory}>
             <VisionHistory state={state} scrollTo={history && typeof location !== "undefined" && historyRequested(location.hash)} />
           </Disclosure>
