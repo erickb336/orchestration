@@ -28,6 +28,7 @@ export const CARD_SECTION = {
   "agents-at-once": "agents",
   "run-limits": "agents",
   checks: "quality",
+  "pe-review": "quality",
   flows: "quality",
   principles: "quality",
   "pull-requests": "advanced",

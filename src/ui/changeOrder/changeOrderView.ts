@@ -4,7 +4,6 @@
 // rows, what is outstanding and the record when it closed. This module only words them. Pure.
 
 import * as M from "../../domain/model";
-import { rowOf } from "../../domain/model/changeOrderUpdates";
 import { lastObjection, MAX_PE_REVIEW_ROUNDS } from "../../domain/peReview";
 import type { BlueprintItem, ChangeOrder, ChangeOrderLineKind } from "../../domain/studio/types";
 import type { PeReviewState, State, Task } from "../../domain/types";
@@ -75,8 +74,9 @@ const LEADING: Record<ChangeOrderLineKind, string> = { "update-spec": "Updated "
 
 function lineWords(s: State, co: ChangeOrder, v: M.ChangeOrderLineView): LineWords {
   const { line } = v;
-  const row = rowOf(s, line.changeId);
+  // The steering row that carries the line (`${changeSetId}.${n}`): its state is the line's.
   const set = s.steering.find((x) => x.id === line.changeId.slice(0, line.changeId.lastIndexOf(".")));
+  const row = set?.changes.find((c) => c.id === line.changeId);
   const work: Task | undefined = v.workTaskId ? s.tasks.find((t) => t.id === v.workTaskId) : undefined;
   const lead = LEADING[line.kind];
   const text = lead && line.words.startsWith(lead) ? line.words.slice(lead.length) : line.words;

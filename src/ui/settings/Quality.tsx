@@ -1,6 +1,7 @@
 // Settings › Quality: the checks every change must pass ("On · 2 commands", Suggest from
-// repository, Edit commands), the default flow and the six flows, and the principles agents work by. Flows and
-// principles are read-only here: they change through their files in the repository.
+// repository, Edit commands, the test report), PE review of new work, the default flow and the six flows, and the
+// principles agents work by. Flows and principles are read-only here: they change through their files in the
+// repository.
 
 import { useConfirm, Chip, Disclosure, Field, Select } from "../kit";
 import { effectiveDefault } from "../../domain/flows";
@@ -10,10 +11,11 @@ import { FlowSteps } from "../FlowPicker";
 import { defaultFlowNote } from "../flowView";
 import { useStore } from "../store";
 import { sendInOrder, useDraft } from "./draft";
+import { PeReviewCard, peReviewSteps } from "./PeReviewCard";
 import { SettingsCard, SettingsSection } from "./parts";
 import type { SectionId } from "./sections";
 
-type QualityDraft = ChecksDraft & { defaultFlow: string };
+type QualityDraft = ChecksDraft & { defaultFlow: string; peReviewsNewWork: boolean };
 
 /** Orchestrator's own principles; the others are adapted from pstack. */
 const OWN_PRINCIPLES = ["contextualize-and-write-for-the-reader", "write-controlled-english"] as const;
@@ -25,7 +27,7 @@ export function QualitySection({ current, onDirty }: { current: boolean; onDirty
   const flows = state.flows;
   const stored = state.project.defaultFlowId;
   const effective = effectiveDefault(state);
-  const live: QualityDraft = { ...liveChecks(state), defaultFlow: flows.some((f) => f.id === stored) ? stored : effective.id };
+  const live: QualityDraft = { ...liveChecks(state), defaultFlow: flows.some((f) => f.id === stored) ? stored : effective.id, peReviewsNewWork: state.project.peReviewsNewWork };
   const draft = useDraft(live);
   const v = draft.value;
   const checksChanged = new Set([...draft.changed].filter((k): k is keyof ChecksDraft => (CHECKS_KEYS as readonly string[]).includes(k)));
@@ -35,15 +37,17 @@ export function QualitySection({ current, onDirty }: { current: boolean; onDirty
   const save = async (begin: () => void) => {
     const checks = await checksSteps(state, v, checksChanged, send, confirm);
     if (!checks) return false;
+    const pe = await peReviewSteps(state, v.peReviewsNewWork, draft.changed.has("peReviewsNewWork"), send, confirm);
+    if (!pe) return false;
     begin();
-    return sendInOrder([...checks, () => (draft.changed.has("defaultFlow") ? send("setDefaultFlow", { flowId: v.defaultFlow }) : null)]);
+    return sendInOrder([...checks, () => (draft.changed.has("defaultFlow") ? send("setDefaultFlow", { flowId: v.defaultFlow }) : null), ...pe]);
   };
 
   return (
     <SettingsSection
       id="quality"
       title="Quality"
-      help="What every change must pass, and the flows and principles the work follows. Changes here wait for Save; Suggest from repository only fills in the commands."
+      help="What every change must pass, what new work must pass before it starts, and the flows and principles the work follows. Changes here wait for Save; Suggest from repository only fills in the commands."
       current={current}
       draft={draft}
       invalid={invalid}
@@ -51,6 +55,8 @@ export function QualitySection({ current, onDirty }: { current: boolean; onDirty
       onDirty={onDirty}
     >
       <ChecksCard v={v} set={draft.set} />
+
+      <PeReviewCard on={v.peReviewsNewWork} set={(on) => draft.set({ peReviewsNewWork: on })} state={state} />
 
       <SettingsCard id="flows" title="Flows" help="Every task runs one of these; the lead picks one per task, and you can change it on the task page. They are read-only here and change through their files in flows/.">
         <Field label="Default flow" hint={note ?? "Used by the lead's proposals and breakdowns that name none, and preselected in New task."} width="medium">

@@ -10,7 +10,9 @@ import type { State } from "../../domain/types";
 import type { SendResult } from "../store";
 import { renderScreen, visible } from "../testStore";
 import { ChecksCard, checksProblem, checksSteps, liveChecks } from "../ChecksSettings";
+import { answerChangeOrder, at, changeOrdered, fullAnswer } from "../../domain/testing/changeOrders";
 import { sendInOrder } from "./draft";
+import { peReviewSteps, peReviewWords } from "./PeReviewCard";
 import { QualitySection } from "./Quality";
 import { PreviewCard } from "./PreviewCard";
 import { ProjectSection } from "./Project";
@@ -68,6 +70,45 @@ describe("Settings › Quality › Checks: the test report", () => {
 
 /** Quality's checks steps for a changed test report (the checks are on already, so nothing asks first). */
 const checksStepsNoAsk = async (s: State, v: ReturnType<typeof liveChecks>, send: Send) => (await checksSteps(s, v, new Set(["testReport"]), send as never, async () => true)) ?? [];
+
+describe("Settings › Quality › PE review of new work", () => {
+  /** A factory where the lead's change order updates wait for the PE: T-002 (a spec update) and three new tasks. */
+  const waiting = () => {
+    const f = changeOrdered();
+    return answerChangeOrder(f.s, fullAnswer(f), 20).s;
+  };
+
+  it("says what it holds, what it costs, this project's figures, and what waits for the PE now", () => {
+    const s = waiting();
+    const text = visible(renderScreen(<QualitySection current onDirty={noop} />, s));
+    expect(text).toContain(
+      "PE review of new work While it is on, new work waits for the PE before it starts: the lead's proposals and its change order updates, a Goal's breakdown and a Feature's design. Code changes keep the code and security reviews. The PE reviews new work before it starts Each piece of new work gets one to three PE runs, counted in the building budget, and it starts later. After three rounds the PE's objection goes to you. This project has no PE run on new work yet, so there is no figure for it. Waiting for the PE now: T-002, T-005, T-006, T-007.",
+    );
+    // With PE runs on record: their number and recorded cost; a run with no cost is named, never counted as $0.
+    const ran = structuredClone(s);
+    const run = { kind: "pe" as const, provider: "claude" as const, model: "m", status: "completed" as const, brief: "", askedAt: at(30), workspace: "pe" };
+    ran.studio.runs.push({ ...run, id: "pe-1", review: { taskId: "T-005", specRev: 1 }, usage: { costUsd: 0.42 } }, { ...run, id: "pe-2", review: { taskId: "T-006", specRev: 1 }, usage: { costUsd: 0.3 } }, { ...run, id: "pe-3", review: { taskId: "T-007", specRev: 1 } });
+    expect(peReviewWords(ran).sofar).toBe("This project so far: 3 PE runs on new work, $0.72 recorded; 1 run with no recorded cost.");
+  });
+
+  it("turning it off asks first when work waits for the PE, then saves through setPeReviewsNewWork, which releases it", async () => {
+    const s = waiting();
+    const asked: string[] = [];
+    // You say no: nothing is sent.
+    expect(await peReviewSteps(s, false, true, async () => ({ ok: true }), async (o) => (asked.push(String(o.text)), false))).toBeNull();
+    expect(asked).toEqual(["T-002, T-005, T-006, T-007 wait for the PE now. They start without its review. An objection that already reached you stays with you."]);
+    // You say yes: the command turns it off, and the work the PE was reviewing is released.
+    const r = await save(s, async (send) => (await peReviewSteps(s, false, true, send, async () => true))!);
+    expect(r.sent).toEqual([["setPeReviewsNewWork", { on: false }]]);
+    expect(r.state.project.peReviewsNewWork).toBe(false);
+    expect(r.state.tasks.find((t) => t.id === "T-005")!.peReview).toMatchObject({ status: "ended", ended: { by: "owner" } });
+    expect(peReviewWords(r.state).now).toBeUndefined();
+    // On again: nothing to ask; unchanged: nothing to send.
+    const back = await save(r.state, async (send) => (await peReviewSteps(r.state, true, true, send, async () => false))!);
+    expect([back.sent, back.state.project.peReviewsNewWork]).toEqual([[["setPeReviewsNewWork", { on: true }]], true]);
+    expect(await peReviewSteps(s, true, false, async () => ({ ok: true }), async () => true)).toEqual([]);
+  });
+});
 
 describe("Settings › Project › Preview for evidence", () => {
   it("not set up: the form says so and offers the install the service would use", () => {
