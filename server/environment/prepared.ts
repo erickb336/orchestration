@@ -22,7 +22,7 @@ import { join } from "node:path";
 import type { EnvironmentRunRecord } from "../../src/domain/environment";
 import type { CheckResult } from "../../src/domain/types";
 import { OUTPUT_CAP, notRun, resultOf, type Captured, type EnvironmentAssignment, type PlannedCheck } from "../checks";
-import { dockerEnv, findDocker, runDocker, startContainer } from "../studio/container";
+import { dockerEnv, findDocker, runDocker, startContainer, waitGone } from "../studio/container";
 import { addedEntries, cloneEntries, copyWorktree, listTree, prepareInputs, prepareKey, removeTree } from "./copy";
 import { MOUNTABLE, PROXY_IMAGE, PROXY_PORT, PROXY_VARIABLES, buildArgs, commitArgs, envName, networkArgs, phaseArgs, proxyArgs } from "./docker";
 
@@ -123,7 +123,17 @@ interface Session {
   stopped: boolean;
   /** Ends the container in flight. */
   current?: () => void;
+  /**
+   * Every container that mounted the copy and may still run: the copy is not removed until Docker no longer lists
+   * them, because a container that still runs can swap a folder of the copy for a link to this computer's files.
+   */
+  mounted: Set<string>;
+  /** Why the copy must not be touched again: a container that mounts it did not go away. */
+  unsafe?: string;
 }
+
+/** How long the clean-up waits for Docker to stop listing a container it removed. */
+const GONE_WITHIN_MS = 30_000;
 
 /** What the probe's client container saw, as it printed it. */
 export interface EnvProbeFacts {
@@ -221,7 +231,7 @@ export class PreparedEnvironments {
    */
   async withPrepared<T>(req: PrepareRequest, use: (p: PreparedCopy) => Promise<T>): Promise<PreparedOutcome<T>> {
     const release = await turn();
-    const s: Session = { req, docker: "", results: [], stopped: false };
+    const s: Session = { req, docker: "", results: [], stopped: false, mounted: new Set() };
     const stopped = (): PreparedOutcome<T> => ({ ok: false, reason: "stopped", detail: "The step was stopped.", prepare: s.results });
     const onAbort = () => {
       s.stopped = true;
@@ -253,13 +263,17 @@ export class PreparedEnvironments {
         imageEnv: st.imageEnv,
         record: st.record,
         run: (argv, timeoutMs) => this.execIn(s, phaseArgs({ name: envName("run"), image: st.runImage, work: d.work, argv, phase: { kind: "run" }, imageEnv: st.imageEnv }), timeoutMs),
-        track: (name) => remember(name, docker, this.denv, "container"),
+        track: (name) => {
+          s.mounted.add(name);
+          remember(name, docker, this.denv, "container");
+        },
+        // The step removed it; the clean-up still checks that Docker no longer lists it.
         untrack: (name) => void LIVE.delete(name),
       });
       return { ok: true, value, record: st.record, prepare: s.results };
     } finally {
       req.signal?.removeEventListener("abort", onAbort);
-      this.cleanup(s);
+      await this.cleanup(s);
       release();
     }
   }
@@ -309,11 +323,25 @@ export class PreparedEnvironments {
     return { kind: "prepared", runImage: out.ok && out.imageId ? out.imageId : image.id, imageEnv, ok: out.ok, record };
   }
 
-  /** The step's stage goes when the step ends, however it ends. */
-  private cleanup(s: Session): void {
+  /**
+   * The step's stage goes when the step ends, however it ends, but only once every container that mounted it is gone:
+   * each is removed, and Docker must stop listing it. One that stays keeps the stage where it is, with the reason.
+   */
+  private async cleanup(s: Session): Promise<void> {
     const stage = s.d?.run;
     if (!stage) return;
     s.d = undefined;
+    const left: string[] = [];
+    for (const name of s.mounted) {
+      let r = await waitGone(s.docker, name, this.denv, 0);
+      if (!r.gone) {
+        await runDocker(s.docker, ["rm", "--force", name], { env: this.denv, timeoutMs: 30_000 });
+        r = await waitGone(s.docker, name, this.denv, GONE_WITHIN_MS);
+      }
+      if (r.gone) LIVE.delete(name);
+      else left.push(r.reason);
+    }
+    if (s.unsafe || left.length) return this.log(`environment: ${stage} stays, because a container that mounts it may still run: ${[s.unsafe, ...left].filter(Boolean).join(" ")}`);
     try {
       removeTree(stage);
     } catch (e) {
@@ -321,25 +349,37 @@ export class PreparedEnvironments {
     }
   }
 
-  /** One container of a phase, to its end: its exit code and the end of its output. A stop request or its limit ends it. */
+  /**
+   * One container of a phase, to its end: its exit code and the end of its output. A stop request or its limit ends
+   * it, and then it returns only once Docker no longer lists the container (else the copy is marked unsafe).
+   */
   private async execIn(s: Session, args: string[], timeoutMs: number): Promise<Captured> {
+    if (s.unsafe) return { exitCode: undefined, stdout: "", stderr: `Not run: ${s.unsafe}`, timedOut: false, capped: false, ended: true };
     const name = args[args.indexOf("--name") + 1];
+    s.mounted.add(name);
     const c = startContainer(s.docker, args, { env: this.denv, name, cap: OUTPUT_CAP });
     let timedOut = false;
     let ended = false;
+    let stopping: Promise<void> | undefined;
     s.current = () => {
       ended = true;
-      void c.stop();
+      stopping ??= c.stop();
     };
     if (s.stopped) s.current();
     const t = setTimeout(() => {
       timedOut = true;
-      void c.stop();
+      stopping ??= c.stop();
     }, timeoutMs);
     const r = await c.done;
     clearTimeout(t);
     s.current = undefined;
-    if (r.code !== 0) await c.remove();
+    // A container that `docker run` saw end (exit 0) has stopped; any other may still run until Docker removed it.
+    if (stopping || r.code !== 0) {
+      await stopping;
+      const gone = await c.remove();
+      if (!gone.gone) s.unsafe = gone.reason;
+    }
+    if (!s.unsafe) s.mounted.delete(name);
     return { exitCode: r.code ?? undefined, stdout: r.output, stderr: "", timedOut, capped: r.output.length >= OUTPUT_CAP, ended };
   }
 

@@ -246,7 +246,7 @@ const GONE_WITHIN_MS = 5000;
  * Ask Docker, every quarter second up to `withinMs`, whether it still lists a container of exactly this name (its
  * name filter matches parts of names, so the answer is compared whole).
  */
-async function waitGone(docker: string, name: string, env: Record<string, string>, withinMs: number): Promise<Removal> {
+export async function waitGone(docker: string, name: string, env: Record<string, string>, withinMs: number): Promise<Removal> {
   const until = Date.now() + withinMs;
   for (;;) {
     const r = await runDocker(docker, ["ps", "--all", "--filter", `name=${name}`, "--format", "{{.Names}}"], { env, timeoutMs: 15_000 });

@@ -2,7 +2,7 @@
 // that reason, and the facade routes a run with an environment to it. The probe's judgement, on what a client saw.
 
 import { describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CheckRunners, DirectChecks, type CheckAssignment, type CheckRunner } from "../checks";
@@ -10,6 +10,8 @@ import type { AdapterEvent } from "../runtimes/types";
 import { EnvironmentChecks } from "./runner";
 import { PreparedEnvironments, judgeEnvProbe } from "./prepared";
 import { removeTree } from "./copy";
+import { phaseArgs } from "./docker";
+import { runDocker } from "../studio/container";
 
 const plan = { source: { from: "setting" as const, image: "python:3.13@sha256:" + "a".repeat(64) }, prepare: [["make"]], hosts: ["pypi.org"] };
 
@@ -77,5 +79,62 @@ describe("the setup probe's judgement", () => {
     expect(judgeEnvProbe(good, 1)).toMatch(/1 connection\(s\) to the canary/);
     expect(judgeEnvProbe({ ...good, dns: "RESOLVED 93.184.215.14" }, 0)).toMatch(/resolved an outside name/);
     expect(judgeEnvProbe({ ...good, proxyLoopback: "HTTP/1.1 200 Connection Established" }, 0)).toMatch(/did not refuse this computer's loopback/);
+  });
+});
+
+describe("with a stand-in for Docker (server/testing/fake-docker.mjs)", () => {
+  const FAKE = new URL("../testing/fake-docker.mjs", import.meta.url).pathname;
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const until = async (ok: () => boolean, ms = 10_000) => {
+    for (const t0 = Date.now(); !ok(); await sleep(20)) if (Date.now() - t0 > ms) throw new Error("timed out waiting");
+  };
+  /** A runner on the stand-in, a workspace to copy, and where a run's copy goes. */
+  function setup(o: { prepare?: string[][] } = {}) {
+    const dir = mkdtempSync(join(tmpdir(), "orc-env-fake-"));
+    const ws = join(dir, "ws");
+    mkdirSync(ws);
+    writeFileSync(join(ws, "README.md"), "a change\n");
+    const root = join(dir, "root");
+    const environments = new PreparedEnvironments({ root, docker: FAKE, env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", DOCKER_CONFIG: join(dir, "docker") } });
+    const runner = new EnvironmentChecks({ environments, fallback: () => stub() });
+    const events: AdapterEvent[] = [];
+    runner.onEvent((e) => events.push(e));
+    const stage = (a: CheckAssignment) => join(root, "p1", "runs", a.attemptId);
+    const ended = (a: CheckAssignment) => until(() => events.some((e) => e.attemptId === a.attemptId && (e.type === "completed" || e.type === "failed" || e.type === "stopped")));
+    return { dir, ws, root, runner, events, stage, ended, plan: { ...plan, prepare: o.prepare ?? [] } };
+  }
+
+  for (const how of ["killed", "past its time limit"] as const) {
+    it(`a run ${how}: its copy goes only after the container that mounts it is gone (review finding 4)`, async () => {
+      const { dir, ws, runner, stage, plan: p } = setup();
+      const a = assignment(ws, { commands: [{ id: "test", label: "beat", kind: "check", argv: ["fake-beat"], timeoutMs: 60_000 }], runTimeoutMs: how === "killed" ? 60_000 : 1500, environment: { plan: p, project: "p1" } });
+      runner.start(a);
+      await until(() => existsSync(join(stage(a), "work", "beat")));
+      if (how === "killed") runner.kill(a.attemptId);
+      // The stand-in's container beats into the copy for 500 ms after its kill, making the folder again if it is gone.
+      await until(() => !existsSync(stage(a)));
+      await sleep(900);
+      expect(existsSync(stage(a))).toBe(false);
+      removeTree(dir);
+    });
+  }
+
+  it("a step's own container still runs when the step ends: the copy goes only after it is gone (review finding 4)", async () => {
+    const { dir, ws, root, plan: p } = setup();
+    const docker = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", DOCKER_CONFIG: join(dir, "docker") };
+    const environments = new PreparedEnvironments({ root, docker: FAKE, env: docker });
+    const run = join(root, "p1", "runs", "ev-1");
+    const out = await environments.withPrepared({ attemptId: "ev-1", workspace: ws, sha: "f".repeat(40), environment: { plan: p, project: "p1" }, logDir: join(dir, "logs") }, async (c) => {
+      // A preview the step started, tracked, and whose removal failed: it still beats into the copy.
+      const name = "orc-env-preview-1-abc";
+      c.track(name);
+      await runDocker(c.docker, phaseArgs({ name, image: c.image, work: c.work, argv: ["fake-beat"], phase: { kind: "preview", port: 8000 }, imageEnv: c.imageEnv }), { env: c.denv, timeoutMs: 10_000 });
+      await until(() => existsSync(join(c.work, "beat")));
+    });
+    expect(out.ok).toBe(true);
+    await until(() => !existsSync(run));
+    await sleep(900);
+    expect(existsSync(run)).toBe(false);
+    removeTree(dir);
   });
 });
