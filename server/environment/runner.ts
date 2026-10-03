@@ -15,18 +15,26 @@ import { sharedEnvironments, type PreparedEnvironments } from "./prepared";
 
 export class EnvironmentChecks extends BaseChecks {
   readonly simulated = false;
-  private readonly fallback: (a: CheckAssignment) => CheckRunner;
+  private readonly fallback: (a: Pick<CheckAssignment, "sandbox">) => CheckRunner;
   private readonly environments: PreparedEnvironments;
 
-  constructor(o: { fallback: (a: CheckAssignment) => CheckRunner; environments?: PreparedEnvironments; log?: (msg: string) => void; env?: NodeJS.ProcessEnv }) {
+  constructor(o: { fallback: (a: Pick<CheckAssignment, "sandbox">) => CheckRunner; environments?: PreparedEnvironments; log?: (msg: string) => void; env?: NodeJS.ProcessEnv }) {
     super(o);
     this.fallback = o.fallback;
     this.environments = o.environments ?? sharedEnvironments(o.log);
   }
 
-  /** The host sandboxes' probe: this runner has none of its own; the environment's setup probe runs before its first run. */
+  /**
+   * Where a run with an environment will run, as a run decides it: in the environment when Docker is running and its
+   * setup probe passed (the same `ready` a run waits for); else in the host sandbox, whose own probe answers, with the
+   * reason the environment cannot.
+   */
   async probe(sandbox: "codex" | "none"): Promise<ChecksHealth> {
-    return { sandbox, status: "unavailable", detail: "The environment runner has no host sandbox.", checkedAt: new Date().toISOString() };
+    const checkedAt = new Date().toISOString();
+    const up = await this.environments.ready();
+    if (up.ok) return { sandbox, status: "ready", runsIn: "environment", detail: "The checks run in the project's environment: Docker is running, and its setup probe passed.", checkedAt };
+    const host = await this.fallback({ sandbox }).probe(sandbox);
+    return { ...host, detail: `The project's environment cannot run the checks (${up.reason}). On this computer: ${host.detail}` };
   }
 
   /** Hand a run to the host sandbox, with the reason it did not run in its environment. */

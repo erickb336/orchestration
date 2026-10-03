@@ -333,8 +333,9 @@ export function missingChecks(cfg: ChecksConfig, st: Pick<StepDef, "checks">): s
 export const checksOn = (cfg: ChecksConfig | undefined) => !!cfg?.enabled && cfg.commands.some((c) => c.kind === "check");
 
 /**
- * The checks sandbox is not ready: Checks steps wait, labelled, and nothing falls back to
- * running without a sandbox. Never held with sandbox "none", which the user chose explicitly.
+ * Where the checks run is not ready, as the last probe found it (the project's environment, or this computer's
+ * sandbox): Checks steps wait, labelled, and nothing falls back to running without a sandbox. Never held with sandbox
+ * "none", which the user chose explicitly.
  */
 export function checksHeld(s: State): boolean {
   const cfg = s.project.checks;
@@ -748,8 +749,9 @@ export function reportChecksHealth(state: State, health: ChecksHealth, now: stri
   void _drop2;
   const newerRequest = !!prev?.recheck && !!o.startedAt && (prev.requestedAt ?? prev.checkedAt) > o.startedAt;
   s.project.checksHealth = { ...clean, ...(newerRequest ? { recheck: true as const, ...(prev!.requestedAt ? { requestedAt: prev!.requestedAt } : {}) } : {}) };
-  if (!prev || prev.status !== health.status || prev.sandbox !== health.sandbox) {
-    M.event(s, now, "system", "config", `Checks sandbox (${health.sandbox === "codex" ? "Codex" : "none"}): ${health.status}${health.detail ? ` — ${health.detail}` : ""}${health.status !== "ready" && health.sandbox === "codex" ? ". Check steps wait until it is ready" : ""}`);
+  if (!prev || prev.status !== health.status || prev.sandbox !== health.sandbox || prev.runsIn !== health.runsIn) {
+    const where = health.runsIn === "environment" ? "Checks: the project's environment is" : `Checks sandbox (${health.sandbox === "codex" ? "Codex" : "none"}):`;
+    M.event(s, now, "system", "config", `${where} ${health.status}${health.detail ? ` — ${health.detail}` : ""}${health.status !== "ready" && health.sandbox === "codex" ? ". Check steps wait until it is ready" : ""}`);
   }
   return s;
 }

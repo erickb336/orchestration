@@ -192,7 +192,7 @@ export function proposal(over: Record<string, unknown> = {}) {
 
 // ---------- a controllable check runner for scheduler tests ----------
 
-import type { CheckAssignment, CheckRunner } from "../checks";
+import type { CheckAssignment, CheckRunner, EnvironmentAssignment } from "../checks";
 import type { CheckResult, ChecksHealth, TestReport } from "../../src/domain/types";
 
 /** Tests decide when a check run completes, fails or confirms a stop, and what its results are. Nothing is spawned. */
@@ -203,6 +203,8 @@ export class ScriptedChecks implements CheckRunner {
   interrupts: string[] = [];
   probes: ("codex" | "none")[] = [];
   health: ChecksHealth["status"] = "ready";
+  /** The answer to a probe for a run with an environment (Docker and its setup probe); unset: `health`, as the host sandbox's. */
+  environmentHealth?: "ready";
   private listeners = new Set<(e: AdapterEvent) => void>();
   start(a: CheckAssignment) {
     if (this.runs.has(a.attemptId)) return;
@@ -228,8 +230,9 @@ export class ScriptedChecks implements CheckRunner {
       this.listeners.delete(l);
     };
   }
-  async probe(sandbox: "codex" | "none"): Promise<ChecksHealth> {
+  async probe(sandbox: "codex" | "none", environment?: EnvironmentAssignment): Promise<ChecksHealth> {
     this.probes.push(sandbox);
+    if (environment && this.environmentHealth) return { sandbox, status: this.environmentHealth, runsIn: "environment", detail: "scripted: the environment is ready", checkedAt: new Date().toISOString() };
     return { sandbox, status: this.health, detail: this.health === "ready" ? "scripted: ready" : "scripted: the sandbox is unavailable", checkedAt: new Date().toISOString(), ...(this.health !== "ready" ? { probes: { writeOutside: "allowed" as const, network: "unknown" as const } } : {}) };
   }
   /** Scripted runs acknowledge nothing unless a test says so. */

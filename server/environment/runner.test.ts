@@ -208,6 +208,25 @@ describe("with a stand-in for Docker (server/testing/fake-docker.mjs)", { timeou
     removeTree(dir);
   });
 
+  it("the probe follows where the checks run: the environment once Docker passes its probe, else this computer's sandbox, with the reason (B-05)", async () => {
+    const { dir, root } = setup();
+    const unavailable = { sandbox: "codex" as const, status: "unavailable" as const, detail: "could not start the Codex app-server (spawn codex ENOENT)", checkedAt: "2026-10-03T00:00:00.000Z" };
+    const codex = { ...stub(), probe: async () => unavailable };
+    const direct = stub();
+    const env = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", DOCKER_CONFIG: join(dir, "docker") };
+    const facade = (docker: string) => new CheckRunners(codex, direct, new EnvironmentChecks({ environments: new PreparedEnvironments({ root, docker, env }), fallback: (a) => (a.sandbox === "codex" ? codex : direct) }));
+    const withEnv = { plan, project: "p1" };
+    // A user without Codex, with a project environment: the checks run in the environment, so nothing waits on Codex.
+    expect(await facade(FAKE).probe("codex", withEnv)).toMatchObject({ sandbox: "codex", status: "ready", runsIn: "environment" });
+    // Without an environment, this computer's sandbox decides, as before.
+    expect(await facade(FAKE).probe("codex")).toEqual(unavailable);
+    // An environment that Docker cannot take: this computer's sandbox decides, and the detail says why.
+    const noDocker = await facade(join(dir, "no-docker")).probe("codex", withEnv);
+    expect(noDocker).toMatchObject({ sandbox: "codex", status: "unavailable", detail: "The project's environment cannot run the checks (Docker is not installed (no docker command on PATH)). On this computer: could not start the Codex app-server (spawn codex ENOENT)" });
+    expect(noDocker.runsIn).toBeUndefined();
+    removeTree(dir);
+  });
+
   it("a project cache past half the disk limit starts again empty before a prepare (review finding 11)", async () => {
     const { dir, ws, root, ended, events } = setup();
     const environments = new PreparedEnvironments({ root, docker: FAKE, env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", DOCKER_CONFIG: join(dir, "docker") }, diskBytes: 1024 * 1024 });
