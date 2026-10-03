@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { CaptureItem } from "../../src/domain/studio/evidence";
 import type { EnvironmentAssignment } from "../checks";
 import type { PreparedOutcome } from "../environment/prepared";
-import { RECORDER_IMAGE, containerArgs, dockerSocket } from "./container";
+import { RECORDER_IMAGE, RECORDER_USER, containerArgs, dockerSocket } from "./container";
 import { CAPTURE_PLAN, CAPTURE_SCRIPT, MAX_PLANNED_SCREENS, captureArgs, captureEvidence, checkCapturePlan, collectCapture, installArgs, parseCaptureOutput, readCapturePlan, readPlainFile, type CaptureJob, type EnvironmentLender } from "./evidence";
 
 const SCREEN: CaptureItem = { itemId: "bi-1", kind: "screen", title: "Trip board", artifactId: "sa-1", version: 2, variant: "B" };
@@ -104,7 +104,7 @@ describe("the two container runs", () => {
     expect(envs(args)).toEqual(expect.arrayContaining(["npm_config_ignore_scripts=true", "YARN_ENABLE_SCRIPTS=0", "YARN_IGNORE_PATH=1", "npm_config_cache=/out/npm-cache", "npm_config_git=/bin/false"]));
     // The contradicting flag is dropped and --ignore-scripts added, whatever the setting says.
     expect(args.slice(args.indexOf(RECORDER_IMAGE) + 1)).toEqual(["/usr/bin/timeout", "--kill-after=5", "615", "npm", "ci", "--ignore-scripts"]);
-    expect(args).toEqual(expect.arrayContaining(["--read-only", "--cap-drop", "ALL", "--user", "10001:10001", "--mount", "type=bind,source=/stage/work,target=/work", "--mount", "type=bind,source=/stage/cache,target=/out"]));
+    expect(args).toEqual(expect.arrayContaining(["--read-only", "--cap-drop", "ALL", "--user", RECORDER_USER, "--mount", "type=bind,source=/stage/work,target=/work", "--mount", "type=bind,source=/stage/cache,target=/out"]));
     expect(args).not.toContain("--interactive");
   });
 
@@ -112,7 +112,7 @@ describe("the two container runs", () => {
     const args = captureArgs({ name: "orc-ev-1-def", work: "/stage/work", out: "/stage/out", timeoutMs: 100_000 });
     expect(at(args, "--network")).toBe("none");
     expect(args.filter((a) => a === "--network")).toHaveLength(1);
-    expect(args).toEqual(expect.arrayContaining(["--interactive", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "10001:10001", "--pull", "never"]));
+    expect(args).toEqual(expect.arrayContaining(["--interactive", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", RECORDER_USER, "--pull", "never"]));
     expect(envs(args)).toEqual(["HOME=/home/recorder", "LANG=C.UTF-8", "TMPDIR=/tmp"]);
     expect(args.slice(args.indexOf(RECORDER_IMAGE) + 1)).toEqual(["/usr/bin/timeout", "--kill-after=5", "115", "/usr/local/bin/node", "-e", CAPTURE_SCRIPT]);
     // The browser's hardening, as for the studio's screenshot Chrome (shots.ts).
@@ -348,7 +348,7 @@ describe("which path a capture takes (unit E2)", () => {
     const args = captureArgs({ name: "orc-ev-1-def", work: "/stage/browser", out: "/stage/out", timeoutMs: 100_000, network: { container: "orc-env-preview-1-abc" } });
     expect(args.filter((a) => a === "--network")).toHaveLength(1);
     expect(at(args, "--network")).toBe("container:orc-env-preview-1-abc");
-    expect(args).toEqual(expect.arrayContaining(["--interactive", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "10001:10001", "--pull", "never"]));
+    expect(args).toEqual(expect.arrayContaining(["--interactive", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", RECORDER_USER, "--pull", "never"]));
     expect(args).not.toContain("--add-host");
     expect(() => containerArgs({ name: "orc-ev-1", work: "/w", out: "/o", workdir: "/work", command: ["true"], network: { container: "--privileged" } })).toThrow(/not a container to share a network with/);
     expect(() => containerArgs({ name: "orc-ev-1", work: "/w", out: "/o", workdir: "/work", command: ["true"], network: { container: "orc-x" }, hostGateway: true })).toThrow(/not a container to share a network with/);
