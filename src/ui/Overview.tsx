@@ -1,8 +1,9 @@
-// Home: the three things you look at daily, then the focus. While in Vision, the shaping panel leads (the studio is
-// Vision, in the main navigation). Needs you first, with the simple decisions taken in
-// place; Progress by area beside New results and the lead's latest reply; the Focus card last, with the vision
-// text, its revisions and its documents behind "Vision and history". Usage and the service's details live in
-// Settings (Diagnostics.tsx); the lead conversation opens from the header.
+// Home. While in Vision, the shaping panel leads (the studio is Vision, in the main navigation), then Needs you, with
+// the simple decisions taken in place, and Progress by area beside New results and the lead's latest reply. After the
+// start, Home is the factory floor (floor/FactoryFloor.tsx): Needs you first, then the budgets, one line per area and
+// the PE's calls; New results and the lead's latest reply under it; the Focus card last, with the vision text, its
+// revisions and its documents behind "Vision and history". Usage and the service's details live in Settings
+// (Diagnostics.tsx); the lead conversation opens from the header.
 
 import { useEffect, useRef, useState } from "react";
 import * as D from "../domain/delivery";
@@ -11,6 +12,7 @@ import * as M from "../domain/model";
 import { diffLines } from "../domain/diff";
 import { useStore } from "./store";
 import { ProviderMark, fmtTime, involvementOf, relTime } from "./common";
+import { FactoryFloor } from "./floor/FactoryFloor";
 import { useLeadContext } from "./LeadDrawer";
 import { Onboarding } from "./Onboarding";
 import { foldSummary, messageStatusText } from "./notes";
@@ -48,11 +50,12 @@ export function Overview() {
   const { state } = useStore();
   // While shaping, the shaping panel leads and stands in for the Focus card (it holds the vision and its editor).
   const shaping = state.project.stage === "shaping";
+  if (!shaping) return <FactoryHome state={state} />;
   return (
     <div className="k-stack home">
       <h1 className="no-margin">Home</h1>
       <Onboarding />
-      {shaping && <ShapingPanel />}
+      <ShapingPanel />
       <div data-tour="needs-you">
         <NeedsYouCard state={state} />
       </div>
@@ -65,7 +68,31 @@ export function Overview() {
           <LatestFromLead state={state} />
         </div>
       </div>
-      {!shaping && <FocusCard state={state} />}
+    </div>
+  );
+}
+
+/**
+ * Home after the start: the factory floor (ORC-029 pass 6). Needs you first; then the floor (the change orders the lead
+ * is answering, the two budgets, one line per area, the PE's calls); then what landed, the lead's latest reply, and the
+ * Focus card with the vision and its draft.
+ */
+function FactoryHome({ state }: { state: State }) {
+  return (
+    <div className="k-stack home">
+      <h1 className="no-margin">Home</h1>
+      <Onboarding />
+      <div data-tour="needs-you">
+        <NeedsYouCard state={state} />
+      </div>
+      <div data-tour="progress" className="k-stack">
+        <FactoryFloor />
+      </div>
+      <div className="k-grid-2">
+        <NewResultsCard state={state} />
+        <LatestFromLead state={state} />
+      </div>
+      <FocusCard state={state} />
     </div>
   );
 }

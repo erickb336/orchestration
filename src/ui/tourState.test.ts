@@ -86,7 +86,7 @@ describe("the tour's stops", () => {
   it("are six or seven short stops in the order a first visitor needs, each one or two plain sentences", () => {
     expect(TOUR_STOPS.length).toBeGreaterThanOrEqual(6);
     expect(TOUR_STOPS.length).toBeLessThanOrEqual(7);
-    expect(TOUR_STOPS.map((s) => s.title)).toEqual(["This is a demo", "Needs you", "Progress by area", "Message the lead", "A task's steps", "Results", "How involved you are"]);
+    expect(TOUR_STOPS.map((s) => s.title)).toEqual(["This is a demo", "Needs you", "The factory", "Message the lead", "A task's steps", "Results", "How involved you are"]);
     // It opens on the demo bar: the visitor learns first that everything is simulated.
     expect(TOUR_STOPS[0]).toMatchObject({ element: '[data-tour="demo-bar"]', page: "#/overview" });
     expect(TOUR_STOPS[0].text).toMatch(/simulated/);
