@@ -1,0 +1,876 @@
+{
+  "scenario": "factory-trial",
+  "mode": "real",
+  "startedAt": "2026-10-03T08:10:44.692Z",
+  "orchestrator": {
+    "commit": "219b463ab889",
+    "uncommittedChanges": false
+  },
+  "capUsd": 1.5,
+  "codexUsd": 2,
+  "runLimitUsd": 0.3,
+  "plan": {
+    "rules": {
+      "R1": "passed",
+      "R2": "passed",
+      "R3": "failed",
+      "E1": "passed"
+    },
+    "statuses": {
+      "screen": "built-and-verified",
+      "terminal-demo": "built-and-verified",
+      "flow": "fails-a-check"
+    },
+    "r3": "R3 fails on purpose: the frozen core drops the leftover cents, and R3's test is a todo test, which fails without failing npm test."
+  },
+  "standIns": [
+    {
+      "for": "the lead",
+      "what": "opened round 1",
+      "round": 1
+    },
+    {
+      "for": "the designer",
+      "what": "handed in screen \"Split a bill\" as the owner's",
+      "artifact": "sa-1009 v1",
+      "files": [
+        "screen/index.html"
+      ]
+    },
+    {
+      "for": "the designer",
+      "what": "handed in terminal-demo \"The split command\" as the owner's",
+      "artifact": "sa-1011 v1",
+      "files": [
+        "cli/split.ans"
+      ]
+    },
+    {
+      "for": "the designer",
+      "what": "handed in flow \"Splitting a bill\" as the owner's",
+      "artifact": "sa-1013 v1",
+      "files": [
+        "flow/flow.md",
+        "flow/rules.json"
+      ],
+      "rules": [
+        "R1 event",
+        "R2 unwanted",
+        "R3 always"
+      ],
+      "examples": [
+        "E1"
+      ]
+    },
+    {
+      "for": "the lead",
+      "what": "closed round 1, which ends PE review of its designs in the studio with no PE run",
+      "round": 1
+    }
+  ],
+  "steps": [
+    {
+      "name": "service started",
+      "atMs": 1579,
+      "runtime": "real",
+      "health": {
+        "claude": "ready",
+        "codex": "ready"
+      }
+    },
+    {
+      "name": "recorder checked",
+      "atMs": 1872,
+      "ok": true,
+      "detail": "image orchestrator-recorder:2"
+    },
+    {
+      "name": "project created",
+      "atMs": 1899,
+      "stage": "shaping",
+      "devices": [
+        "desktop",
+        "mobile",
+        "terminal"
+      ],
+      "budgets": {
+        "buildingUsd": 3.5,
+        "maintenanceUsdPerMonth": 5
+      },
+      "runLimits": {
+        "maxTurns": 60,
+        "timeoutMinutes": 20,
+        "maxBudgetUsd": 0.3
+      },
+      "peReviewsNewWork": true,
+      "roleDefaults": {
+        "lead": {
+          "provider": "claude",
+          "model": "auto"
+        },
+        "designer": {
+          "provider": "claude",
+          "model": "auto"
+        },
+        "coder": {
+          "provider": "codex",
+          "model": "auto"
+        },
+        "code_reviewer": {
+          "provider": "claude",
+          "model": "auto"
+        },
+        "ux_reviewer": {
+          "provider": "claude",
+          "model": "auto"
+        }
+      }
+    },
+    {
+      "name": "stand-in for the lead: opened round 1",
+      "atMs": 1902,
+      "round": 1
+    },
+    {
+      "name": "stand-in for the designer: handed in screen \"Split a bill\" as the owner's",
+      "atMs": 1906,
+      "artifact": "sa-1009 v1",
+      "files": [
+        "screen/index.html"
+      ]
+    },
+    {
+      "name": "stand-in for the designer: handed in terminal-demo \"The split command\" as the owner's",
+      "atMs": 1907,
+      "artifact": "sa-1011 v1",
+      "files": [
+        "cli/split.ans"
+      ]
+    },
+    {
+      "name": "stand-in for the designer: handed in flow \"Splitting a bill\" as the owner's",
+      "atMs": 1908,
+      "artifact": "sa-1013 v1",
+      "files": [
+        "flow/flow.md",
+        "flow/rules.json"
+      ],
+      "rules": [
+        "R1 event",
+        "R2 unwanted",
+        "R3 always"
+      ],
+      "examples": [
+        "E1"
+      ]
+    },
+    {
+      "name": "stand-in for the lead: closed round 1, which ends PE review of its designs in the studio with no PE run",
+      "atMs": 1908,
+      "round": 1
+    },
+    {
+      "name": "the owner approved the three items into the draft",
+      "atMs": 1914,
+      "items": {
+        "screen": "bi-1016",
+        "cli": "bi-1018",
+        "flow": "bi-1020"
+      },
+      "draftRev": 3,
+      "peReview": [
+        "Split a bill: ended (round-closed)",
+        "The split command: ended (round-closed)",
+        "Splitting a bill: ended (round-closed)"
+      ]
+    },
+    {
+      "name": "checks and preview set",
+      "atMs": 5118,
+      "checks": {
+        "commands": [
+          "npm test"
+        ],
+        "testReport": "reports/junit.xml",
+        "protected": [
+          "public/split.js",
+          "test/rules-r3.test.js"
+        ]
+      },
+      "preview": {
+        "rev": 1,
+        "install": [
+          "npm",
+          "ci",
+          "--ignore-scripts"
+        ],
+        "preview": [
+          "npm",
+          "run",
+          "preview"
+        ],
+        "port": 4173,
+        "cliEntry": "bin/split.js"
+      },
+      "sandbox": "ready: Codex sandbox verified: writes outside the run's directories, connections to this machine's own loopback and network connections are refused, and terminated commands take their children with them."
+    },
+    {
+      "name": "factory started",
+      "atMs": 5125,
+      "stage": "building",
+      "start": {
+        "at": "2026-10-03T08:10:49.813Z",
+        "by": "user",
+        "blueprintRev": 1,
+        "visionRev": 1,
+        "settings": {
+          "autonomy": "manual",
+          "delivery": {
+            "mode": "local",
+            "branch": "main",
+            "merge": "auto"
+          },
+          "pausePoints": {
+            "tradeoffs": "user",
+            "changeOrders": "user",
+            "startEachTask": false
+          }
+        },
+        "openItems": [
+          "intent",
+          "audience",
+          "problem",
+          "outcome",
+          "scope",
+          "constraints",
+          "risks",
+          "priorities",
+          "material"
+        ]
+      },
+      "blueprintRev": 1
+    },
+    {
+      "name": "task created and started",
+      "atMs": 5134,
+      "task": "T-001",
+      "flow": "feature",
+      "steps": [
+        "S1 designer",
+        "S2 coder",
+        "C1 checks",
+        "E1 evidence",
+        "S3 code_reviewer",
+        "SR1 security_reviewer",
+        "S4 ux_reviewer",
+        "S5 coder",
+        "C2 checks",
+        "S6 lead"
+      ],
+      "blueprintRefs": [
+        "bi-1016",
+        "bi-1018",
+        "bi-1020"
+      ]
+    },
+    {
+      "name": "task landed",
+      "atMs": 398873,
+      "tookMs": 393739
+    }
+  ],
+  "checks": {
+    "the fixture's R3 test fails on purpose: npm test exits 0, and its JUnit report, read by the service's parser, records R3 as failed": {
+      "ok": true,
+      "detail": {
+        "exitCode": 0,
+        "tagged": [
+          "[bi-1020 R3] the shares add up to the total: the first person pays the cents left over: failed"
+        ],
+        "otherFailures": []
+      }
+    },
+    "the blueprint in force holds the screen with its prototype, the CLI's terminal demo, and the flow with 3 EARS rules and 1 example, locked in by Start the factory": {
+      "ok": true,
+      "detail": {
+        "blueprintRev": 1,
+        "start": {
+          "by": "user",
+          "blueprintRev": 1
+        },
+        "items": [
+          "bi-1016 screen \"Split a bill\" v1",
+          "bi-1018 terminal-demo \"The split command\" v1",
+          "bi-1020 flow \"Splitting a bill\" v1"
+        ],
+        "prototype": "screen/index.html",
+        "rules": [
+          "R1 event",
+          "R2 unwanted",
+          "R3 always",
+          "E1"
+        ]
+      }
+    },
+    "the checks (npm test, with the JUnit report at reports/junit.xml) and the preview (npm run preview on port 4173, the CLI entry bin/split.js) are set, and the checks sandbox is ready": {
+      "ok": true,
+      "detail": {
+        "checks": [
+          "test: npm test"
+        ],
+        "testReport": "reports/junit.xml",
+        "preview": "install `npm ci --ignore-scripts`, preview `npm run preview` on port 4173, CLI entry `bin/split.js`",
+        "sandbox": "ready",
+        "delivery": {
+          "enabled": true,
+          "branch": "main"
+        }
+      }
+    },
+    "one Feature task cites the three items, and its acceptance carries the tag of each rule and of the example": {
+      "ok": true,
+      "detail": {
+        "task": "T-001",
+        "blueprintRefs": [
+          "bi-1016",
+          "bi-1018",
+          "bi-1020"
+        ],
+        "acceptance": [
+          "[bi-1020 R1] When the person gives a total and a number of people, the splitter shall show the share each person pays. (flow \"Splitting a bill\", bi-1020)",
+          "[bi-1020 R2] If the number of people is less than one, then the splitter shall refuse with the message \"Need at least one person\". (flow \"Splitting a bill\", bi-1020)",
+          "[bi-1020 R3] The splitter shall give the cents left over after rounding to the first person, so that the shares add up to the total. (flow \"Splitting a bill\", bi-1020)",
+          "[bi-1020 E1] Given a total of 90.00 and 3 people, when the person splits the bill, then each person pays 30.00. (flow \"Splitting a bill\", bi-1020)",
+          "[bi-1020 R3] is deliberately left failing for the factory trial: public/split.js drops the cents left over, and test/rules-r3.test.js tests R3 as a todo test, which fails without failing npm test. Leave both files as they are, and add no other test for R3.",
+          "The page and the CLI use split() and money() from public/split.js.",
+          "When the page opens, it shows the share for 90.00 and 3 people, as the prototype does, so that a screenshot shows it.",
+          "The capture plan's tape types `node bin/split.js 90 3` and `node bin/split.js 90 0`, and outputs a GIF."
+        ]
+      }
+    },
+    "the PE reviewed the design before the coder started: a PE run agreed to S1's design, and S2 started after its verdict": {
+      "ok": true,
+      "detail": {
+        "review": {
+          "status": "agreed",
+          "rounds": [
+            "feasible"
+          ]
+        },
+        "peRuns": [
+          "studio-1041 codex completed"
+        ],
+        "agreedAt": "2026-10-03T08:12:19.329Z",
+        "coderStarted": [
+          "2026-10-03T08:12:20.330Z"
+        ]
+      }
+    },
+    "the task finished: each step done or skipped, and its work integrated": {
+      "ok": true,
+      "detail": {
+        "lifecycle": "done",
+        "integration": "integrated",
+        "steps": [
+          "S1 designer: done",
+          "S2 coder: done",
+          "C1 checks: done",
+          "E1 evidence: done",
+          "S3 code_reviewer: done",
+          "SR1 security_reviewer: done",
+          "S4 ux_reviewer: done",
+          "S5 coder: done",
+          "C1-i2 checks: done",
+          "E1-i2 evidence: done",
+          "S3-i2 code_reviewer: done",
+          "SR1-i2 security_reviewer: done",
+          "S4-i2 ux_reviewer: done",
+          "S5-i2 coder: skipped",
+          "C2 checks: done",
+          "S6 lead: done"
+        ]
+      }
+    },
+    "the task's work landed on main (local delivery)": {
+      "ok": true,
+      "detail": {
+        "target": "main",
+        "commit": "638b6a8d156b870f31e2680a7d7a26f5d3071db1",
+        "onMain": true,
+        "flags": [],
+        "change": "24e02770d7d4"
+      }
+    },
+    "the Capture evidence step ran after the checks and recorded the screen and the CLI": {
+      "ok": true,
+      "detail": {
+        "firstChecksAt": "2026-10-03T08:14:15.719Z",
+        "runs": [
+          "run-1055 E1 completed at 2026-10-03T08:14:16.719Z",
+          "run-1080 E1-i2 completed at 2026-10-03T08:16:18.121Z"
+        ],
+        "items": [
+          "bi-1016: captured",
+          "bi-1018: captured"
+        ]
+      }
+    },
+    "the evidence of the landed commit: a PNG of the built page on desktop and on mobile, and a GIF of the CLI, served by the app": {
+      "ok": true,
+      "detail": {
+        "landedChange": "24e02770d7d4",
+        "screen": {
+          "status": "captured",
+          "commit": "24e02770d7d472fe69e477a0b297c0286bc8a13f",
+          "landed": true,
+          "files": [
+            {
+              "path": "bi-1016/desktop.png",
+              "device": "desktop",
+              "bytes": 16347,
+              "servedAs": "image/png"
+            },
+            {
+              "path": "bi-1016/mobile.png",
+              "device": "mobile",
+              "bytes": 51384,
+              "servedAs": "image/png"
+            }
+          ]
+        },
+        "cli": {
+          "status": "captured",
+          "commit": "24e02770d7d472fe69e477a0b297c0286bc8a13f",
+          "landed": true,
+          "files": [
+            {
+              "path": "bi-1018/.orchestrator/demo.gif",
+              "device": null,
+              "bytes": 33163,
+              "servedAs": "image/gif"
+            }
+          ]
+        }
+      }
+    },
+    "the rule results from the landed work's checks: R1, R2 and E1 pass, and R3 fails": {
+      "ok": true,
+      "detail": {
+        "results": [
+          "R1 passed",
+          "R2 passed",
+          "R3 failed: [bi-1020 R3] the shares add up to the total: the first person pays the cents left over: Expected values to be strictly deep-equal: + actual - expected [ - 3334, 3333, 3333, + 3333 ]",
+          "E1 passed"
+        ]
+      }
+    },
+    "the item statuses: the screen and the CLI built and verified, the flow failing a check": {
+      "ok": true,
+      "detail": [
+        "bi-1016 screen: built-and-verified",
+        "bi-1018 terminal-demo: built-and-verified",
+        "bi-1020 flow: fails-a-check"
+      ]
+    },
+    "the estimated Claude spend stayed under the cap, each run with no recorded cost counted at its run limit": {
+      "ok": true,
+      "detail": {
+        "claude": "$0.61",
+        "cap": "$1.50",
+        "withoutCost": []
+      }
+    }
+  },
+  "skipped": {},
+  "ok": true,
+  "decisionsAnswered": [],
+  "task": {
+    "id": "T-001",
+    "lifecycle": "done",
+    "steps": [
+      "S1 designer: done",
+      "S2 coder: done",
+      "C1 checks: done",
+      "E1 evidence: done",
+      "S3 code_reviewer: done",
+      "SR1 security_reviewer: done",
+      "S4 ux_reviewer: done",
+      "S5 coder: done",
+      "C1-i2 checks: done",
+      "E1-i2 evidence: done",
+      "S3-i2 code_reviewer: done",
+      "SR1-i2 security_reviewer: done",
+      "S4-i2 ux_reviewer: done",
+      "S5-i2 coder: skipped",
+      "C2 checks: done",
+      "S6 lead: done"
+    ],
+    "integration": {
+      "status": "integrated",
+      "landed": {
+        "at": "2026-10-03T08:17:19.245Z",
+        "target": "main",
+        "commit": "638b6a8d156b870f31e2680a7d7a26f5d3071db1",
+        "flags": [],
+        "simulated": false
+      }
+    },
+    "peReview": [
+      {
+        "step": "S1",
+        "status": "agreed",
+        "rounds": [
+          {
+            "at": "2026-10-03T08:12:19.329Z",
+            "verdict": "feasible",
+            "reasons": "Feasibility: the approved screen and terminal artifacts are available, and a direct Node probe confirmed the shared core's required outputs. Scale: computation and memory grow with the number of people, which fits a handful per bill; no shared server state is needed. Longevity: standard HTML, JavaScript modules and Node APIs need no third-party dependencies or external data sources. The deliberate R3 failure remains a trial limitation, not a feasibility blocker. Budget: $3.42 remains for building, and the design adds no paid services or dependencies. No recorded comparable build costs or hosting price basis were available, so completion within the build budget and monthly hosting cost remain unverified; no cost ranges are claimed.",
+            "change": null
+          }
+        ]
+      }
+    ]
+  },
+  "runs": [
+    {
+      "id": "run-1036",
+      "step": "S1",
+      "role": "designer",
+      "provider": "claude",
+      "model": "claude-sonnet-5-5",
+      "outcome": "completed",
+      "startedAt": "2026-10-03T08:10:49.991Z",
+      "usage": {
+        "costUsd": 0.08070759999999999,
+        "inputTokens": 30111,
+        "outputTokens": 4022
+      },
+      "estimatedUsd": 0.08070759999999999,
+      "note": null
+    },
+    {
+      "id": "run-1046",
+      "step": "S2",
+      "role": "coder",
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "outcome": "completed",
+      "startedAt": "2026-10-03T08:12:20.330Z",
+      "usage": {
+        "inputTokens": 88930,
+        "cachedInputTokens": 66432,
+        "outputTokens": 3255
+      },
+      "estimatedUsd": 0.08418919999999999,
+      "note": null
+    },
+    {
+      "id": "run-1051",
+      "step": "C1",
+      "role": "checks",
+      "provider": "service",
+      "model": "checks",
+      "outcome": "completed",
+      "startedAt": "2026-10-03T08:14:14.716Z",
+      "usage": null,
+      "estimatedUsd": null,
+      "note": null
+    },
+    {
+      "id": "run-1055",
+      "step": "E1",
+      "role": "evidence",
+      "provider": "service",
+      "model": "evidence",
+      "outcome": "completed",
+      "startedAt": "2026-10-03T08:14:16.719Z",
+      "usage": null,
+      "estimatedUsd": null,
+      "note": null
+    },
+    {
+      "id": "run-1057",
+      "step": "S3",
+      "role": "code_reviewer",
+      "provider": "claude",
+      "model": "claude-sonnet-5-5",
+      "outcome": "completed",
+      "startedAt": "2026-10-03T08:14:16.719Z",
+      "usage": {
+        "costUsd": 0.0650598,
+        "inputTokens": 43172,
+        "outputTokens": 1398
+      },
+      "estimatedUsd": 0.0650598,
+      "note": null
+    },
+    {
+      "id": "run-1059",
+      "step": "SR1",
+      "role": "security_reviewer",
+      "provider": "claude",
+      "model": "claude-sonnet-5-5",
+      "outcome": "completed",
+      "startedAt": "2026-10-03T08:14:16.719Z",
+      "usage": {
+        "costUsd": 0.0579412,
+        "inputTokens": 40090,
+        "outputTokens": 1097
+      },
+      "estimatedUsd": 0.0579412,
+      "note": null
+    },
+    {
+      "id": "run-1067",
+      "step": "S4",
+      "role": "ux_reviewer",
+      "provider": "claude",
+      "model": "claude-sonnet-5-5",
+      "outcome": "completed",
+      "startedAt": "2026-10-03T08:14:41.757Z",
+      "usage": {
+        "costUsd": 0.11037100000000001,
+        "inputTokens": 57955,
+        "outputTokens": 2720
+      },
+      "estimatedUsd": 0.11037100000000001,
+      "note": null
+    },
+    {
+      "id": "run-1071",
+      "step": "S5",
+      "role": "coder",
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "outcome": "completed",
+      "startedAt": "2026-10-03T08:15:08.804Z",
+      "usage": {
+        "inputTokens": 110059,
+        "cachedInputTokens": 71808,
+        "outputTokens": 1356
+      },
+      "estimatedUsd": 0.0972428,
+      "note": null
+    },
+    {
+      "id": "run-1076",
+      "step": "C1-i2",
+      "role": "checks",
+      "provider": "service",
+      "model": "checks",
+      "outcome": "completed",
+      "startedAt": "2026-10-03T08:16:16.101Z",
+      "usage": null,
+      "estimatedUsd": null,
+      "note": null
+    },
+    {
+      "id": "run-1080",
+      "step": "E1-i2",
+      "role": "evidence",
+      "provider": "service",
+      "model": "evidence",
+      "outcome": "completed",
+      "startedAt": "2026-10-03T08:16:18.121Z",
+      "usage": null,
+      "estimatedUsd": null,
+      "note": null
+    },
+    {
+      "id": "run-1082",
+      "step": "S3-i2",
+      "role": "code_reviewer",
+      "provider": "claude",
+      "model": "claude-sonnet-5-5",
+      "outcome": "completed",
+      "startedAt": "2026-10-03T08:16:18.121Z",
+      "usage": {
+        "costUsd": 0.0691422,
+        "inputTokens": 44171,
+        "outputTokens": 1567
+      },
+      "estimatedUsd": 0.0691422,
+      "note": null
+    },
+    {
+      "id": "run-1084",
+      "step": "SR1-i2",
+      "role": "security_reviewer",
+      "provider": "claude",
+      "model": "claude-sonnet-5-5",
+      "outcome": "completed",
+      "startedAt": "2026-10-03T08:16:18.121Z",
+      "usage": {
+        "costUsd": 0.052750599999999995,
+        "inputTokens": 26161,
+        "outputTokens": 1132
+      },
+      "estimatedUsd": 0.052750599999999995,
+      "note": null
+    },
+    {
+      "id": "run-1092",
+      "step": "S4-i2",
+      "role": "ux_reviewer",
+      "provider": "claude",
+      "model": "claude-sonnet-5-5",
+      "outcome": "completed",
+      "startedAt": "2026-10-03T08:16:43.176Z",
+      "usage": {
+        "costUsd": 0.1015324,
+        "inputTokens": 58148,
+        "outputTokens": 1868
+      },
+      "estimatedUsd": 0.1015324,
+      "note": null
+    },
+    {
+      "id": "run-1097",
+      "step": "C2",
+      "role": "checks",
+      "provider": "service",
+      "model": "checks",
+      "outcome": "completed",
+      "startedAt": "2026-10-03T08:17:02.212Z",
+      "usage": null,
+      "estimatedUsd": null,
+      "note": null
+    },
+    {
+      "id": "run-1101",
+      "step": "S6",
+      "role": "lead",
+      "provider": "claude",
+      "model": "claude-sonnet-5-5",
+      "outcome": "completed",
+      "startedAt": "2026-10-03T08:17:03.214Z",
+      "usage": {
+        "costUsd": 0.07091700000000001,
+        "inputTokens": 28672,
+        "outputTokens": 2116
+      },
+      "estimatedUsd": 0.07091700000000001,
+      "note": null
+    },
+    {
+      "id": "studio-1041",
+      "kind": "pe",
+      "review": {
+        "taskId": "T-001",
+        "stepId": "S1",
+        "version": 1
+      },
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "status": "completed",
+      "usage": {
+        "inputTokens": 61561,
+        "cachedInputTokens": 46976,
+        "outputTokens": 973
+      },
+      "estimatedUsd": 0.0435976,
+      "note": null
+    }
+  ],
+  "evidenceRuns": [
+    {
+      "artifact": "art-1065",
+      "run": "run-1055",
+      "sha": "de1f456606753c62b31d285a6233e0f41cb452c2",
+      "simulated": false,
+      "items": [
+        {
+          "item": "bi-1016",
+          "captured": [
+            "bi-1016/desktop.png",
+            "bi-1016/mobile.png"
+          ],
+          "warnings": []
+        },
+        {
+          "item": "bi-1018",
+          "captured": [
+            "bi-1018/.orchestrator/demo.gif"
+          ],
+          "warnings": []
+        }
+      ]
+    },
+    {
+      "artifact": "art-1090",
+      "run": "run-1080",
+      "sha": "24e02770d7d472fe69e477a0b297c0286bc8a13f",
+      "simulated": false,
+      "items": [
+        {
+          "item": "bi-1016",
+          "captured": [
+            "bi-1016/desktop.png",
+            "bi-1016/mobile.png"
+          ],
+          "warnings": []
+        },
+        {
+          "item": "bi-1018",
+          "captured": [
+            "bi-1018/.orchestrator/demo.gif"
+          ],
+          "warnings": []
+        }
+      ]
+    }
+  ],
+  "evidenceFiles": {
+    "landedChange": "24e02770d7d4",
+    "screen": {
+      "status": "captured",
+      "commit": "24e02770d7d472fe69e477a0b297c0286bc8a13f",
+      "landed": true,
+      "files": [
+        {
+          "path": "bi-1016/desktop.png",
+          "device": "desktop",
+          "bytes": 16347,
+          "servedAs": "image/png"
+        },
+        {
+          "path": "bi-1016/mobile.png",
+          "device": "mobile",
+          "bytes": 51384,
+          "servedAs": "image/png"
+        }
+      ]
+    },
+    "cli": {
+      "status": "captured",
+      "commit": "24e02770d7d472fe69e477a0b297c0286bc8a13f",
+      "landed": true,
+      "files": [
+        {
+          "path": "bi-1018/.orchestrator/demo.gif",
+          "device": null,
+          "bytes": 33163,
+          "servedAs": "image/gif"
+        }
+      ]
+    }
+  },
+  "ruleResults": {
+    "results": [
+      "R1 passed",
+      "R2 passed",
+      "R3 failed: [bi-1020 R3] the shares add up to the total: the first person pays the cents left over: Expected values to be strictly deep-equal: + actual - expected [ - 3334, 3333, 3333, + 3333 ]",
+      "E1 passed"
+    ]
+  },
+  "itemStatuses": [
+    "bi-1016 screen: built-and-verified",
+    "bi-1018 terminal-demo: built-and-verified",
+    "bi-1020 flow: fails-a-check"
+  ],
+  "spend": {
+    "claudeUsd": 0.6084,
+    "claudeRunsWithoutCost": 0,
+    "buildingUsd": 0.8335
+  },
+  "finishedAt": "2026-10-03T08:17:24.084Z"
+}

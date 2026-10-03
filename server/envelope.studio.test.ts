@@ -71,7 +71,7 @@ describe("the lead's studio brief", () => {
     expect(text).toContain('"studio": {\n    "closeRound"');
     // The vision may be drafted (it goes into the draft); the shaping brief and coverage are Vision's only.
     expect(text).toContain('"vision": {');
-    expect(text).not.toMatch(/"coverage": \{|## Shaping the vision/);
+    expect(text).not.toMatch(/"coverage": \{|## Draft the vision with the user/);
     // A vision text in the draft is shown to the studio; the vision in force heads the brief, as the factory reads it.
     const edited = M.editVision(started, 1, "Weekend trips, offline on the trail.", "", "offline", at(2));
     const withDraft = envelope(edited);

@@ -9,8 +9,10 @@
 //
 // No language is a code path here or in the runner (server/environment/): languages appear only as rows of data.
 
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { draft, event } from "./model/core";
-import { ControlError, type State } from "./types";
+import { ControlError, type ChecksConfig, type State } from "./types";
 
 // ---------- data ----------
 
@@ -86,12 +88,19 @@ export interface EnvironmentSetting {
   prepare: string[][];
   /** Hosts the owner added to the registries the prepare phase may reach. */
   hosts: string[];
+  /**
+   * The repository's dev container the owner confirmed, by its digest (devcontainerDigest: the file and the
+   * Dockerfile it names). A dev container is used only while its digest at the trusted base is this one, so a change
+   * an agent merged cannot choose the image.
+   */
+  devcontainer?: { file: string; sha256: string };
 }
 
 export interface EnvironmentInput {
   image?: string;
   prepare?: string[][];
   hosts?: string[];
+  devcontainer?: { file: string; sha256: string };
 }
 
 const NAME = "[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*";
@@ -138,7 +147,12 @@ export function normalizeEnvironment(input: EnvironmentInput): Omit<EnvironmentS
     if (!hosts.includes(h) && !REGISTRY_HOSTS.some((r) => r.host === h)) hosts.push(h);
   }
   if (hosts.length > ENV_LIMITS.hosts) return { refused: `At most ${ENV_LIMITS.hosts} added hosts.` };
-  return { ...(image ? { image } : {}), prepare: prepare.map((c) => [...c]), hosts };
+  const dc = input.devcontainer;
+  if (dc !== undefined) {
+    if (!(DEVCONTAINER_FILES as readonly string[]).includes(dc.file)) return { refused: `"${String(dc.file).slice(0, 80)}" is not a dev container file (${DEVCONTAINER_FILES.join(" or ")}).` };
+    if (!/^[0-9a-f]{64}$/.test(dc.sha256)) return { refused: "The dev container's digest is not a SHA-256 (64 hex digits)." };
+  }
+  return { ...(image ? { image } : {}), prepare: prepare.map((c) => [...c]), hosts, ...(dc ? { devcontainer: { file: dc.file, sha256: dc.sha256 } } : {}) };
 }
 
 const argvText = (argv: readonly string[]) => argv.map((a) => (/[\s"']/.test(a) ? JSON.stringify(a) : a)).join(" ");
@@ -149,6 +163,7 @@ export function environmentWords(e: EnvironmentSetting): string {
     e.image ? `image ${e.image.replace(/@sha256:([0-9a-f]{12})[0-9a-f]+$/, "@sha256:$1…")}` : "no confirmed image",
     e.prepare.length ? `prepare ${e.prepare.map((c) => `\`${argvText(c)}\``).join(", then ")}` : "no prepare commands",
     e.hosts.length ? `added hosts ${e.hosts.join(", ")}` : "",
+    e.devcontainer ? `dev container ${e.devcontainer.file} confirmed (sha256 ${e.devcontainer.sha256.slice(0, 12)}…)` : "",
   ]
     .filter(Boolean)
     .join("; ");
@@ -300,28 +315,96 @@ export type EnvironmentSource =
 export interface DevcontainerFound {
   file: string;
   parsed: DevcontainerSource | { refused: string };
+  /** The digest the owner confirms (devcontainerDigest), for a dev container that is not refused. */
+  sha256?: string;
 }
 
 /**
- * Where a run's environment comes from, first match wins: the repository's dev container, else the image the owner
- * confirmed. A dev container that is refused does not match; its reason goes with the answer.
+ * The digest of a dev container: the text of its file and, for a build, the Dockerfile's path and text. The owner
+ * confirms this digest; a change to either file gives another one.
  */
-export function environmentSource(found: DevcontainerFound | undefined, setting: EnvironmentSetting | undefined): { source?: EnvironmentSource; note?: string } {
-  const note = found && "refused" in found.parsed ? found.parsed.refused : undefined;
-  if (found && !("refused" in found.parsed)) return { source: { from: "devcontainer", file: found.file, ...found.parsed } };
-  if (setting?.image) return { source: { from: "setting", image: setting.image }, ...(note ? { note } : {}) };
-  return note ? { note } : {};
+export function devcontainerDigest(fileText: string, dockerfile?: { path: string; text: string }): string {
+  return bytesToHex(sha256(utf8ToBytes(JSON.stringify([fileText, dockerfile?.path ?? null, dockerfile?.text ?? null]))));
+}
+
+/**
+ * Why a dev container's Dockerfile is refused, or undefined. Two BuildKit features reach past the build's `--network
+ * none`: a `# syntax=` line makes the builder fetch a frontend image and run it, and a cache mount is shared by every
+ * build on the daemon, so one project's build could plant files in another's. The legacy builder ignores the first
+ * and refuses the second; BuildKit, the default where buildx is installed, does both. Both are refused here, whichever
+ * builder runs.
+ */
+export function dockerfileRefusal(text: string, path: string): string | undefined {
+  if (/^[ \t]*#[ \t]*syntax[ \t]*=/im.test(text)) return `${path}: a "# syntax=" line chooses a BuildKit frontend, which the builder fetches and runs; the environment builds with the default frontend only.`;
+  // Instructions continue over lines that end with a backslash.
+  const logical = text.replace(/\\\r?\n/g, " ");
+  if (/^[ \t]*RUN\b[^\n]*--mount[=\s]\S*\btype=cache\b/im.test(logical)) return `${path}: a cache mount (RUN --mount=type=cache) is shared by every build on the Docker daemon, across projects; the environment refuses it.`;
+  return undefined;
+}
+
+/** A dev container the owner has not confirmed (it is new, or it changed since): its file and its digest. */
+export interface UnconfirmedDevcontainer {
+  file: string;
+  sha256: string;
+}
+
+/**
+ * Where a run's environment comes from, first match wins: the repository's dev container, if the owner confirmed its
+ * digest, else the image the owner confirmed. A dev container that is refused, or not confirmed, does not match; its
+ * reason goes with the answer, and an unconfirmed one is named for the owner to confirm.
+ */
+export function environmentSource(found: DevcontainerFound | undefined, setting: EnvironmentSetting | undefined): { source?: EnvironmentSource; note?: string; unconfirmed?: UnconfirmedDevcontainer } {
+  let note: string | undefined;
+  let unconfirmed: UnconfirmedDevcontainer | undefined;
+  const parsed = found?.parsed;
+  if (parsed && "refused" in parsed) note = parsed.refused;
+  else if (found?.sha256 && parsed) {
+    const ok = setting?.devcontainer?.file === found.file && setting.devcontainer.sha256 === found.sha256;
+    if (ok) return { source: { from: "devcontainer", file: found.file, ...parsed } };
+    unconfirmed = { file: found.file, sha256: found.sha256 };
+    note = `The repository's dev container ${found.file} is not confirmed${setting?.devcontainer ? " (it changed since you confirmed it)" : ""}: confirm it in Settings › Project › Environment to use it`;
+  }
+  const rest = { ...(note ? { note } : {}), ...(unconfirmed ? { unconfirmed } : {}) };
+  if (setting?.image) return { source: { from: "setting", image: setting.image }, ...rest };
+  return rest;
+}
+
+/**
+ * The dev container that waits for the owner: the newest check run found one at the trusted base whose digest the
+ * owner has not confirmed. Undefined once the setting confirms that digest.
+ */
+export function unconfirmedDevcontainer(s: State): (UnconfirmedDevcontainer & { sha: string }) | undefined {
+  const last = lastEnvironmentRun(s);
+  const u = last?.record.unconfirmed;
+  if (!u) return undefined;
+  const c = s.project.environment?.devcontainer;
+  return c?.file === u.file && c.sha256 === u.sha256 ? undefined : { ...u, sha: last.sha };
 }
 
 /** What a check run gets: its environment's source, the prepare commands and every host the proxy allows. */
 export interface EnvironmentPlan {
   source: EnvironmentSource;
   prepare: string[][];
+  /** Where the prepare commands come from: the environment's setting, the checks' own prepare commands, or nowhere. */
+  prepareFrom: "setting" | "checks" | "none";
   hosts: string[];
 }
 
-export function environmentPlan(source: EnvironmentSource, setting: EnvironmentSetting | undefined): EnvironmentPlan {
-  return { source, prepare: (setting?.prepare ?? []).map((c) => [...c]), hosts: [...REGISTRY_HOSTS.map((r) => r.host), ...(setting?.hosts ?? [])] };
+/** The checks' own prepare commands (their setting's "prepare" commands, in order), as argument lists. */
+export function checksPrepareCommands(checks: Pick<ChecksConfig, "commands">): string[][] {
+  return checks.commands.filter((c) => c.kind === "prepare").map((c) => [...c.argv]);
+}
+
+/**
+ * The plan of a run in the environment. The prepare commands are the environment's own; without them, the checks' own
+ * prepare commands run in the prepare phase instead (through the proxy, install scripts included, in the container),
+ * so a project whose environment is a dev container installs what its checks need. With neither, nothing is prepared,
+ * and the run's record says so.
+ */
+export function environmentPlan(source: EnvironmentSource, setting: EnvironmentSetting | undefined, checksPrepare: readonly (readonly string[])[] = []): EnvironmentPlan {
+  const own = setting?.prepare ?? [];
+  const [prepare, prepareFrom] = own.length ? [own, "setting" as const] : checksPrepare.length ? [checksPrepare, "checks" as const] : [[], "none" as const];
+  return { source, prepare: prepare.map((c) => [...c]), prepareFrom, hosts: [...REGISTRY_HOSTS.map((r) => r.host), ...(setting?.hosts ?? [])] };
 }
 
 // ---------- a run's record ----------
@@ -335,8 +418,10 @@ export type EnvironmentRunRecord =
       image: string;
       /** The image Docker ran (its id). */
       imageId?: string;
-      /** The prepare phase: run now, reused from an earlier commit with the same inputs, or failed. */
-      prepare: "ran" | "reused" | "failed";
+      /** The prepare phase: run now, reused from an earlier commit with the same inputs, failed, or none (no command to run). */
+      prepare: "ran" | "reused" | "failed" | "none";
+      /** Where the prepare commands came from, when there were any (EnvironmentPlan.prepareFrom). */
+      prepareFrom?: "setting" | "checks";
       /** The hash of the image, the prepare commands, the hosts and the prepare inputs (16 hex). */
       key: string;
       /** The commit whose prepared copy was reused. */
@@ -345,11 +430,14 @@ export type EnvironmentRunRecord =
       prepareMs: number;
       /** Hosts the proxy refused during the prepare phase (at most 20). */
       refused?: string[];
+      /** A dev container at the trusted base that was not used, because the owner has not confirmed its digest. */
+      unconfirmed?: UnconfirmedDevcontainer;
     }
   | {
       ran: "host";
       /** Why the checks ran in the host sandbox instead (no Docker, no image, or a build that failed). */
       reason: string;
+      unconfirmed?: UnconfirmedDevcontainer;
     };
 
 /** The newest check run's use of the environment, for the settings card: its time, commit and record. */

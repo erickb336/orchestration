@@ -1,5 +1,5 @@
 // Shaping the vision with the lead before anything is built: the banner on the board and in the shell, the
-// "Shape the vision" panel on Home (the vision so far, its documents, the lead's questions, what is clear, the
+// "The vision" panel on Home (the vision so far, its documents, the lead's questions, what is clear, the
 // lead's draft, the planned tasks and the way to Start the factory, the pre-flight).
 // Every control is a keyed command; a draft never applies by itself.
 
@@ -102,8 +102,8 @@ function QuestionsForm({ questions }: { questions: LeadQuestion[] }) {
 }
 
 /**
- * While shaping, on the board and in the shell (there is no stage chip): why nothing new starts, without calling
- * anything paused. Nothing while building.
+ * In Vision (the "shaping" stage), on the board and in the shell (there is no stage chip): why nothing new starts,
+ * without calling anything paused. Nothing once the factory runs.
  */
 export function ShapingBanner() {
   const { state } = useStore();
@@ -115,7 +115,7 @@ export function ShapingBanner() {
       title={`${M.SHAPING_LABEL}.`}
       actions={
         <ButtonLink size="small" href="#/overview">
-          Shape the vision
+          Work on the vision
         </ButtonLink>
       }
     >
@@ -330,7 +330,7 @@ function HandEdit() {
         e.preventDefault();
         if (saving) return;
         setSaving(true);
-        const r = await send("editVision", { expectedRev: baseRev, text, focus, reason: reason.trim() || "Written by hand while shaping" });
+        const r = await send("editVision", { expectedRev: baseRev, text, focus, reason: reason.trim() || "Written by hand in Vision" });
         setSaving(false);
         if (r.ok) {
           setOpen(false);
@@ -396,7 +396,7 @@ export function ShapingPanel() {
   return (
     <Card
       id="shape"
-      title="Shape the vision"
+      title="The vision"
       className="v-shape"
       actions={
         <>
@@ -440,7 +440,7 @@ export function ShapingPanel() {
         <section>
           <h3>Planned tasks ({roadmap.length})</h3>
           {roadmap.length === 0 ? (
-            <p className="small muted">None yet. Tasks the lead proposes while shaping wait here until you start the factory.</p>
+            <p className="small muted">None yet. Tasks the lead proposes in Vision wait here until you start the factory.</p>
           ) : (
             <Rows label="Planned tasks">
               {roadmap.map((t) => (

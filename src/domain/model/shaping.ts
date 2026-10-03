@@ -40,11 +40,11 @@ const MAX_VISION_FOCUS = 300;
 const MAX_VISION_DRAFTS = 50;
 
 /** The one line shown wherever new work would otherwise be expected to start. Never "Paused". */
-export const SHAPING_LABEL = "Shaping: new work waits until you start building";
+export const SHAPING_LABEL = "Vision: new work waits until you start the factory";
 
 /** Why Start the factory is refused, or undefined when it is allowed. */
 export function startFactoryBlocker(s: State): string | undefined {
-  if (s.project.stage === "building") return "Already building.";
+  if (s.project.stage === "building") return "The factory is already running.";
   if (!currentVision(s).text.trim()) return "Write or accept a vision first.";
   return undefined;
 }
@@ -129,8 +129,8 @@ export function preflightOpenItems(s: State): string[] {
 
 /**
  * The request as the project stands: agreement on the current revisions, the current settings, and every open
- * item confirmed. Only data: the owner's own action sends it (today the Start building button, after its
- * confirmation lists the open items; the pre-flight screen later).
+ * item confirmed. Only data: the owner's own action sends it (the pre-flight's Start the factory, which builds the
+ * same request from what it showed).
  */
 export function startFactoryRequest(s: State): FactoryRequest {
   return { agreed: true, draftRev: draftRev(s), summaryDigest: summaryDigest(lockInSummary(s)), visionRev: currentVision(s).rev, settings: currentFactorySettings(s), acceptOpen: preflightOpenItems(s) };
@@ -222,8 +222,8 @@ export function startFactory(state: State, req: FactoryRequest, now: string): St
     touch(t, now);
     if (release) {
       released.push(t.id);
-      event(s, now, "user", "control", "Released from the roadmap: building started on Autopilot", t.id);
-    } else event(s, now, "user", "control", "Building started; this planned task waits for your go-ahead (your involvement setting)", t.id);
+      event(s, now, "user", "control", "Released from the roadmap: the factory started on Autopilot", t.id);
+    } else event(s, now, "user", "control", "The factory started; this planned task waits for your go-ahead (your involvement setting)", t.id);
   }
   const waiting = roadmapTasks(s).filter((t) => t.holdBeforeStart).length;
   const confirmed = [
@@ -232,7 +232,7 @@ export function startFactory(state: State, req: FactoryRequest, now: string): St
     probes.length ? `${probes.length} unfinished probe${probes.length === 1 ? "" : "s"} confirmed (${probes.map((p) => p.question).join("; ")})` : "",
   ].filter(Boolean);
   const agreed = `you agreed to vision r${rev}${bp ? ` and blueprint r${bp}` : ""}${confirmed.length ? ` with ${confirmed.join(" and ")}` : ""}`;
-  event(s, now, "user", "config", `Building started: ${agreed}${released.length ? `; roadmap released: ${released.join(", ")}` : waiting ? `; ${waiting} planned task${waiting === 1 ? "" : "s"} wait${waiting === 1 ? "s" : ""} for your go-ahead` : ""}`);
+  event(s, now, "user", "config", `The factory started: ${agreed}${released.length ? `; roadmap released: ${released.join(", ")}` : waiting ? `; ${waiting} planned task${waiting === 1 ? "" : "s"} wait${waiting === 1 ? "s" : ""} for your go-ahead` : ""}`);
   return s;
 }
 

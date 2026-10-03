@@ -57,6 +57,29 @@ describe("the decision", () => {
     for (const ip of ["127.0.0.1", "10.1.2.3", "172.17.0.1", "192.168.5.2", "169.254.169.254", "100.64.0.1", "0.0.0.0", "::1", "::", "::ffff:127.0.0.1", "fe80::1", "fd00::1"]) expect(isPublicAddress(ip), ip).toBe(false);
     for (const ip of ["1.1.1.1", "104.16.0.1", "2606:4700::1111", "::ffff:1.1.1.1"]) expect(isPublicAddress(ip), ip).toBe(true);
   });
+  it("judges every IPv6 form that carries a local, private or reserved address as private (review finding 12)", () => {
+    const local = [
+      // IPv4-compatible (::/96), dotted and in hex
+      "::127.0.0.1", "::7f00:1", "::192.168.5.2", "::c0a8:502", "::a00:1",
+      // IPv4-mapped, in hex as well as dotted
+      "::ffff:7f00:1", "::ffff:c0a8:502", "::FFFF:127.0.0.1",
+      // SIIT, RFC 6145 (::ffff:0:0:0/96)
+      "::ffff:0:7f00:1", "::ffff:0:c0a8:502", "::ffff:0:1.1.1.1",
+      // 6to4 (2002::/16): of 192.168.5.2, of 127.0.0.1, and of a public address (a relay to anything)
+      "2002:c0a8:502::1", "2002:7f00:1::1", "2002:101:101::1",
+      // Teredo (2001::/32)
+      "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+      // deprecated site-local (fec0::/10)
+      "fec0::1", "feff::1",
+      // NAT64 (64:ff9b::/96, 64:ff9b:1::/48) that embeds a private or local IPv4
+      "64:ff9b::a00:1", "64:ff9b::127.0.0.1", "64:ff9b::c0a8:502", "64:ff9b:1::a00:1",
+      // discard, documentation, ORCHID, multicast, unique local, link local, with a zone
+      "100::1", "2001:db8::1", "2001:10::1", "ff02::1", "fc00::1", "fe80::1%eth0",
+    ];
+    for (const ip of local) expect(isPublicAddress(ip), ip).toBe(false);
+    // NAT64 of a public IPv4 is how an IPv6-only network reaches a registry: allowed.
+    for (const ip of ["64:ff9b::808:808", "64:ff9b::1.1.1.1", "2a03:2880:f12f:83:face:b00c:0:25de"]) expect(isPublicAddress(ip), ip).toBe(true);
+  });
 });
 
 describe("the proxy on this computer", () => {

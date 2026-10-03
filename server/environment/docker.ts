@@ -11,6 +11,12 @@
 //                    XDG_CACHE_HOME points). Not removed when it ends: the service commits what it wrote outside the
 //                    mounts (a toolchain's own folders, HOME) as the prepared image, then removes it.
 //   run              the checks' commands, `--network none`, on the prepared image, with one mount: the copy (/work).
+//   preview          the capture of evidence's preview (unit E2), as run but detached, with PORT set. Its network is
+//                    `none` too: the recorder's browser joins this container's network, so the two share one
+//                    loopback and nothing else (the app may listen on 127.0.0.1, as many dev servers do).
+//   session          a CLI's recording (unit E2), as run but made with `docker create --tty --interactive`: the
+//                    service attaches to its terminal, types the tape and records it. A terminal's variables (TERM,
+//                    VHS's prompt) instead of CI and NO_COLOR.
 //
 // Every container: a non-root user, no capabilities, no new privileges, a private /tmp, limits on processes, memory and
 // CPU, its own name (so the service can kill it), and the image's entrypoint replaced by the program itself. The image's
@@ -38,21 +44,12 @@ export const PROXY_LIMITS = { pids: 64, memoryBytes: 128 * 1024 * 1024, cpus: 0.
 export const LABEL = "orchestrator.environment";
 
 /**
- * The variables that send a tool's HTTPS through a proxy (data: the conventional names, and the JVM's options).
- * Tools that ignore them reach nothing: the private network has no other way out.
+ * The variables that send a tool's HTTPS through a proxy: the conventional names, which most package managers read.
+ * A tool that ignores them reaches nothing, because the private network has no other way out; the proxy's refusals
+ * show in the prepare's log. No tool or language has a variable of its own here.
  */
-export const proxyEnv = (proxy: string): Record<string, string> => {
-  const url = `http://${proxy}:${PROXY_PORT}`;
-  return {
-    HTTPS_PROXY: url,
-    https_proxy: url,
-    HTTP_PROXY: url,
-    http_proxy: url,
-    NO_PROXY: "",
-    no_proxy: "",
-    JAVA_TOOL_OPTIONS: `-Dhttps.proxyHost=${proxy} -Dhttps.proxyPort=${PROXY_PORT} -Dhttp.proxyHost=${proxy} -Dhttp.proxyPort=${PROXY_PORT}`,
-  };
-};
+export const PROXY_VARIABLES: readonly string[] = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"];
+export const proxyEnv = (proxy: string): Record<string, string> => Object.fromEntries(PROXY_VARIABLES.map((k) => [k, /^no_proxy$/i.test(k) ? "" : `http://${proxy}:${PROXY_PORT}`]));
 
 const NAME = /^[a-z0-9][a-z0-9_.-]{0,62}$/;
 /** A host path a `--mount` can name: absolute, with no comma (the option's separator), quote or control character. */
@@ -60,7 +57,7 @@ export const MOUNTABLE = /^\/[^,"\u0000-\u001f\u007f]*$/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
 /** A unique name for a container or a network of the environment. */
-export const envName = (what: "net" | "out" | "proxy" | "prep" | "run" | "probe") => `orc-env-${what}-${process.pid}-${randomBytes(5).toString("hex")}`;
+export const envName = (what: "net" | "out" | "proxy" | "prep" | "run" | "probe" | "preview" | "session") => `orc-env-${what}-${process.pid}-${randomBytes(5).toString("hex")}`;
 
 function need(ok: boolean, what: string) {
   if (!ok) throw new Error(what);
@@ -97,8 +94,10 @@ function hardened(limits: typeof ENV_LIMITS, readOnly: boolean): string[] {
 }
 
 /** The proxy's container: detached, on the private network and the egress network, the script passed as an argument. */
-export function proxyArgs(o: { name: string; privateNet: string; egressNet: string; hosts: string[]; script: string }): string[] {
+export function proxyArgs(o: { name: string; privateNet: string; egressNet: string; hosts: string[]; script: string; addHosts?: string[] }): string[] {
   for (const n of [o.name, o.privateNet, o.egressNet]) need(NAME.test(n), `not a name: ${JSON.stringify(n)}`);
+  // The setup probe's own hosts entries only: a name mapped to the host gateway, to exercise the private-address rule.
+  for (const h of o.addHosts ?? []) need(/^[a-z0-9.-]+\.invalid:host-gateway$/.test(h), `not a probe's hosts entry: ${JSON.stringify(h)}`);
   return [
     "run",
     "--detach",
@@ -112,6 +111,7 @@ export function proxyArgs(o: { name: string; privateNet: string; egressNet: stri
     "--network",
     o.egressNet,
     ...hardened(PROXY_LIMITS, true),
+    ...(o.addHosts ?? []).flatMap((h) => ["--add-host", h]),
     "--label",
     `${LABEL}=proxy`,
     "--env",
@@ -134,9 +134,20 @@ export interface PhaseSpec {
   cache?: string;
   /** The command, each argument as is. argv[0] replaces the image's entrypoint. */
   argv: string[];
-  /** prepare: on the private network, through the proxy (by its container name). run: no network. */
-  phase: { kind: "prepare"; privateNet: string; proxy: string } | { kind: "run" };
+  /**
+   * prepare: on the private network, through the proxy (by its container name). run: no network. preview: no network,
+   * detached, serving on `port` (unit E2). session: no network, made with a terminal for the service to attach to.
+   */
+  phase: { kind: "prepare"; privateNet: string; proxy: string } | { kind: "run" } | { kind: "preview"; port: number } | { kind: "session" };
+  /**
+   * The base image's own values of the proxy variables. The prepared image keeps what its prepare container had, so
+   * the phases after the prepare set each proxy variable back: to the image's own value, or empty when it had none.
+   */
+  imageEnv?: Record<string, string>;
 }
+
+/** A session's terminal: VHS's terminal type and prompt, and CI and NO_COLOR emptied (the prepared image keeps its prepare's). */
+const SESSION_ENV = { TERM: "xterm-256color", PS1: "> ", CI: "", NO_COLOR: "" };
 
 /** `docker run`'s arguments for one command of a phase. Throws on a name, a path or an argument it cannot pass safely. */
 export function phaseArgs(s: PhaseSpec): string[] {
@@ -146,21 +157,26 @@ export function phaseArgs(s: PhaseSpec): string[] {
   for (const p of [s.work, ...(prepare ? [s.cache!] : [])]) need(MOUNTABLE.test(p), `Docker cannot mount ${JSON.stringify(p)} (a comma, a quote or a control character)`);
   need(!s.image.startsWith("-") && s.image.length > 0, `not an image: ${JSON.stringify(s.image)}`);
   need(s.argv.length > 0 && !s.argv[0].startsWith("-") && s.argv.every((a) => !/[\0]/.test(a)), "not a command");
+  if (s.phase.kind === "preview") need(Number.isInteger(s.phase.port) && s.phase.port >= 1024 && s.phase.port <= 65535, `not a port: ${s.phase.port}`);
   const env: Record<string, string> = {
     HOME,
     TMPDIR: "/tmp",
     LANG: "C.UTF-8",
     CI: "1",
     NO_COLOR: "1",
-    // prepare: through the proxy, with a download cache shared by the project's prepares. run: the proxy variables
-    // are emptied, because the prepared image keeps the variables its prepare container had.
-    ...(s.phase.kind === "prepare" ? { ...proxyEnv(s.phase.proxy), XDG_CACHE_HOME: `${CACHE}/xdg` } : { ...Object.fromEntries(Object.keys(proxyEnv("x")).map((k) => [k, ""])), XDG_CACHE_HOME: `${HOME}/.cache` }),
+    // prepare: through the proxy, with a download cache shared by the project's prepares. The others: the proxy
+    // variables go back to the base image's own values, because the prepared image keeps its prepare container's.
+    ...(s.phase.kind === "prepare" ? { ...proxyEnv(s.phase.proxy), XDG_CACHE_HOME: `${CACHE}/xdg` } : { ...Object.fromEntries(PROXY_VARIABLES.map((k) => [k, s.imageEnv?.[k] ?? ""])), XDG_CACHE_HOME: `${HOME}/.cache` }),
+    ...(s.phase.kind === "preview" ? { PORT: String(s.phase.port), BROWSER: "none" } : {}),
+    ...(s.phase.kind === "session" ? SESSION_ENV : {}),
   };
   for (const k of Object.keys(env)) need(ENV_NAME.test(k), `not a variable: ${k}`);
   if (s.phase.kind === "prepare") need(NAME.test(s.phase.privateNet) && NAME.test(s.phase.proxy), "not a network or proxy name");
+  // prepare: kept for its commit. run: removed when it ends. preview: detached, its log read before the service
+  // removes it. session: created with a terminal, started once the service is attached; the service removes it.
+  const start = { prepare: ["run"], run: ["run", "--rm"], preview: ["run", "--detach"], session: ["create", "--tty", "--interactive"] }[s.phase.kind];
   return [
-    "run",
-    ...(prepare ? [] : ["--rm"]),
+    ...start,
     "--name",
     s.name,
     "--pull",

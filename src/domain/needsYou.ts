@@ -3,6 +3,7 @@
 // (server/runtimes/fakeStatus.ts) agree.
 
 import * as D from "./delivery";
+import { unconfirmedDevcontainer } from "./environment";
 import * as F from "./findings";
 import * as M from "./model";
 import { changeOrderNeeds } from "./model/changeOrderUpdates";
@@ -115,10 +116,10 @@ const mergeAsked = (pr: PrDelivery) => pr.mergeRequested?.headSha === pr.headSha
 export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[] {
   const items: NeedsYouEntry[] = [];
   const stop = budgetStop(state);
-  if (stop) items.push({ kind: "open", key: "budget", what: stop.why, detail: budgetDetail(), action: "Settings", href: "#/settings/project" });
+  if (stop) items.push({ kind: "open", key: "budget", what: stop.why, detail: budgetDetail(), action: "Settings", href: "#/settings/project/budgets" });
   // Apart from the stop: while a building budget is set, a run with no recorded cost is the owner's to know about.
   const unknown = state.project.budgets.buildingUsd === null ? [] : (stop?.spend ?? buildingSpend(state)).unknown;
-  if (unknown.length) items.push({ kind: "open", key: "budget-unknown", what: unknownCostLine(unknown), detail: unknownCostDetail(unknown), action: "Settings", href: "#/settings/project" });
+  if (unknown.length) items.push({ kind: "open", key: "budget-unknown", what: unknownCostLine(unknown), detail: unknownCostDetail(unknown), action: "Settings", href: "#/settings/project/budgets" });
   // A run's agent started the provider's own subagents where none is allowed (ORC-031): the owner knows, until they mark it as seen.
   for (const x of slippedThrough(state)) {
     const task = x.taskId ? state.tasks.find((t) => t.id === x.taskId) : undefined;
@@ -130,6 +131,9 @@ export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[]
     const needs = changeOrderNeeds(state, co);
     if (needs) items.push({ kind: "open", key: `change-order-${co.rev}`, what: `Change order: blueprint r${co.rev}`, detail: changeOrderDetail(state, co, needs.words), action: "Open", href: `#/tasks/change-order/${co.rev}` });
   }
+  // A dev container that changed (or appeared) at the trusted base is not used until the owner confirms it.
+  const dc = unconfirmedDevcontainer(state);
+  if (dc) items.push({ kind: "open", key: "devcontainer", what: "the repository's dev container is not confirmed", detail: `${dc.file} at ${dc.sha.slice(0, 12)} chooses the image the checks and the evidence run in. It is not used until you confirm it (sha256 ${dc.sha256.slice(0, 12)}…): until then they use the image you confirmed, or run on this computer.`, action: "Settings", href: "#/settings/project/environment" });
   const gh = state.project.github;
   if (gh?.problem && (state.project.prDelivery.enabled || D.openPrTasks(state).length > 0)) {
     items.push({ kind: "open", key: "gh", what: "GitHub delivery is stopped", detail: gh.problem.message, action: "Settings", href: "#/settings/project/delivery" });

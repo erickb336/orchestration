@@ -8,7 +8,7 @@
 //     hosts and prepare inputs reuses them instead of preparing again.
 
 import { createHash } from "node:crypto";
-import { chmodSync, constants, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { closeSync, constants, cpSync, existsSync, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, rmdirSync, unlinkSync, type Stats } from "node:fs";
 import { dirname, join } from "node:path";
 import { isPrepareInput } from "../../src/domain/environment";
 
@@ -97,23 +97,72 @@ export function cloneEntries(from: string, to: string, entries: string[]): strin
   return done;
 }
 
-/** Remove a folder that container code wrote, read-only folders included (Go's module cache makes them). Links are removed, not followed. */
+const sameEntry = (a: Stats, b: Stats) => a.dev === b.dev && a.ino === b.ino;
+
+/** `p` is still the folder that was opened (`own`): a link or anything else put in its place stops the walk. */
+function still(p: string, own: Stats): void {
+  const now = lstatSync(p);
+  if (!now.isDirectory() || !sameEntry(now, own)) throw new Error(`${p} was replaced while it was being removed; the clean-up stopped there`);
+}
+
+/**
+ * Remove a folder that container code wrote, read-only folders included (Go's module cache makes them), without ever
+ * following a link. Each folder is opened with O_NOFOLLOW and made writable through its own descriptor; before each
+ * removal below it, the walk checks that the folder is still the one it opened. A link is removed, never followed. A
+ * folder replaced during the walk stops the walk with an error, and what remains stays. Node has no unlinkat, so the
+ * service also waits until no container mounts the folder before it removes it (prepared.ts): nothing should change
+ * the folder during the walk.
+ */
 export function removeTree(dir: string): void {
-  const open = (p: string) => {
-    let st;
+  let st: Stats;
+  try {
+    st = lstatSync(dir);
+  } catch {
+    return;
+  }
+  removeEntry(dir, st);
+}
+
+function removeEntry(p: string, st: Stats, parent?: { path: string; own: Stats }): void {
+  if (!st.isDirectory()) {
+    if (parent) still(parent.path, parent.own);
     try {
-      st = lstatSync(p);
-    } catch {
-      return;
+      return void unlinkSync(p);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw e;
     }
-    if (!st.isDirectory()) return;
-    try {
-      chmodSync(p, 0o700);
-    } catch {
-      /* not ours: rmSync reports it */
+  }
+  let fd: number;
+  try {
+    fd = openSync(p, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    // Replaced by a link or a file since its lstat: that entry itself goes, never what it points to.
+    if (code === "ELOOP" || code === "ENOTDIR" || code === "EMLINK") return removeEntry(p, lstatSync(p), parent);
+    if (code === "ENOENT") return;
+    throw e;
+  }
+  try {
+    const own = fstatSync(fd);
+    if (!sameEntry(own, st)) throw new Error(`${p} was replaced while it was being removed; the clean-up stopped there`);
+    fchmodSync(fd, 0o700);
+    const names = readdirSync(p);
+    for (const name of names) {
+      still(p, own);
+      const child = join(p, name);
+      let cst: Stats;
+      try {
+        cst = lstatSync(child);
+      } catch {
+        continue;
+      }
+      removeEntry(child, cst, { path: p, own });
     }
-    for (const name of readdirSync(p)) open(join(p, name));
-  };
-  open(dir);
-  rmSync(dir, { recursive: true, force: true });
+    still(p, own);
+    if (parent) still(parent.path, parent.own);
+    rmdirSync(p);
+  } finally {
+    closeSync(fd);
+  }
 }

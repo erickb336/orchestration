@@ -1582,7 +1582,8 @@ export const DEFAULT_PR_DELIVERY: PrDeliveryConfig = {
   updateBeforeMerge: true,
   autoRepair: true,
   // The repository's instruction files, anywhere in the tree, are protected too.
-  protectedPaths: [".github/**", "package.json", "tsconfig*.json", "vitest.config.*", "vite.config.*", "**/AGENTS.md", "**/CLAUDE.md"],
+  // The dev container and the Dockerfiles it may name choose the image the checks and the evidence run in.
+  protectedPaths: [".github/**", "package.json", "tsconfig*.json", "vitest.config.*", "vite.config.*", "**/AGENTS.md", "**/CLAUDE.md", ".devcontainer/**", ".devcontainer.json", "**/Dockerfile", "**/Dockerfile.*", "**/*.Dockerfile", "**/*.dockerfile"],
   allowLocalWorkers: false,
   maxOpenPrs: 5,
   maxAutoMergesPerDay: 20,

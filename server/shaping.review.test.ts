@@ -86,14 +86,14 @@ describe("no delivery work while shaping (simulated GitHub)", () => {
       expect(["observe", "fetch", "preflight", undefined]).toContain(op?.kind);
     }
     // Labels: the pull request, its gate and the review row say what they wait for, never "queued" or "paused".
-    expect(D.prLabel(st(), task(first), now)).toEqual({ text: "PR #1000 waits until you start building (shaping)", tone: "plain", simulated: true });
+    expect(D.prLabel(st(), task(first), now)).toEqual({ text: "PR #1000 waits until you start the factory", tone: "plain", simulated: true });
     const gate = D.prGate(st(), task(first), now, { byUser: true }).items.find((x) => x.id === "not-paused")!;
     expect(gate).toMatchObject({ ok: false, state: "waiting" });
-    expect(gate.detail).toMatch(/^Shaping: nothing is pushed, opened, merged or brought up to date until you start building\. Nothing is paused\.$/);
+    expect(gate.detail).toMatch(/^Vision: nothing is pushed, opened, merged or brought up to date until you start the factory\. Nothing is paused\.$/);
     const review = st().tasks.find((t) => t.reviewTarget?.taskId === first)!;
     expect(review).toBeDefined();
     expect(M.activeAttempts(st(), review.id)).toHaveLength(0);
-    expect(D.reviewView(st(), task(first)).evidence.reason).toMatch(/is held: it waits until you start building \(shaping\)\.$/);
+    expect(D.reviewView(st(), task(first)).evidence.reason).toMatch(/is held: it waits until you start the factory\.$/);
     expect(D.reviewView(st(), task(first)).evidence.reason).not.toMatch(/queued/);
     // The second task finished meanwhile and became Done, but was not integrated and got no pull request.
     expect(task(second).lifecycle).toBe("done");
@@ -168,7 +168,7 @@ describe("migration 12 → 13", () => {
     expect(shaping.tasks.find((t) => t.id === "EX-004")).toMatchObject({ heldForShaping: true, holdBeforeStart: false });
     expect(shaping.tasks.find((t) => t.id === "EX-003")!.heldForShaping).toBeUndefined();
     expect(shaping.tasks.filter((t) => t.id !== "EX-004").every((t) => t.heldForShaping === undefined)).toBe(true);
-    expect(M.stateLabel(shaping, shaping.tasks.find((t) => t.id === "EX-004")!)).toBe("Planned; waits until you start building, then starts on Autopilot");
+    expect(M.stateLabel(shaping, shaping.tasks.find((t) => t.id === "EX-004")!)).toBe("Planned; waits until you start the factory, then starts on Autopilot");
     const checkin = reopen((d) => {
       const doc = d as unknown as Doc;
       doc.project.stage = "shaping";

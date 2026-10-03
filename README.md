@@ -23,13 +23,23 @@ It opens a sample project (Weekend Trips, a hiking app) on a simulated runtime, 
 
 ## How it works
 
-1. **Shape the vision with the lead.** It asks targeted questions and drafts the vision with you. Nothing runs yet.
-2. **The lead plans tasks.** Each task gets a versioned spec: the options, their trade-offs, and the chosen approach.
+1. **Design it in Vision.** The lead asks targeted questions, a designer makes prototypes you can click, and you approve what you want. Nothing is built yet (see below).
+2. **Start the factory, and the lead plans tasks** from what you approved. Each task gets a versioned spec: the options, their trade-offs, and the chosen approach.
 3. **It picks a flow for each task** (see below), and a provider and model for each step.
 4. **Each step is a fresh agent** in its own copy of the repository, given only the earlier outputs it needs and a few working principles that fit its job (fix the root cause, the smallest change, prove it works), adapted from [pstack](https://github.com/cursor/plugins/tree/main/pstack) (MIT). Every agent and the lead also get one of our own, [*contextualize and write for the reader*](principles/contextualize-and-write-for-the-reader.md): whatever they write says where it fits, what was decided and what is left, so you can come in cold.
 5. **The service runs your project's checks** (tests, lint, build). **Then a code review and a security review run side by side.** The coder repairs whatever any of them found, and they run again until all are clean.
 6. **The lead verifies the result against the spec.** It is delivered as a branch or a pull request, which you merge or which merges automatically.
 7. **You look at the results** whenever you like, and can send anything that landed back as a fix or a revert.
+
+### Vision, then the factory
+
+Every project starts in **Vision**, where nothing is built.
+
+- **The studio.** The lead opens a round on one focus: the experience, the inputs and outputs, or the flows. A designer makes the parts: screens on the devices you chose, terminal demos, data contracts, and flows as "If …, then …" rules. The PE, a principal engineer agent, checks that each part can be built and estimates its cost.
+- **The draft.** You mark each part Keep, Change or Drop, and approve what you want. What you approve goes into the draft, not into force.
+- **Start the factory.** The pre-flight shows the blueprint (what you approved), what is still open, the tasks, and how the factory runs, with its two budgets: building, and maintenance a month. At the building budget, the factory stops and asks you. Your agreement starts it: the first **Lock in**.
+- **Change orders.** Vision stays open while the factory runs. A new design goes into the draft, and **Lock in** puts it into force. First it shows what changes: the tasks it touches and what happens to each, the new work and the budgets. That Lock in is a **change order**: the lead updates the tasks, or asks you first.
+- **Design and reality.** Each part shows where it stands: designed, in the draft, being built, built and verified. The built screen or CLI sits beside its design, and each rule shows its test, so you check the result without reading code.
 
 ![Home in the demo](docs/screenshots/home.png)
 
@@ -116,7 +126,7 @@ npm run typecheck
 npm test
 npm run build
 npm run capture    # retake the README images from the demo (needs Chrome and ffmpeg)
-npm run test:integration   # the end-to-end scenario on simulated agents (about 90 s; CI runs it)
+npm run test:integration   # the end-to-end scenario on simulated agents (about 2 minutes; CI runs it)
 npm run test:real          # the same scenario with real Claude and Codex agents (your credentials; about $0.19 last time)
 ```
 
@@ -131,7 +141,7 @@ npm run test:real          # the same scenario with real Claude and Codex agents
 
 ## Status
 
-A personal tool under active development. It was built in milestones ORC-001 to ORC-033, each with a spec in [`docs/tasks/`](docs/tasks/) giving the options, the decision and the evidence. Twenty-three are done, one is in progress, four were dropped, and five are planned. Later milestones sometimes replaced earlier ones; the last column says what survives.
+A personal tool under active development. It was built in milestones ORC-001 to ORC-033, each with a spec in [`docs/tasks/`](docs/tasks/) giving the options, the decision and the evidence. Twenty-four are done, four were dropped, and five are planned or in progress. Later milestones sometimes replaced earlier ones; the last column says what survives.
 
 **The foundation** (the five milestones in the [project spec](docs/PROJECT_SPEC.md), plus pipelines):
 
@@ -153,7 +163,7 @@ A personal tool under active development. It was built in milestones ORC-001 to 
 | [ORC-009](docs/tasks/ORC-009.md) Steering by conversation | Message the lead to change the focus, priorities or plans, with Undo | Done |
 | [ORC-010](docs/tasks/ORC-010.md) Your own Claude subscription | Opt-in: Claude agents run on your own subscription token instead of an API key | Done; used in the real run |
 | [ORC-011](docs/tasks/ORC-011.md) Guided setup | `npm run setup` once, then `npm start` | Done |
-| [ORC-012](docs/tasks/ORC-012.md) Shape the vision first | The lead asks questions and drafts the vision with you before anything runs | Done |
+| [ORC-012](docs/tasks/ORC-012.md) Shape the vision first | The lead asks questions and drafts the vision with you before anything runs | Done; became Vision in ORC-029 |
 | [ORC-013](docs/tasks/ORC-013.md) Quality gates | The service runs your checks in a sandbox; each review finding is triaged; review coverage is recorded | Done |
 | [ORC-014](docs/tasks/ORC-014.md) Vision documents | Attach files or a folder to the vision | Done |
 | ORC-015 Phone access | Reaching the app from a phone | Dropped |
@@ -173,7 +183,7 @@ A personal tool under active development. It was built in milestones ORC-001 to 
 | [ORC-026](docs/tasks/ORC-026.md) Write for the reader | A sixteenth principle, our own, given to every agent and the lead | Done |
 | [ORC-027](docs/tasks/ORC-027.md) The real-run test, committed | The end-to-end scenario runs in CI on simulated agents; `npm run test:real` runs it with real ones and leaves a record in [`docs/real-runs/`](docs/real-runs/) | Done |
 | [ORC-028](docs/tasks/ORC-028.md) Fixes from the real run | Investigation revises its report while its review finds something, and a rule keeps every flow from dropping review findings | Done; **verified with real models** |
-| [ORC-029](docs/tasks/ORC-029.md) The vision studio, before the factory | Shape the product with the lead on prototypes you can click (demo sites, mobile mockups, terminal demos), inputs and outputs, and flows; the approved blueprint is what the factory builds from | **In progress** (passes 1–4 and 4d of 6 done) |
+| [ORC-029](docs/tasks/ORC-029.md) The vision studio, before the factory | Design the product with the lead on prototypes you can click (demo sites, mobile mockups, terminal demos), inputs and outputs, and flows; the approved blueprint is what the factory builds from | Done |
 | [ORC-030](docs/tasks/ORC-030.md) QA, UI audit and a new demo | Test the product end to end, audit and clean up the UI, then make the new demo | **Planned** (after ORC-033) |
 | [ORC-031](docs/tasks/ORC-031.md) Subagents in research steps | Let agents in explicitly read-only research steps start their provider's own subagents, counted, costed, capped and shown; writers stay single-session; each provider is switched on only after real runs prove pause and cost | **Planned** (after ORC-029) |
 | [ORC-032](docs/tasks/ORC-032.md) Import an existing project | Derive an "as it is today" vision from an existing repository, then revise it and build on it | **Planned** (after ORC-031) |

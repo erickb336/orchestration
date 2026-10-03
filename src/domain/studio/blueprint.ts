@@ -327,9 +327,16 @@ export function lockInSummary(s: State): LockInSummary {
  * The digest of a Lock in summary: SHA-256 of its RFC 8785 canonical JSON, as hex. Pure, and the same in the app and
  * the service, so the app sends the digest of the summary it showed and the Lock in compares it with the summary it
  * would record.
+ *
+ * The running spend is not in it (pass 6): while the factory runs, each run that finishes changes the spend, and the
+ * owner's agreement must hold while costs tick. The digest keeps what the owner agrees to: the changes, the tasks and
+ * their handling, the new work, the budgets and the PE's estimates, and what stays open. The record keeps the spend
+ * at the Lock in.
  */
 export function summaryDigest(summary: LockInSummary): string {
-  return bytesToHex(sha256(utf8ToBytes(canonicalize(summary) ?? "null")));
+  const { spentUsd: _spent, unknownRuns: _unknown, ...building } = summary.budgets.building;
+  const agreed = { ...summary, budgets: { ...summary.budgets, building } };
+  return bytesToHex(sha256(utf8ToBytes(canonicalize(agreed) ?? "null")));
 }
 
 /** What the owner saw before a Lock in: the draft revision and the digest of the summary (compare-and-set). */

@@ -244,6 +244,19 @@ describe("the record per blueprint item", () => {
     expect(E.itemEvidence(s, "bi-1")).toMatchObject({ design: { artifactId: "sa-1", version: 2, variant: "B" }, current: false, status: "captured" });
   });
 
+  it("says which path made it: the project's environment (with its image and prepare) or the recorder's image", () => {
+    const t = taskCiting(withBlueprint(fresh()), ["bi-1", "bi-3"], 10);
+    const env: E.EvidencePath = { via: "environment", from: "setting", image: `python:3.13-slim@sha256:${"b".repeat(64)}`, imageId: `sha256:${"c".repeat(64)}`, prepare: "reused", key: "0123456789abcdef" };
+    const cast = { path: "bi-3/session.cast", type: "cast" as const, bytes: 900, sha256: "d".repeat(64) };
+    let s = capture(t.s, t.id, { sha: SHA, at: at(30), durationMs: 1, path: env, items: [{ ...item("bi-1"), status: "captured", files: [png("bi-1", "desktop")] }, { ...item("bi-3"), status: "captured", files: [cast] }] }, 30);
+    expect(E.itemEvidence(s, "bi-1")).toMatchObject({ path: env, commit: SHA, design: { version: 2 } });
+    expect(E.itemEvidence(s, "bi-3")).toMatchObject({ path: env, status: "captured", files: [cast] });
+    expect(s.artifacts.at(-1)!.summary).toMatch(/captured in the project's environment \(the confirmed image python:3\.13-slim@sha256:bbbbbbbbbbbb…, its prepare reused\)\./);
+    s = capture(s, t.id, { sha: SHA2, at: at(40), durationMs: 1, path: { via: "recorder", image: "orchestrator-recorder:2" }, items: [{ ...item("bi-1"), status: "captured", files: [png("bi-1", "mobile")] }] }, 40);
+    expect(E.itemEvidence(s, "bi-1")).toMatchObject({ path: { via: "recorder", image: "orchestrator-recorder:2" }, commit: SHA2 });
+    expect(s.artifacts.at(-1)!.summary).toMatch(/captured in the recorder's image orchestrator-recorder:2\./);
+  });
+
   it("a simulated run is labelled as simulated", () => {
     const t = taskCiting(withBlueprint(fresh()), ["bi-1"], 10);
     const s = capture(t.s, t.id, { sha: SHA, at: at(30), durationMs: 0, simulated: true, items: [E.noCapture(item("bi-1"), "simulated", "The fake runtime ran nothing.")] }, 30);

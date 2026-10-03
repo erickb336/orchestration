@@ -168,12 +168,15 @@ export const evidenceFileUrl = (e: Pick<ItemEvidence, "from">, f: Pick<EvidenceF
 /** The screenshot of a device in a captured record. */
 export const shotOf = (e: ItemEvidence, device: CaptureDevice): EvidenceFile | undefined => (e.status === "captured" ? e.files.find((f) => f.type === "png" && f.device === device) : undefined);
 
-/** The recording of a captured terminal record: its WebM or GIF, and its transcript. */
-export function recordingOf(e: ItemEvidence): { video?: EvidenceFile; gif?: EvidenceFile; transcript?: EvidenceFile } {
+/**
+ * The recording of a captured terminal record: its WebM or GIF (the recorder's VHS), its asciicast (a recording in the
+ * project's environment), and its transcript.
+ */
+export function recordingOf(e: ItemEvidence): { video?: EvidenceFile; gif?: EvidenceFile; cast?: EvidenceFile; transcript?: EvidenceFile } {
   if (e.status !== "captured") return {};
   const by = (t: EvidenceFile["type"]) => e.files.find((f) => f.type === t);
-  const [video, gif, transcript] = [by("webm"), by("gif"), by("txt")];
-  return { ...(video ? { video } : {}), ...(gif ? { gif } : {}), ...(transcript ? { transcript } : {}) };
+  const [video, gif, cast, transcript] = [by("webm"), by("gif"), by("cast"), by("txt")];
+  return { ...(video ? { video } : {}), ...(gif ? { gif } : {}), ...(cast ? { cast } : {}), ...(transcript ? { transcript } : {}) };
 }
 
 /**

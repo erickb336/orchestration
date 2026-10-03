@@ -184,6 +184,8 @@ describe("the Capture evidence step through the scheduler", () => {
     expect(a).toMatchObject({ attemptId: run.id, taskId: id, stepId: "E1", sha, items: [E.captureItems(st(), task(id))[0]], preview: { rev: 1, install: E.DEFAULT_INSTALL, preview: ["npm", "run", "preview"], port: 4173 }, outDir: join(dir, "evidence", st().project.id, run.id) });
     expect(git("-C", a.workspace, "rev-parse", "HEAD")).toBe(sha);
     expect(readFileSync(join(a.workspace, CAPTURE_PLAN), "utf8")).toBe(PLAN);
+    // No environment: the recorder's path (unit E2).
+    expect(a.environment).toBeUndefined();
 
     runner.finish(run.id);
     settle();
@@ -199,6 +201,16 @@ describe("the Capture evidence step through the scheduler", () => {
     expect(given.workspace.readRoots).toEqual([join(dir, "evidence", st().project.id, run.id), join(dir, "studio", st().project.id, "artifacts", "sa-1", "v1")]);
     expect(given.prompt).toContain(`- E1.evidence v1 (evidence):\n  Evidence of ${sha.slice(0, 12)}: 1 of 1 item captured.`);
     expect(given.prompt).toContain(`  - bi-1 Trip board (screen v1): built on desktop: ${join(dir, "evidence", st().project.id, run.id, "bi-1/desktop.png")}`);
+  });
+
+  it("a project with an environment: the capture gets it, as a check run would (unit E2)", () => {
+    cmd("setPreview", { preview: { preview: ["python3", "serve.py"], port: 8000 }, install: [] });
+    const image = `python:3.13-slim-trixie@sha256:${"b".repeat(64)}`;
+    cmd("setEnvironment", { environment: { image, prepare: [["python3", "-m", "pip", "install", "--user", "-r", "requirements.txt"]], hosts: ["pkgs.example.com"] } });
+    const id = implemented({ [CAPTURE_PLAN]: PLAN });
+    const runner = evidence as ScriptedEvidence;
+    expect(runner.started[0].attemptId).toBe(runOf(id, "E1")!.id);
+    expect(runner.started[0].environment).toMatchObject({ project: st().project.id, plan: { source: { from: "setting", image }, prepare: [["python3", "-m", "pip", "install", "--user", "-r", "requirements.txt"]], hosts: expect.arrayContaining(["pypi.org", "pkgs.example.com"]) } });
   });
 
   it("the app's file route serves the files the record lists, with the studio files' headers, and nothing else", async () => {

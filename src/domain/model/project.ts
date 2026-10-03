@@ -124,6 +124,8 @@ export function initProject(state: State, init: { name: string; repoPath: string
   delete s.project.delivery;
   // The preview runs the previous repository's commands; only the owner sets it for this one.
   delete s.project.preview;
+  // The environment's image, prepare commands and hosts were confirmed for the previous repository.
+  delete s.project.environment;
   // Checks are off until the user turns them on for this repository, and nothing has been probed for it.
   s.project.checks = structuredClone(DEFAULT_CHECKS);
   delete s.project.checksHealth;
@@ -144,12 +146,14 @@ export function initProject(state: State, init: { name: string; repoPath: string
   s.leadRuns = [];
   // An old project's change sets must not rewrite a new project's task with the same id.
   s.steering = [];
+  // A note queued for an old task's step would go into the first run of the new task with the same ids.
+  s.notes = [];
   s.visionDrafts = [];
   // The studio and the blueprint belong to the project too.
   s.studio = emptyStudio();
   s.blueprint = emptyBlueprint();
   s.project.lastPlanningAt = undefined;
-  event(s, now, "user", "vision", `Project "${s.project.name}" created for ${s.project.repoPath}; shaping the vision first`);
+  event(s, now, "user", "vision", `Project "${s.project.name}" created for ${s.project.repoPath}; it starts in Vision`);
   return s;
 }
 

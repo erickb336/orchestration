@@ -4,10 +4,10 @@
 import { describe, expect, it } from "vitest";
 import { buildSeed } from "../../domain/seed";
 import type { State } from "../../domain/types";
-import { addHost, environmentInput, environmentProblem, environmentSteps, lastPrepareLine, liveEnvironment, sourceLine, takeProposal } from "./environment";
+import { addHost, confirmDevcontainer, environmentInput, environmentProblem, environmentSteps, lastPrepareLine, liveEnvironment, sourceLine, takeProposal } from "./environment";
 
 const PINNED = "python:3.13-slim-trixie@sha256:bb2988715db2cf7ace7b53f38f3cffbef7c7046a656bee66245eb0ed386e2e81";
-const empty = { envImage: "", envPrepare: "", envHosts: [] as string[] };
+const empty = { envImage: "", envPrepare: "", envHosts: [] as string[], envDevcontainer: "" };
 
 describe("the environment form", () => {
   it("reads the setting, and saves one command per line as argument lists", () => {
@@ -15,7 +15,7 @@ describe("the environment form", () => {
     expect(liveEnvironment(s)).toEqual(empty);
     s.project.environment = { rev: 1, image: PINNED, prepare: [["sh", "-c", "make deps"]], hosts: ["pkgs.example.com"] };
     const v = liveEnvironment(s);
-    expect(v).toEqual({ envImage: PINNED, envPrepare: 'sh -c "make deps"', envHosts: ["pkgs.example.com"] });
+    expect(v).toEqual({ envImage: PINNED, envPrepare: 'sh -c "make deps"', envHosts: ["pkgs.example.com"], envDevcontainer: "" });
     expect(environmentInput({ ...v, envPrepare: 'sh -c "make deps"\n\n go mod download ' })).toEqual({ image: PINNED, prepare: [["sh", "-c", "make deps"], ["go", "mod", "download"]], hosts: ["pkgs.example.com"] });
     expect(environmentInput(empty)).toBeNull();
   });
@@ -45,11 +45,27 @@ describe("the environment form", () => {
 });
 
 describe("the card's lines", () => {
-  it("the dev container comes first; then the confirmed image; else the checks run on this computer", () => {
-    const dc = { ref: "main", devcontainer: { file: ".devcontainer/devcontainer.json", image: "node:22" } };
-    expect(sourceLine(dc, PINNED)).toMatchObject({ label: "Dev container", tone: "done" });
-    expect(sourceLine({ ref: "main" }, PINNED)).toMatchObject({ label: "Confirmed image", text: expect.stringMatching(/sha256:bb2988715db2…/) });
+  it("the confirmed dev container comes first; then the confirmed image; else the checks run on this computer", () => {
+    const SHA = "f".repeat(64);
+    const dc = { ref: "main", devcontainer: { file: ".devcontainer/devcontainer.json", image: "node:22", sha256: SHA } };
+    const saved = (o: object = {}) => ({ rev: 1, image: PINNED, prepare: [], hosts: [], ...o });
+    expect(sourceLine(dc, saved({ devcontainer: { file: dc.devcontainer.file, sha256: SHA } }))).toMatchObject({ label: "Dev container", tone: "done" });
+    expect(sourceLine({ ref: "main" }, saved())).toMatchObject({ label: "Confirmed image", text: expect.stringMatching(/sha256:bb2988715db2…/) });
     expect(sourceLine({ ref: "main", devcontainer: { file: ".devcontainer.json", refused: "It uses Docker Compose." } }, undefined)).toMatchObject({ label: "Not set up", tone: "fail", text: expect.stringMatching(/^It uses Docker Compose\. Checks run on this computer/) });
+  });
+
+  it("a dev container the owner has not confirmed is not used, and the card asks for it (review finding 3)", () => {
+    const SHA = "f".repeat(64);
+    const dc = { ref: "main", devcontainer: { file: ".devcontainer/devcontainer.json", image: "node:22", sha256: SHA } };
+    expect(sourceLine(dc, { rev: 1, image: PINNED, prepare: [], hosts: [] })).toMatchObject({ label: "Dev container not confirmed", tone: "fail", text: expect.stringMatching(/not used until you confirm it.*The checks use .*sha256:bb2988715db2…/) });
+    expect(sourceLine(dc, undefined)).toMatchObject({ label: "Dev container not confirmed", text: expect.stringMatching(/Checks run on this computer/) });
+    expect(sourceLine(dc, { rev: 1, prepare: [], hosts: [], devcontainer: { file: dc.devcontainer.file, sha256: "0".repeat(64) } })).toMatchObject({ label: "Dev container not confirmed", text: expect.stringMatching(/changed since you confirmed it/) });
+    // "Confirm this dev container" puts its digest in the form; Save sends it with the rest of the setting.
+    const v = { ...empty, ...confirmDevcontainer(dc.devcontainer) };
+    expect(environmentInput(v)).toEqual({ prepare: [], hosts: [], devcontainer: { file: dc.devcontainer.file, sha256: SHA } });
+    const s = buildSeed(Date.parse("2026-10-02T12:00:00Z"), { inFlightRuns: false });
+    s.project.environment = { rev: 1, prepare: [], hosts: [], devcontainer: { file: dc.devcontainer.file, sha256: SHA } };
+    expect(liveEnvironment(s).envDevcontainer).toBe(v.envDevcontainer);
   });
 
   it("the last prepare: ran, reused, or on this computer and why", () => {
@@ -60,5 +76,11 @@ describe("the card's lines", () => {
     expect(lastPrepareLine(s)).toMatch(/prepared in 2\.3 s, in python:3\.13-slim-trixie@sha256:bb2988715db2…\. The proxy refused: example\.com/);
     s.artifacts.push(art("2026-10-02T12:02:00Z", { ran: "host", reason: "Docker is not running" }));
     expect(lastPrepareLine(s)).toMatch(/on this computer, because Docker is not running\.$/);
+    // Review finding 8: the checks' own prepare commands, and no prepare at all, are said as such, never "prepared in 0.0 s".
+    s.artifacts.push(art("2026-10-02T12:03:00Z", { ran: "container", from: "devcontainer", image: PINNED, prepare: "ran", prepareFrom: "checks", key: "0123456789abcdef", prepareMs: 4100 }));
+    expect(lastPrepareLine(s)).toMatch(/prepared in 4\.1 s with the checks' own prepare commands, because the environment has none,/);
+    s.artifacts.push(art("2026-10-02T12:04:00Z", { ran: "container", from: "devcontainer", image: PINNED, prepare: "none", key: "0123456789abcdef", prepareMs: 0 }));
+    expect(lastPrepareLine(s)).toMatch(/no prepare command ran: the environment and the checks have none\. Set them above if the checks need dependencies\./);
+    expect(lastPrepareLine(s)).not.toMatch(/prepared in/);
   });
 });

@@ -68,6 +68,12 @@
 .s-mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: var(--fs-small); overflow-wrap: anywhere; }
 .s-gap { margin-top: var(--space-3); }
 
+/* ---------- an overrule: what the PE says, your reason, the button (Settings and the task page) ---------- */
+.s-overrule { display: grid; gap: var(--space-2); justify-items: start; min-width: 0; }
+.s-overrule > * { margin: 0; max-width: 100%; }
+.s-overrule .k-field { width: 100%; }
+.s-overrule + .s-overrule { border-top: 1px solid var(--border); padding-top: var(--space-3); margin-top: var(--space-3); }
+
 /* ---------- lists: providers, commands, flows, principles ---------- */
 .s-list { list-style: none; margin: 0; padding: 0; min-width: 0; }
 .s-list > li { padding: var(--space-3) 0; border-top: 1px solid var(--border); min-width: 0; }

@@ -145,7 +145,7 @@ function MessageItem({ state, message: m, leadModel, blocked }: { state: State; 
               </li>
             ))}
           </ol>
-          {state.project.stage === "shaping" && M.latestQuestions(state)?.message.id === m.id && <p className="muted small no-margin">Answer them inline in “Shape the vision” on Home, or reply here.</p>}
+          {state.project.stage === "shaping" && M.latestQuestions(state)?.message.id === m.id && <p className="muted small no-margin">Answer them inline in “The vision” on Home, or reply here.</p>}
         </div>
       )}
       {draft && (

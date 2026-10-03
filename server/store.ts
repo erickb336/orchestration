@@ -134,7 +134,7 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
       project.stage = "shaping";
       project.shapingSince = now;
       doc.seq = (typeof doc.seq === "number" ? doc.seq : 0) + 1;
-      events.push({ id: `ev-${doc.seq}`, at: now, actor: "system", kind: "config", message: "Moved from building to shaping when the state format was upgraded: the project has no vision yet. Write or accept one, then start building." });
+      events.push({ id: `ev-${doc.seq}`, at: now, actor: "system", kind: "config", message: "Moved from the factory back to Vision when the state format was upgraded: the project has no vision yet. Write or accept one, then start the factory." });
     }
     if (project.stage === "shaping") {
       project.shapingSince ??= now;

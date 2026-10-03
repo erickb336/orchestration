@@ -52,6 +52,52 @@ describe("the argument lists", () => {
     expect(values(args, "--cap-drop")).toEqual(["ALL"]);
   });
 
+  it("no tool or language has a variable of its own, and the phases after the prepare keep the image's own values (review finding 13)", () => {
+    const prep = values(phaseArgs({ ...base, phase: { kind: "prepare", privateNet: "orc-env-net-1-abc", proxy: "orc-env-proxy-1-abc" } }), "--env");
+    expect(prep.map((e) => e.slice(0, e.indexOf("=")))).toEqual(["HOME", "TMPDIR", "LANG", "CI", "NO_COLOR", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "XDG_CACHE_HOME"]);
+    // An image that sets its own JVM options and its own proxy keeps them in the run, preview and session phases.
+    const imageEnv = { HTTPS_PROXY: "http://corp-proxy:8080" };
+    for (const phase of [{ kind: "run" }, { kind: "preview", port: 8000 }, { kind: "session" }] as const) {
+      const env = values(phaseArgs({ ...base, cache: undefined, phase, imageEnv }), "--env");
+      expect(env, phase.kind).toContain("HTTPS_PROXY=http://corp-proxy:8080");
+      expect(env, phase.kind).toContain("HTTP_PROXY=");
+      expect(env.join(" "), phase.kind).not.toMatch(/JAVA_TOOL_OPTIONS/);
+    }
+  });
+
+  it("preview (unit E2): --network none, detached, PORT set, the run's hardening and its one mount", () => {
+    const args = phaseArgs({ ...base, name: "orc-env-preview-1-abc", cache: undefined, argv: ["python3", "serve.py"], phase: { kind: "preview", port: 8000 } });
+    expect(args.slice(0, 2)).toEqual(["run", "--detach"]);
+    expect(args).not.toContain("--rm");
+    expect(values(args, "--network")).toEqual(["none"]);
+    expect(values(args, "--env")).toEqual(expect.arrayContaining(["PORT=8000", "BROWSER=none", "HTTPS_PROXY=", "HTTP_PROXY="]));
+    expect(values(args, "--env").filter((e) => /PROXY=./i.test(e))).toEqual([]);
+    expect(values(args, "--mount")).toEqual([`type=bind,source=${base.work},target=${WORK}`]);
+    expect(values(args, "--user")).toEqual([ENV_USER]);
+    expect(values(args, "--cap-drop")).toEqual(["ALL"]);
+    expect(values(args, "--security-opt")).toEqual(["no-new-privileges"]);
+    expect(values(args, "--label")).toEqual(["orchestrator.environment=preview"]);
+    expect(args).not.toContain("--add-host");
+    expect(args).not.toContain("--publish");
+    expect(() => phaseArgs({ ...base, cache: undefined, phase: { kind: "preview", port: 80 } })).toThrow(/not a port/);
+  });
+
+  it("session (unit E2): created with a terminal, --network none, a terminal's variables instead of CI and NO_COLOR", () => {
+    const args = phaseArgs({ ...base, name: "orc-env-session-1-abc", cache: undefined, argv: ["bash", "--noprofile", "--norc", "-i"], phase: { kind: "session" } });
+    expect(args.slice(0, 3)).toEqual(["create", "--tty", "--interactive"]);
+    expect(args).not.toContain("--rm");
+    expect(values(args, "--network")).toEqual(["none"]);
+    const env = values(args, "--env");
+    expect(env).toEqual(expect.arrayContaining(["TERM=xterm-256color", "PS1=> ", "CI=", "NO_COLOR=", "HTTPS_PROXY="]));
+    expect(env).not.toContain("CI=1");
+    expect(env).not.toContain("NO_COLOR=1");
+    expect(values(args, "--mount")).toEqual([`type=bind,source=${base.work},target=${WORK}`]);
+    expect(values(args, "--user")).toEqual([ENV_USER]);
+    expect(values(args, "--cap-drop")).toEqual(["ALL"]);
+    expect(values(args, "--entrypoint")).toEqual(["bash"]);
+    expect(args.slice(args.indexOf(base.image) + 1)).toEqual(["--noprofile", "--norc", "-i"]);
+  });
+
   it("an ended prepare container becomes the next image", () => {
     expect(commitArgs("orc-env-prep-1-abc")).toEqual(["commit", "--change", "LABEL orchestrator.environment=prepared", "orc-env-prep-1-abc"]);
     expect(() => commitArgs("-x")).toThrow(/not a container name/);
@@ -76,6 +122,13 @@ describe("the argument lists", () => {
     expect(args.slice(args.indexOf(PROXY_IMAGE))).toEqual([PROXY_IMAGE, "--input-type=module", "--eval", "/* proxy */"]);
     expect(values(args, "--user")).toEqual([ENV_USER]);
     expect(args).not.toContain("--mount");
+    expect(args).not.toContain("--add-host");
+  });
+
+  it("only the setup probe's proxy gets a hosts entry: a reserved .invalid name mapped to the host gateway (review finding 5)", () => {
+    const base = { name: "orc-env-proxy-1-abc", privateNet: "orc-env-net-1-abc", egressNet: "orc-env-out-1-abc", hosts: ["registry.probe.invalid"], script: "/* proxy */" };
+    expect(values(proxyArgs({ ...base, addHosts: ["registry.probe.invalid:host-gateway"] }), "--add-host")).toEqual(["registry.probe.invalid:host-gateway"]);
+    for (const h of ["pypi.org:10.0.0.1", "registry.npmjs.org:host-gateway", "x.invalid:1.2.3.4"]) expect(() => proxyArgs({ ...base, addHosts: [h] }), h).toThrow(/not a probe's hosts entry/);
   });
 
   it("a dev container's Dockerfile builds with no network for its RUN steps", () => {

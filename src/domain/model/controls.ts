@@ -79,7 +79,7 @@ export function startHeldTask(state: State, taskId: string, now: string): State 
   takeOverShapingHold(s, t, now);
   t.holdBeforeStart = false;
   touch(t, now);
-  event(s, now, "user", "control", `Started on your go-ahead; eligible for dispatch${s.project.stage === "shaping" ? " once you start building" : ""}`, t.id);
+  event(s, now, "user", "control", `Started on your go-ahead; eligible for dispatch${s.project.stage === "shaping" ? " once you start the factory" : ""}`, t.id);
   return s;
 }
 

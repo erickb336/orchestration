@@ -6,6 +6,8 @@
 //   no network       --network none: the container has only its own loopback, where VHS, ttyd and Chromium talk.
 //                    One exception: the capture of evidence's dependency download (evidence.ts), which runs npm,
 //                    pnpm or yarn with every install hook off, gets Docker's bridge network; nothing else does.
+//                    The capture's browser beside a preview in a project's environment (unit E2) shares the network
+//                    of the preview's container, which is --network none too: one loopback, nothing else.
 //   no host files    two bind mounts and nothing else: a fresh copy of the artifact (/work) and an empty output folder
 //                    (/out), both inside a stage folder the service makes for this one recording. No Docker socket.
 //   read-only root   --read-only, with small tmpfs folders for /tmp and HOME. The VHS image's own volume (/vhs) is
@@ -25,9 +27,11 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { createServer, type Server } from "node:net";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
+import type { Duplex } from "node:stream";
 import { killGroup, trackLive } from "../processes";
 
 /** The recorder's image. `npm run recorder:build` tags it; bump both when docker/recorder changes. */
@@ -69,9 +73,10 @@ export interface ContainerSpec {
   /**
    * "none" (the default): only the container's own loopback. "bridge": Docker's network, for the capture of evidence's
    * dependency download alone (evidence.ts: an allowlisted install with every install hook off). Never for anything
-   * that runs repository code.
+   * that runs repository code. `{ container }`: the network of that container, for the capture's browser beside a
+   * preview in the project's environment, which has no network but its loopback (unit E2).
    */
-  network?: "none" | "bridge";
+  network?: "none" | "bridge" | { container: string };
   /** More environment variables, after the image's own (HOME, LANG, TMPDIR stay the service's). */
   env?: Record<string, string>;
 }
@@ -87,6 +92,7 @@ const CONTAINER_NAME = /^[a-z0-9][a-z0-9_.-]{0,62}$/;
 /** `docker run`'s arguments for one container. Throws on a name or a path it cannot pass safely. */
 export function containerArgs(s: ContainerSpec): string[] {
   if (!CONTAINER_NAME.test(s.name)) throw new Error(`not a container name: ${JSON.stringify(s.name)}`);
+  if (typeof s.network === "object" && (!CONTAINER_NAME.test(s.network.container) || s.hostGateway)) throw new Error(`not a container to share a network with: ${JSON.stringify(s.network.container)}`);
   for (const p of [s.work, s.out]) if (!MOUNTABLE.test(p)) throw new Error(`Docker cannot mount ${JSON.stringify(p)} (a comma, a quote or a control character)`);
   if (s.workdir !== WORK && !s.workdir.startsWith(`${WORK}/`)) throw new Error(`the working directory must be under ${WORK}`);
   for (const [k, v] of Object.entries(s.env ?? {})) if (!ENV_NAME.test(k) || RESERVED_ENV.has(k) || /[\0\n\r]/.test(v)) throw new Error(`not a container variable: ${JSON.stringify(k)}`);
@@ -100,7 +106,7 @@ export function containerArgs(s: ContainerSpec): string[] {
     "--pull",
     "never",
     "--network",
-    s.network ?? "none",
+    typeof s.network === "object" ? `container:${s.network.container}` : (s.network ?? "none"),
     ...(s.hostGateway ? ["--add-host", `${HOST_ALIAS}:host-gateway`] : []),
     "--read-only",
     "--tmpfs",
@@ -240,7 +246,7 @@ const GONE_WITHIN_MS = 5000;
  * Ask Docker, every quarter second up to `withinMs`, whether it still lists a container of exactly this name (its
  * name filter matches parts of names, so the answer is compared whole).
  */
-async function waitGone(docker: string, name: string, env: Record<string, string>, withinMs: number): Promise<Removal> {
+export async function waitGone(docker: string, name: string, env: Record<string, string>, withinMs: number): Promise<Removal> {
   const until = Date.now() + withinMs;
   for (;;) {
     const r = await runDocker(docker, ["ps", "--all", "--filter", `name=${name}`, "--format", "{{.Names}}"], { env, timeoutMs: 15_000 });
@@ -293,6 +299,66 @@ export function startContainer(docker: string, args: string[], o: { env: Record<
     if (child?.exitCode === 0) LIVE.delete(o.name);
   });
   return { name: o.name, done, stop, remove };
+}
+
+// ---------- a container's terminal, through the daemon's own API (unit E2) ----------
+
+/**
+ * The local socket of the Docker daemon that `docker` talks to: DOCKER_HOST when it is a unix:// address, else the
+ * current context's endpoint. Undefined for a daemon reached another way (tcp://, ssh://).
+ */
+export async function dockerSocket(docker: string, env: Record<string, string>): Promise<string | undefined> {
+  const host = env.DOCKER_HOST ? env.DOCKER_HOST : (await runDocker(docker, ["context", "inspect", "--format", "{{.Endpoints.docker.Host}}"], { env, timeoutMs: 15_000 })).stdout.trim();
+  return host.startsWith("unix:///") ? host.slice("unix://".length) : undefined;
+}
+
+/** One request to the daemon's API on its socket; the status and the end of the body. */
+function dockerApi(socket: string, method: "POST", path: string, timeoutMs: number): Promise<{ status: number; body: string }> {
+  return new Promise((res, rej) => {
+    const req = httpRequest({ socketPath: socket, method, path }, (r) => {
+      let body = "";
+      r.setEncoding("utf8").on("data", (d: string) => (body = tailOf(body + d, 2000)));
+      r.on("end", () => res({ status: r.statusCode ?? 0, body }));
+    });
+    req.setTimeout(timeoutMs, () => req.destroy(new Error(`Docker did not answer ${method} ${path.split("?")[0]} within ${timeoutMs / 1000} s`)));
+    req.on("error", rej);
+    req.end();
+  });
+}
+
+/**
+ * Attach to the terminal of a created container (`docker create --tty --interactive`), before it starts, through the
+ * daemon's API on its socket: one raw stream, where what is written is typed into the terminal and what it shows comes
+ * back. The docker command cannot do this here: it refuses an interactive terminal when its own input is not one.
+ */
+export function attachTty(socket: string, name: string, timeoutMs = 15_000): Promise<Duplex> {
+  if (!CONTAINER_NAME.test(name)) return Promise.reject(new Error(`not a container name: ${JSON.stringify(name)}`));
+  return new Promise((res, rej) => {
+    const req = httpRequest({ socketPath: socket, method: "POST", path: `/containers/${name}/attach?stream=1&stdin=1&stdout=1&stderr=1`, headers: { Connection: "Upgrade", Upgrade: "tcp" } });
+    req.setTimeout(timeoutMs, () => req.destroy(new Error(`Docker did not attach to ${name} within ${timeoutMs / 1000} s`)));
+    req.on("upgrade", (_r, sock: Duplex & { setTimeout?: (ms: number) => void }, head: Buffer) => {
+      sock.setTimeout?.(0);
+      if (head.length) sock.unshift(head);
+      res(sock);
+    });
+    req.on("response", (r) => {
+      let body = "";
+      r.setEncoding("utf8").on("data", (d: string) => (body = tailOf(body + d, 500)));
+      r.on("end", () => rej(new Error(`Docker did not attach to ${name} (HTTP ${r.statusCode}): ${body.trim()}`)));
+    });
+    req.on("error", rej);
+    req.end();
+  });
+}
+
+/** Set the size of a running container's terminal. Whether Docker took it. */
+export async function resizeTty(socket: string, name: string, size: { cols: number; rows: number }): Promise<boolean> {
+  if (!CONTAINER_NAME.test(name) || !Number.isInteger(size.cols) || !Number.isInteger(size.rows)) return false;
+  try {
+    return (await dockerApi(socket, "POST", `/containers/${name}/resize?h=${size.rows}&w=${size.cols}`, 15_000)).status < 300;
+  } catch {
+    return false;
+  }
 }
 
 // ---------- one recording at a time ----------
