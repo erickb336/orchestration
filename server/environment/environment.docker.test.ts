@@ -139,7 +139,9 @@ describe(`the project environment, in Docker${skipReason}`, () => {
           hits++;
           c.destroy();
         });
-        s.listen(0, "127.0.0.1", () => res(s));
+        // A container reaches this computer at the host gateway: Colima and Docker Desktop forward it to the loopback,
+        // and a Linux host's Docker uses its bridge address, so there the canary listens on every address.
+        s.listen(0, process.platform === "linux" ? "0.0.0.0" : "127.0.0.1", () => res(s));
       });
     });
     afterAll(() => canary?.close());
@@ -148,7 +150,7 @@ describe(`the project environment, in Docker${skipReason}`, () => {
       const port = (canary.address() as { port: number }).port;
       // The control: a container on Docker's ordinary network does reach the canary (through the host gateway and at
       // the Mac's address) and the Docker VM's SSH port, so a leak to any of the hostile targets would show.
-      const reach = (host: string, p: number) => `new Promise((r) => require("node:net").connect(${p}, "${host}").on("connect", function () { this.destroy(); r("CONNECTED") }).on("error", (e) => r(e.code)))`;
+      const reach = (host: string, p: number) => `new Promise((r) => { const c = require("node:net").connect(${p}, "${host}").on("connect", () => { c.destroy(); r("CONNECTED") }).on("error", (e) => r(e.code)); setTimeout(() => { c.destroy(); r("TIMEOUT") }, 5000) })`;
       const control = await runDocker(docker!, ["run", "--rm", "--add-host", "orchestrator-host:host-gateway", "--user", "10001:10001", "--entrypoint", "node", PROXY_IMAGE, "-e", `Promise.all([${reach("orchestrator-host", port)}, ${reach("192.168.5.2", port)}, ${reach("172.17.0.1", 22)}]).then((x) => console.log(x.join(" ")))`], { env: dockerEnv(process.env), timeoutMs: 60_000 });
       // The host gateway reaches the canary on every Docker. The Mac's address (192.168.5.2) and the VM's SSH port exist
       // only under Colima; on a Linux host 172.17.0.1 is the host itself, and its SSH port may be closed.
@@ -177,11 +179,11 @@ describe(`the project environment, in Docker${skipReason}`, () => {
       const prep = line("prepare");
       console.log(`hostile prepare: ${JSON.stringify(prep)}`);
       for (const k of ["proxyNotRegistry", "proxyLoopback", "proxyLocalhost", "proxyHostGateway", "proxyHostAddress", "proxyRegistryPlainPort"]) expect(prep[k], k).toMatch(/^HTTP\/1\.1 403 /);
-      for (const k of ["directOutside", "directHostAddress", "directDockerBridge"]) expect(prep[k], k).toMatch(unreachable);
+      for (const k of ["directOutside", "directHostAddress", "directDockerBridge", "directBridgeCanary"]) expect(prep[k], k).toMatch(unreachable);
       for (const k of ["directHostGateway", "dnsOutside"]) expect(prep[k], k).toMatch(unresolved);
       const runPhase = line("run");
       console.log(`hostile run: ${JSON.stringify(runPhase)}`);
-      for (const k of ["directOutside", "directHostAddress", "directDockerBridge"]) expect(runPhase[k], k).toMatch(unreachable);
+      for (const k of ["directOutside", "directHostAddress", "directDockerBridge", "directBridgeCanary"]) expect(runPhase[k], k).toMatch(unreachable);
       for (const k of ["directHostGateway", "dnsOutside"]) expect(runPhase[k], k).toMatch(unresolved);
       expect(runPhase.proxyNotRegistry).toBe("NO PROXY");
       expect(r.env.refused?.join(" ")).toMatch(/example\.com \(not on the list of registries\)/);
