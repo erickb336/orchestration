@@ -8,7 +8,10 @@
 //                       only in the run's worktree, its temp and its cache), under a private CODEX_HOME.
 //   DirectChecks        only when the user chose "no sandbox": the same reaper, spawned by the service.
 //   SimulatedChecks     the fake runtime: nothing is spawned; the record says so.
-//   CheckRunners        the facade the scheduler talks to; it routes each run by its sandbox.
+//   EnvironmentChecks   the project's own environment, when the run has one (server/environment/runner.ts): a
+//                       prepare phase whose only way out is an allowlisting proxy, then the checks with no network,
+//                       in containers. Without Docker it hands the run to the host sandbox, with the reason.
+//   CheckRunners        the facade the scheduler talks to; it routes each run by its environment, then its sandbox.
 //
 // Output is redacted and capped (an excerpt in the state, the full log in a file), the command
 // environment is built from an allowlist, and every run ends with exactly one terminal event.
@@ -20,8 +23,10 @@ import { fileURLToPath } from "node:url";
 import { createServer, type Server as NetServer } from "node:net";
 import { blockedEnvName, hardenedInstall, isRebuild, networkRefusal, yarnrcRefusal } from "../src/domain/checks";
 import type { CheckResult, ChecksConfig, ChecksHealth } from "../src/domain/types";
+import type { EnvironmentPlan, UnconfirmedDevcontainer } from "../src/domain/environment";
 import { killGroup, trackLive } from "./processes";
 import { SECRET_NAME, redact } from "./redact";
+import { clearReport, readTestReport } from "./testReport";
 import type { CommandExecParams } from "./runtimes/codex-protocol/v2/CommandExecParams";
 import type { CommandExecResponse } from "./runtimes/codex-protocol/v2/CommandExecResponse";
 import type { SandboxPolicy } from "./runtimes/codex-protocol/v2/SandboxPolicy";
@@ -33,7 +38,7 @@ export type { CheckRunReport };
 
 // ---------- the contract ----------
 
-interface PlannedCheck {
+export interface PlannedCheck {
   id: string;
   label: string;
   kind: "prepare" | "check";
@@ -109,6 +114,21 @@ export interface CheckAssignment {
   cacheDir: string;
   /** Where the full logs of this run go (one file per command). */
   logDir: string;
+  /** The JUnit report the commands write, relative to the copy (ChecksConfig.testReport): read after they ran. */
+  testReport?: string;
+  /** The project's environment, when it has one: the run goes to its containers when Docker is there. */
+  environment?: EnvironmentAssignment;
+  /** Why a run with an environment ran in the host sandbox instead (set by the environment runner when it hands the run over, or by the scheduler when the dev container is not confirmed and no image is). */
+  hostReason?: string;
+  /** A dev container at the trusted base whose digest the owner has not confirmed: not used, and named in the run's record. */
+  unconfirmed?: UnconfirmedDevcontainer;
+}
+
+/** The environment of one run: its plan, the project (for its cache folder), and a dev container's Dockerfile text read at the trusted base. */
+export interface EnvironmentAssignment {
+  plan: EnvironmentPlan;
+  project: string;
+  dockerfile?: string;
 }
 
 /** The RuntimeAdapter contract, minus models and health. */
@@ -175,7 +195,7 @@ export function checkEnv(base: NodeJS.ProcessEnv, cfg: Pick<ChecksConfig, "passE
 
 // ---------- output: redaction, excerpt and log ----------
 
-interface Captured {
+export interface Captured {
   exitCode: number | undefined;
   stdout: string;
   stderr: string;
@@ -195,7 +215,7 @@ export function excerptOf(text: string): string {
   return `${text.slice(0, EXCERPT_HEAD)}\n[… ${text.length - EXCERPT_HEAD - EXCERPT_TAIL} bytes …]\n${text.slice(-EXCERPT_TAIL)}`;
 }
 
-function resultOf(c: PlannedCheck, cap: Captured, durationMs: number, env: NodeJS.ProcessEnv, logDir: string, attemptId: string): CheckResult {
+export function resultOf(c: PlannedCheck, cap: Captured, durationMs: number, env: NodeJS.ProcessEnv, logDir: string, attemptId: string): CheckResult {
   const stderr = `${cap.stderr}${cap.killed ? `${cap.stderr && !cap.stderr.endsWith("\n") ? "\n" : ""}The check process was killed (${cap.killed}); no exit status was reported.\n` : ""}`;
   const raw = `${cap.stdout}${stderr ? `${cap.stdout && !cap.stdout.endsWith("\n") ? "\n" : ""}--- stderr ---\n${stderr}` : ""}`;
   const text = redact(raw, env).slice(0, OUTPUT_CAP);
@@ -225,7 +245,7 @@ function resultOf(c: PlannedCheck, cap: Captured, durationMs: number, env: NodeJ
   };
 }
 
-const notRun = (c: PlannedCheck): CheckResult => ({ id: c.id, label: c.label, kind: c.kind, status: "not-run", durationMs: 0, excerpt: "", bytes: 0, truncated: false });
+export const notRun = (c: Pick<PlannedCheck, "id" | "label" | "kind">): CheckResult => ({ id: c.id, label: c.label, kind: c.kind, status: "not-run", durationMs: 0, excerpt: "", bytes: 0, truncated: false });
 
 // ---------- the workspace's commit (the runner refuses a worktree that is not at the target) ----------
 
@@ -270,7 +290,7 @@ export function headOf(workspace: string): string | undefined {
 
 // ---------- the common run machinery ----------
 
-interface Run {
+export interface Run {
   a: CheckAssignment;
   startedAt: number;
   results: CheckResult[];
@@ -281,7 +301,7 @@ interface Run {
   timers: Set<ReturnType<typeof setTimeout>>;
 }
 
-abstract class BaseChecks implements CheckRunner {
+export abstract class BaseChecks implements CheckRunner {
   abstract readonly simulated: boolean;
   protected readonly runs = new Map<string, Run>();
   private readonly listeners = new Set<(e: AdapterEvent) => void>();
@@ -358,7 +378,7 @@ abstract class BaseChecks implements CheckRunner {
   /** Before the first command (an app-server to start). Throws when the run cannot begin. */
   protected async prepare(_run: Run): Promise<void> {}
 
-  private async drive(run: Run) {
+  protected async drive(run: Run) {
     const { a } = run;
     try {
       await this.prepare(run);
@@ -379,6 +399,10 @@ abstract class BaseChecks implements CheckRunner {
     } catch {
       /* the command reports it */
     }
+    // A report file the change itself carries is deleted before anything runs, so only a report this run writes is
+    // read. That stops a stale or committed file, not a false result: the change's own test script writes the report,
+    // so an agent can still make it say what it likes. The code review judges the tests.
+    const reportRefused = a.testReport ? clearReport(a.workspace, a.testReport) : undefined;
     for (const planned of a.commands) {
       // What runs is the hardened command; the record keeps the id and label the settings gave it.
       // Yarn's own configuration is read from the copy just before the install runs there.
@@ -405,7 +429,9 @@ abstract class BaseChecks implements CheckRunner {
       this.finish(run, { type: "stopped", attemptId: a.attemptId, how: "interrupted" });
       return;
     }
-    const report: CheckRunReport = { sha: a.target, results: run.results, durationMs: Date.now() - run.startedAt, sandbox: a.sandbox, ...(this.simulated ? { simulated: true as const } : {}) };
+    const tests = a.testReport ? (reportRefused ? { status: "refused" as const, path: a.testReport, reason: reportRefused } : readTestReport(a.testReport, { workspace: a.workspace, scratch: [a.tmpDir, a.cacheDir], env: this.baseEnv })) : undefined;
+    if (tests) this.emit({ type: "activity", attemptId: a.attemptId, note: `Test report ${tests.path}: ${tests.status === "read" ? `${tests.counts.passed} passed, ${tests.counts.failed + tests.counts.error} failed, ${tests.counts.skipped} skipped` : tests.reason}`.slice(0, 200) });
+    const report: CheckRunReport = { sha: a.target, results: run.results, durationMs: Date.now() - run.startedAt, sandbox: a.sandbox, ...(this.simulated ? { simulated: true as const } : {}), ...(tests ? { tests } : {}), ...(a.hostReason ? { environment: { ran: "host" as const, reason: a.hostReason, ...(a.unconfirmed ? { unconfirmed: a.unconfirmed } : {}) } } : {}) };
     this.finish(run, { type: "completed", attemptId: a.attemptId, finalText: "", checks: report });
   }
 
@@ -426,7 +452,7 @@ abstract class BaseChecks implements CheckRunner {
     run.timers.add(t);
   }
 
-  private clearTimers(run: Run) {
+  protected clearTimers(run: Run) {
     for (const t of run.timers) clearTimeout(t);
     run.timers.clear();
   }
@@ -879,19 +905,25 @@ export class CodexSandboxChecks extends BaseChecks {
 
 export class CheckRunners implements CheckRunner {
   readonly simulated = false;
+  private readonly all: CheckRunner[];
+  /** `environment`: the project environment's runner; it hands a run to `hostFor` when Docker cannot take it. */
   constructor(
     private readonly codex: CheckRunner,
     private readonly direct: CheckRunner,
-  ) {}
-  private for(a: CheckAssignment): CheckRunner {
+    private readonly environment?: CheckRunner,
+  ) {
+    this.all = [codex, direct, ...(environment ? [environment] : [])];
+  }
+  /** The host sandbox a run goes to without its environment. */
+  hostFor(a: CheckAssignment): CheckRunner {
     return a.sandbox === "codex" ? this.codex : this.direct;
   }
   private owner(id: string): CheckRunner | undefined {
-    return this.codex.has(id) ? this.codex : this.direct.has(id) ? this.direct : undefined;
+    return this.all.find((r) => r.has(id));
   }
   start(a: CheckAssignment) {
     if (this.owner(a.attemptId)) return;
-    this.for(a).start(a);
+    (a.environment && this.environment ? this.environment : this.hostFor(a)).start(a);
   }
   interrupt(id: string) {
     this.owner(id)?.interrupt(id);
@@ -903,21 +935,19 @@ export class CheckRunners implements CheckRunner {
     return !!this.owner(id);
   }
   ids() {
-    return [...this.codex.ids(), ...this.direct.ids()];
+    return this.all.flatMap((r) => r.ids());
   }
   onEvent(l: (e: AdapterEvent) => void) {
-    const a = this.codex.onEvent(l);
-    const b = this.direct.onEvent(l);
+    const offs = this.all.map((r) => r.onEvent(l));
     return () => {
-      a();
-      b();
+      for (const off of offs) off();
     };
   }
   probe(sandbox: "codex" | "none") {
     return sandbox === "codex" ? this.codex.probe(sandbox) : this.direct.probe(sandbox);
   }
   async shutdown() {
-    await Promise.all([this.codex.shutdown(), this.direct.shutdown()]);
+    await Promise.all(this.all.map((r) => r.shutdown()));
   }
 }
 

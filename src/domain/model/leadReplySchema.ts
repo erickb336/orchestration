@@ -7,7 +7,8 @@
 // - a field the lead may leave out is nullable (`anyOf` with null), never optional;
 // - no numeric, length or item-count limits (Claude's structured outputs do not support them).
 // So the schema fixes the shape: the fields, their types and the fixed choices. The domain's validators keep the
-// meaning: limits, authority and unknown ids (leadOutput.ts, shaping.ts, steering.ts, findings.ts, studio/lead.ts).
+// meaning: limits, authority and unknown ids (leadOutput.ts, shaping.ts, steering.ts, findings.ts, studio/lead.ts,
+// changeOrderUpdates.ts).
 // A field the domain reads must be here too, or no constrained lead can send it.
 //
 // A null field means "left out". `withNulls` fills each missing nullable field with null (the simulated lead, and a
@@ -16,7 +17,7 @@
 
 import Ajv, { type ValidateFunction } from "ajv";
 import { LEAD_OPTIONS } from "../findings";
-import { DESIGNER_KINDS, ROUND_FOCUSES } from "../studio/types";
+import { CHANGE_ORDER_LINE_KINDS, DESIGNER_KINDS, ROUND_FOCUSES } from "../studio/types";
 import { COVERAGE_STATES, DEVICES, SHAPING_AREAS } from "../types";
 
 /** The JSON Schema keywords the lead's schema uses: the subset both providers' strict modes accept. */
@@ -65,6 +66,9 @@ const proposal = record({
   acceptance: list(text),
   flowId: orNull(text),
   priority: orNull(whole),
+  // ORC-029 pass 5: the approved blueprint items it builds, and the task the PE sent back that it revises.
+  blueprintRefs: orNull(list(text)),
+  revises: orNull(text),
 });
 
 // Each task entry gives exactly one of priority, defer and drop; the steering module checks that.
@@ -111,6 +115,14 @@ const studio = record({
   questions: orNull(list(record({ question: text, why: orNull(text), options }))),
 });
 
+// ORC-029 pass 5 (5b): the lead's updates for the change order its run was shown. One update per touched task (its
+// "task"), and one per new task ("task" null). "proposal" is the whole proposal for a spec update, a revision task or
+// a new task, and null for a retirement; the change order module checks each update against the task as it is now.
+const changeOrder = record({
+  rev: whole,
+  updates: list(record({ action: oneOf(CHANGE_ORDER_LINE_KINDS), task: orNull(text), why: text, proposal: orNull(proposal) })),
+});
+
 /** The lead's final answer: what every lead run returns, whatever it was started for. */
 export const LEAD_REPLY_SCHEMA: JsonSchema = record({
   reply: text,
@@ -121,6 +133,7 @@ export const LEAD_REPLY_SCHEMA: JsonSchema = record({
   questions: orNull(questions),
   decisions: orNull(decisions),
   studio: orNull(studio),
+  changeOrder: orNull(changeOrder),
 });
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);

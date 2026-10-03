@@ -1,0 +1,11 @@
+{
+  "name": "evidence-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The capture of evidence's fixture: a static page served by a two-line Node server, and a Node CLI. Its install hook must never run.",
+  "bin": { "trips": "bin/trips.js" },
+  "scripts": {
+    "preinstall": "node -e \"require('node:fs').writeFileSync('INSTALL-HOOK-RAN', 'yes')\"",
+    "preview": "node server.js"
+  }
+}

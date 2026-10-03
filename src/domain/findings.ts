@@ -14,6 +14,7 @@
 import * as C from "./checks";
 import * as M from "./model";
 import { fmtUsd, pastBudget } from "./spend";
+import { followUpRefs } from "./studio/blueprint";
 import { readEstimate } from "./studio/studio";
 import type { BudgetEstimate } from "./studio/types";
 import { clip } from "./text";
@@ -349,6 +350,8 @@ export function decideFinding(state: State, decisionId: string, decision: UserDe
         // A follow-up fix runs the catalog's Change, chosen by the service.
         flowId: "change",
         chosenBy: "service",
+        // It cites the design parts it fixes, so it counts for them when it lands (ORC-029 pass 5).
+        blueprintRefs: followUpRefs(s, t, d.finding),
       },
       now,
     );
@@ -569,6 +572,9 @@ export function applyLeadDecisions(s: State, r: LeadRun, raw: unknown, now: stri
         flowId: "change",
         priority: t.priority,
       };
+      // It cites the design parts it fixes, so it counts for them when it lands (ORC-029 pass 5).
+      const refs = followUpRefs(s, t, d.finding);
+      if (refs.length) p.blueprintRefs = refs;
       const problem = M.validateProposal(s, p, now);
       if (problem) return void notes.push(`Decision ${id}: follow-up refused (${problem}); it stays open`);
       const newId = M.proposeTask(s, p, now, hold, undefined, shaping);

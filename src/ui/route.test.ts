@@ -2,7 +2,7 @@
 // name never changes the page, and the Focus banner's History link asks the Overview for the vision history.
 
 import { describe, expect, it } from "vitest";
-import { HISTORY_HASH, historyRequested, parseRoute } from "./route";
+import { HISTORY_HASH, historyRequested, parseRoute, tabOf } from "./route";
 
 describe("routes", () => {
   it("#/kit opens the component kit's gallery, which is not in the navigation", () => {
@@ -20,6 +20,17 @@ describe("routes", () => {
     expect(parseRoute("#/task/WT-004.3")).toEqual({ page: "task", id: "WT-004.3" });
     expect(parseRoute("#/task/WT%2D1")).toEqual({ page: "task", id: "WT-1" });
     for (const h of ["", "#", "#/", "#/tasks", "#/nope"]) expect(parseRoute(h)).toEqual({ page: "tasks" });
+  });
+
+  it("the Lock in summary and the pre-flight are under Vision and Design and reality under Results; each lights its tab", () => {
+    expect(parseRoute("#/vision/lock-in")).toEqual({ page: "lock-in" });
+    expect(parseRoute("#/vision/pre-flight")).toEqual({ page: "preflight" });
+    expect(tabOf(parseRoute("#/vision/pre-flight"))).toBe("vision");
+    expect(parseRoute("#/results/design")).toEqual({ page: "reality" });
+    expect(parseRoute("#/review/design?item=bi-3")).toEqual({ page: "reality" });
+    expect(parseRoute("#/vision/other")).toEqual({ page: "vision" });
+    expect(parseRoute("#/results/other")).toEqual({ page: "review" });
+    expect(["#/vision/lock-in", "#/results/design", "#/task/WT-1", "#/vision", "#/results"].map((h) => tabOf(parseRoute(h)))).toEqual(["vision", "review", "tasks", "vision", "review"]);
   });
 
   it("a query after the page name is the page's to read; it never changes which page opens", () => {

@@ -24,6 +24,7 @@ import {
   settleStoppedStep,
   touch,
 } from "./core";
+import { stepReviewInto } from "../peReview";
 import { applyBreakdown, expandIteration } from "./fanout";
 import { providerLabel } from "./resolution";
 
@@ -171,6 +172,8 @@ export interface OutputReport {
   reviewedPaths?: string[];
   /** A service check run. */
   checkRun?: Artifact["checkRun"];
+  /** A service capture of evidence (ORC-029 pass 5). */
+  evidence?: Artifact["evidence"];
   /** Breakdown outputs: the work items that become child tasks. */
   items?: unknown[];
   /** Durable reference, e.g. "<sha> on orchestration/run-12". */
@@ -198,6 +201,7 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
   a.artifacts.push(...artifacts);
   if (run.usage) a.usage = run.usage;
   if (run.actualModel) a.actualModel = run.actualModel;
+  if (run.simulated) a.simulated = true;
 
   // A run started before the task's flow changed reports nothing to the new steps, whatever its step id
   // now means. Checked before the stale-revision check below, so the note names the cause.
@@ -299,6 +303,7 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
         ...(def.kind === "review-findings" ? { openFindings: findings ? F.blockingCount(findings) : (rep.openFindings ?? 0), ...(findings ? { findings } : {}), pathCoverage: reviewCoverage.get(def.name) ?? notRequired() } : {}),
         ...(def.kind === "check-results" && rep.checkRun ? { checkRun: structuredClone(rep.checkRun), ...(rep.findings ? { findings: structuredClone(rep.findings), openFindings: F.blockingCount(rep.findings) } : {}) } : {}),
         ...(def.kind === "breakdown" ? { items: structuredClone(rep.items ?? []) } : {}),
+        ...(def.kind === "evidence" && rep.evidence ? { evidence: structuredClone(rep.evidence) } : {}),
       };
       // Open decisions on the version this run replaces cannot be acted on any more; decided ones are the record (and carry forward).
       for (const old of s.artifacts) if (old.taskId === t.id && old.stepId === st.id && old.name === def.name) F.supersedeDecisions(s, t.id, now, { artifactId: old.id, reason: `${st.id} ran again and produced ${def.name} v${version}` });
@@ -316,10 +321,14 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
       }
     }
     event(s, now, "runtime", "runtime", `${st.id} completed by ${providerLabel(a.snapshot.provider)} · ${a.snapshot.model}${produced.length ? `; produced ${produced.join(", ")}` : ""}`, t.id);
-    // Breakdown outputs become child tasks; loops append their next iteration.
+    // Breakdown outputs become child tasks; loops append their next iteration. New work the PE reviews first (a
+    // breakdown, a design a coder builds) waits: its children are created, and the steps after it start, once the PE
+    // agrees or you overrule (src/domain/peReview.ts).
     const breakdowns = st.outputs.filter((d) => d.kind === "breakdown");
     const gated = t.reviewEveryStep && t.steps.some((x) => !isSettled(x));
-    if (breakdowns.length && gated) {
+    if (stepReviewInto(s, t, st, now)) {
+      // held for the PE
+    } else if (breakdowns.length && gated) {
       // Children are created when the person resumes, from the (possibly edited) latest version.
       t.pendingBreakdowns = breakdowns.map((d) => ({ stepId: st.id, output: d.name }));
     } else if (breakdowns.length) {

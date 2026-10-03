@@ -1,0 +1,12 @@
+{
+  "name": "evidence-hostile",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The capture of evidence's hostile fixture: its install hook, its preview and its CLI try to leave the container.",
+  "scripts": {
+    "preinstall": "node hostile-install.js",
+    "install": "node hostile-install.js",
+    "postinstall": "node hostile-install.js",
+    "preview": "node server.js"
+  }
+}

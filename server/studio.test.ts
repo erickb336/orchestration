@@ -9,7 +9,8 @@ import { join, relative, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CLIENT_HEADER } from "../src/api";
 import { SERVICE_COMMANDS } from "../src/domain/commands";
-import { ABC, DESIGNER, sha } from "../src/domain/testing/studio";
+import { startFactoryArgs } from "../src/domain/testing/factory";
+import { ABC, DESIGNER, lockInArgs, sha } from "../src/domain/testing/studio";
 import type { State } from "../src/domain/types";
 import { createHttpServer } from "./http";
 import { Scheduler } from "./scheduler";
@@ -82,7 +83,18 @@ describe("the studio's service commands at the HTTP boundary", () => {
     expect(fb.status).toBe(200);
     const ok = await post({ name: "approveArtifact", args: { artifactId: added.artifactId, version: 1 }, idempotencyKey: "owner-2" });
     expect(ok.status).toBe(200);
+    // An approval changes the draft (pass 5); the owner's Start the factory, the first Lock in, puts it into force.
+    expect(state().blueprint.draft.items.map((i) => [i.title, i.variant, i.status])).toEqual([["Trip plan", "B", "approved"]]);
+    expect(state().blueprint.revisions).toEqual([]);
+    expect((await post({ name: "startFactory", args: startFactoryArgs(state()), idempotencyKey: "owner-3" })).status).toBe(200);
     expect(state().blueprint.revisions.map((r) => r.items.map((i) => [i.title, i.variant, i.status]))).toEqual([[["Trip plan", "B", "approved"]]]);
+    // The owner's drop, discard and Lock in go through the same boundary.
+    const itemId = state().blueprint.draft.items[0].id;
+    expect((await post({ name: "dropBlueprintItem", args: { itemId }, idempotencyKey: "owner-4" })).status).toBe(200);
+    expect((await post({ name: "discardDraft", args: { draftRev: state().blueprint.draft.rev }, idempotencyKey: "owner-5" })).status).toBe(200);
+    expect((await post({ name: "dropBlueprintItem", args: { itemId }, idempotencyKey: "owner-6" })).status).toBe(200);
+    expect((await post({ name: "lockIn", args: lockInArgs(state()), idempotencyKey: "owner-7" })).status).toBe(200);
+    expect(state().blueprint.revisions.map((r) => r.items.map((i) => [i.title, i.status]))).toEqual([[["Trip plan", "approved"]], [["Trip plan", "dropped"]]]);
   });
 });
 
@@ -113,5 +125,10 @@ describe("in the code, only the command table approves into the blueprint", () =
 
   it("only the blueprint module writes a blueprint revision", () => {
     expect(where(/blueprint\.revisions\.push\(/)).toEqual([join("src", "domain", "studio", "blueprint.ts")]);
+  });
+
+  it("dropBlueprintItem, discardDraft and lockIn are called from the command table only", () => {
+    // (The spec editor's own "discard the draft" confirmation, CONFIRM.discardDraft, is another thing.)
+    expect(where(/(?<!function |CONFIRM\.)\b(dropBlueprintItem|discardDraft|lockIn)\(/)).toEqual([join("src", "domain", "commands.ts")]);
   });
 });

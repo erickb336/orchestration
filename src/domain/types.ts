@@ -1,6 +1,8 @@
 // Core domain types. Pure data: no UI, storage, or runtime dependencies.
 
-import type { Blueprint, BudgetEstimate, Studio } from "./studio/types";
+import type { EnvironmentRunRecord, EnvironmentSetting } from "./environment";
+import type { EvidenceRun, EvidenceSnapshot, PreviewSetting } from "./studio/evidence";
+import type { AskCheck, Blueprint, BudgetEstimate, ChangeOrderLineKind, OpenCase, Studio, Verdict } from "./studio/types";
 
 export type ProviderId = "claude" | "codex";
 export const PROVIDERS: ProviderId[] = ["claude", "codex"];
@@ -8,12 +10,15 @@ export const PROVIDERS: ProviderId[] = ["claude", "codex"];
 /**
  * `security_reviewer` reviews a change for security beside the code review; its findings count like the code review's.
  * `pe` is the principal engineer of the vision studio (ORC-029): it reviews the designer's options before the owner sees them.
+ * `evidence` is the service's "Capture evidence" step (ORC-029 pass 5): screenshots and recordings of the built code.
  */
-export type RoleId = "lead" | "designer" | "pe" | "coder" | "code_reviewer" | "security_reviewer" | "ux_reviewer" | "checks";
+export type RoleId = "lead" | "designer" | "pe" | "coder" | "code_reviewer" | "security_reviewer" | "ux_reviewer" | "checks" | "evidence";
 /** Agent roles: they have role defaults, task role overrides and a resolved provider. */
 export const ROLES: RoleId[] = ["lead", "designer", "pe", "coder", "code_reviewer", "security_reviewer", "ux_reviewer"];
 /** Roles the service runs itself; never resolved to a provider. */
-const SERVICE_ROLES: RoleId[] = ["checks"];
+const SERVICE_ROLES: RoleId[] = ["checks", "evidence"];
+/** Is this step run by the service (checks, the capture of evidence), never by an agent? */
+export const isServiceRole = (r: RoleId) => SERVICE_ROLES.includes(r);
 /** Roles that run only in the vision studio: no flow step uses the PE until it reviews new work in the factory (ORC-029 pass 5). */
 const STUDIO_ROLES: RoleId[] = ["pe"];
 /** What a step definition may use. */
@@ -239,12 +244,16 @@ type SteeringValue = string | number | Deferral | null;
 export interface SteeringChange {
   /** `${setId}.${n}` */
   id: string;
-  /** "invalid": an entry the service could not read as one of the actions (always rejected). "note": a note to a running stage. */
-  kind: "focus" | "priority" | "defer" | "undefer" | "drop" | "note" | "invalid";
+  /**
+   * "invalid": an entry the service could not read as one of the actions (always rejected). "note": a note to a running
+   * stage. A change order's line kind: one of the lead's updates for a change order (ORC-029 pass 5; the line itself is
+   * on the change order, src/domain/model/changeOrderUpdates.ts).
+   */
+  kind: "focus" | "priority" | "defer" | "undefer" | "drop" | "note" | "invalid" | ChangeOrderLineKind;
   taskId?: string;
   /** Notes: the step the note is addressed to. */
   stepId?: string;
-  /** focus text | priority | deferral | lifecycle | note text */
+  /** focus text | priority | deferral | lifecycle | note text; a change order line: spec revision (update-spec), lifecycle (retire), the task made (revise, new-task) */
   before: SteeringValue;
   after: SteeringValue;
   /** The lead's reason (plain text, at most 300 characters). */
@@ -375,17 +384,30 @@ export interface Project {
    */
   changeOrders: "lead" | "user";
   /**
-   * PE review of new work in the factory (ORC-029 2e): while true, the lead's proposals and breakdown items made while
-   * building, and the lead's updates for a change order, wait for the PE's agreement before they start. Absent (off)
-   * until the PE's review runs exist (pass 5), so nothing waits for a review nobody runs.
+   * PE review of new work in the factory (ORC-029 2e, switched on in pass 5): while true, new work made while building
+   * waits for the PE's agreement before it starts: the lead's proposals, a Goal's breakdown (before its child tasks
+   * exist), the design of a Feature (before it is built), and the lead's updates for a change order. Only the owner
+   * sets it (`setPeReviewsNewWork`). On for a new project; a project stored before the setting existed loads with it
+   * off, so an upgrade never starts a paid PE run by itself.
    */
-  peReviewsNewWork?: boolean;
+  peReviewsNewWork: boolean;
   /** When the current shaping session began; coverage reported before it is not reused. */
   shapingSince?: string;
   /** The project's own check commands, run by the service. Desired state; only the user's `setChecks` writes it. */
   checks: ChecksConfig;
   /** The checks sandbox as last probed. Observed; written only by the service. */
   checksHealth?: ChecksHealth;
+  /**
+   * How the service runs the built product to capture evidence of it (ORC-029 pass 5): the install, the preview and
+   * its port, the CLI's entry. Optional; absent, capture runs record "not set up". Only the owner's `setPreview` writes it.
+   */
+  preview?: PreviewSetting;
+  /**
+   * The project's environment (docs/design/project-environment.md): the base image the owner confirmed, the prepare
+   * commands and the hosts added to the registries. Optional; the repository's dev container comes first. Only the
+   * owner's `setEnvironment` writes it.
+   */
+  environment?: EnvironmentSetting;
   /**
    * Who decides `ask-user` findings: the lead (Autopilot's default), the PE, or the user. Until the PE runs its
    * own decisions (ORC-029), a decision routed to the PE goes to the lead's decision runs.
@@ -418,6 +440,13 @@ export interface Project {
   workerEnvironment: Record<ProviderId, WorkerEnvironment>;
   /** MCP servers (by name, from the user's own provider config) isolated workers may use. */
   workerConnections: Record<ProviderId, string[]>;
+  /**
+   * Housekeeping (server/housekeeping.ts) also cleans what runs left in the owner's own apps: it archives Orchestrator's
+   * Codex threads and moves its Claude session folders to the Trash. On by default (the owner asked for it,
+   * 2026-10-03). Machine-level, like the catalog: a new project keeps it. The service's own containers and stage
+   * folders are cleaned either way.
+   */
+  housekeepOwnerApps: boolean;
   /** Desired state: project-wide pause. */
   hold: boolean;
   lastVisitAt: string;
@@ -533,8 +562,8 @@ type StepState =
   | "blocked"
   | "pipeline";
 
-export type ArtifactKind = "brief" | "design" | "plan" | "code-change" | "review-findings" | "verification" | "report" | "handoff" | "breakdown" | "check-results";
-export const ARTIFACT_KINDS: ArtifactKind[] = ["brief", "design", "plan", "breakdown", "code-change", "review-findings", "verification", "report", "handoff", "check-results"];
+export type ArtifactKind = "brief" | "design" | "plan" | "code-change" | "review-findings" | "verification" | "report" | "handoff" | "breakdown" | "check-results" | "evidence";
+export const ARTIFACT_KINDS: ArtifactKind[] = ["brief", "design", "plan", "breakdown", "code-change", "review-findings", "verification", "report", "handoff", "check-results", "evidence"];
 
 // ---------- structured findings, coverage and service checks ----------
 
@@ -616,7 +645,36 @@ export interface CheckRunRecord {
   touchedInputs: string[];
   results: CheckResult[];
   durationMs: number;
+  /** The run's test results, read from its JUnit report (ChecksConfig.testReport). Absent when the settings name no report. */
+  tests?: TestReport;
+  /** How the run used the project's environment: in its container, or on this computer and why. Absent before the environment existed. */
+  environment?: EnvironmentRunRecord;
 }
+
+/** One test case of a check run, from its JUnit report (ORC-029 pass 5). */
+export interface TestCaseResult {
+  /** The test's name (≤300 characters). A rule's acceptance test carries the rule's tag in it (studio/ruleResults.ts). */
+  name: string;
+  /** Its class name, else its suite's name (≤200); "" when the report gives neither. */
+  suite: string;
+  /** "error": the test could not run to its end (JUnit's <error>); "failed": an assertion failed (<failure>). */
+  status: "passed" | "failed" | "skipped" | "error";
+  /** failed, error and skipped: the report's message, one line, redacted, with no local paths (≤300). */
+  message?: string;
+}
+
+/**
+ * What the service read from a check run's JUnit report, after the commands ran in the throwaway copy.
+ * - read: the test cases (at most 400: the failing tagged ones first, then the other tagged ones, then the failing
+ *   ones; `truncated` when more were in the report) and the counts of every case in the report. `droppedTags`, when a
+ *   case with a tag was left out: those tags, each once, or "unlisted" when more than 400 tags lost a case;
+ * - missing: the commands wrote no report at the path;
+ * - refused: the file is not one the service reads (too large, a DTD or an entity declaration, nested too deep, not
+ *   well-formed XML, or a path that leaves the copy), and why.
+ */
+export type TestReport =
+  | { status: "read"; path: string; cases: TestCaseResult[]; counts: Record<TestCaseResult["status"], number>; truncated: boolean; droppedTags?: string[] | "unlisted" }
+  | { status: "missing" | "refused"; path: string; reason: string };
 
 /**
  * A decision someone has to take on an `ask-user` finding (or on failing final checks). Routed to the
@@ -656,29 +714,51 @@ export interface FindingDecision {
 }
 
 /**
- * Where PE review of one piece of new work stands (ORC-029 2e): a lead proposal, a breakdown item, or the lead's
- * updates for a change order.
- * - pending: held from starting, "waiting for PE review"; an objection before the last round keeps it pending while
- *   the lead revises it;
- * - agreed: released under the usual involvement rules;
- * - objected: the PE still objected after three rounds, so it waits for the owner (Needs you) with the objection,
- *   until the owner overrules it (recorded), edits the work (a new review starts), or cancels it. It is never dropped.
+ * Where PE review of one piece of new work stands (ORC-029 2e, pass 5): a lead proposal (on the task), a Goal's
+ * breakdown or a Feature's design (on the step that made it), or the lead's updates for a change order.
+ * - pending: held from starting, "waiting for PE review"; a change the PE asks for before the last round keeps it
+ *   pending while the lead or the designer revises it;
+ * - agreed: the PE found it feasible; released under the usual involvement rules;
+ * - objected: the PE still asks for a change after three rounds, or the lead did not revise it, so it waits for the
+ *   owner (Needs you) with the objection, until the owner overrules it (recorded), edits the work (a new review
+ *   starts), or cancels it. It is never dropped;
+ * - ended: review stopped without the PE's last word (`ended` says why). When the service ended it (the PE could not
+ *   run) it waits for the owner like an objection; when the owner turned PE review of new work off, it is released.
  * Only the service records the PE's verdicts (`recordPeReview`), and only the owner overrules.
  */
 export interface PeReviewState {
-  status: "pending" | "agreed" | "objected";
-  /** The PE's verdicts in the current review, oldest first: one per round, at most three. `specRev` is the task spec revision it read. */
+  status: "pending" | "agreed" | "objected" | "ended";
+  /** The PE's verdicts in the current review, oldest first: one per round, at most three. */
   rounds: PeReviewRound[];
   overruled?: { at: string; why: string };
-  /** Earlier reviews, oldest first: each closed when the owner edited the work the PE objected to (`specRev`, the edit), which started this one. */
-  earlier?: { rounds: PeReviewRound[]; closedAt: string; specRev: number }[];
+  ended?: { at: string; why: string; by: "service" | "owner" };
+  /** Earlier reviews, oldest first: each closed when the owner edited the work the PE objected to (`specRev`, the edit, or the output version), which started this one. */
+  earlier?: { rounds: PeReviewRound[]; closedAt: string; specRev?: number; version?: number }[];
 }
 
+/**
+ * One round of PE review of new work: the PE's verdict in the shape of the studio's (pass 4e). Only `change` sends
+ * the work back for revision (feasible-if or not-feasible); `openCases` are product questions for the owner, which the
+ * lead's brief lists; on a later round `earlier` checks each earlier ask ("r1", "r2"), and a new change answers a risk
+ * the revision created (`fromRevision`).
+ */
 export interface PeReviewRound {
   at: string;
-  verdict: "agree" | "object";
+  verdict: Verdict;
   reasons: string;
+  change?: string;
+  openCases?: OpenCase[];
+  earlier?: AskCheck[];
+  fromRevision?: true;
+  budget?: BudgetEstimate;
+  /** A proposal: the spec revision the PE read. */
   specRev?: number;
+  /** A breakdown or a design: the version of the step's output the PE read. */
+  version?: number;
+  /** The PE's run that gave it (the service's record). */
+  by?: { provider: ProviderId; model: string; runId: string };
+  /** A proposal sent back: the lead run that was shown it to revise. When that run completes without revising it, the objection goes to the owner. */
+  shownTo?: string;
 }
 
 /**
@@ -733,6 +813,12 @@ export interface ChecksConfig {
   protectedInputs: string[];
   /** ≤20 variable names passed through to commands, none secret-named */
   passEnv: string[];
+  /**
+   * The JUnit XML report the check commands write, relative to the repository's root (for example
+   * "reports/junit.xml"): the service reads one result per test from it after the commands ran. Absent: no report
+   * is read, as before pass 5.
+   */
+  testReport?: string;
 }
 
 export const DEFAULT_CHECKS: ChecksConfig = {
@@ -917,6 +1003,8 @@ export interface Artifact {
   pathCoverage?: PathCoverage;
   /** Check-results artifacts. */
   checkRun?: CheckRunRecord;
+  /** Evidence artifacts (ORC-029 pass 5): what the service captured of the built code, per blueprint item. */
+  evidence?: EvidenceRun;
   /** A durable reference, e.g. the commit SHA and branch holding a code change. */
   ref?: string;
   createdAt: string;
@@ -957,6 +1045,12 @@ export interface Step extends StepDef {
   coverageRetries?: number;
   /** The gap, bound to the change (`to`) it was found on; a different change starts the count over. */
   coverageGap?: { missing: string[]; extra: string[]; to?: string };
+  /**
+   * PE review of what this step made (ORC-029 pass 5): a Goal's breakdown before its child tasks exist, or a design a
+   * coder step builds (the Feature flow's design step). While it stands, the steps that depend on this one wait, and a
+   * breakdown's children are not created. Absent on steps whose output is not reviewed.
+   */
+  peReview?: PeReviewState;
 }
 
 export type SelectionSource = "step" | "task-role" | "independence" | "project-role" | "project-default" | "service";
@@ -996,6 +1090,8 @@ export interface RunSnapshot {
     commands: { id: string; label: string; kind: "prepare" | "check"; argv: string[]; timeoutMs: number; offline?: true }[];
     reusedFrom?: string;
   };
+  /** A service capture run (ORC-029 pass 5): the commit, the blueprint items and the preview setting it was started with. */
+  evidence?: EvidenceSnapshot;
 }
 
 type AttemptOutcome =
@@ -1029,6 +1125,8 @@ export interface Attempt {
   activity?: string;
   /** `cachedInputTokens`: of `inputTokens`, those read from the provider's prompt cache (Codex reports them). */
   usage?: { inputTokens?: number; cachedInputTokens?: number; outputTokens?: number; costUsd?: number };
+  /** The fake runtime ran it: no agent ran, so it spent a known $0 (src/domain/spend.ts), as a simulated studio run. */
+  simulated?: true;
   /**
    * The changed-path set of the change a review run was shown, recorded by the service before
    * the run could report anything. `paths` holds at most 500; `total` is the real count.
@@ -1200,8 +1298,12 @@ export interface Message {
   taskId?: string;
 }
 
-/** "decisions": a run started because findings routed to the lead wait for its decision. */
-export type LeadTrigger = "message" | "planning" | "decisions";
+/**
+ * "decisions": a run started because findings routed to the lead wait for its decision. "pe-review": a run started
+ * because the PE sent new work back for the lead's revision (ORC-029 pass 5).
+ */
+/** Why a lead run started. "change-order": to adjust the tasks a Lock in touched (ORC-029 pass 5). */
+export type LeadTrigger = "message" | "planning" | "decisions" | "pe-review" | "change-order";
 
 /** A run of the lead agent. Separate from task attempts: at most one is active at a time. */
 export interface LeadRun {
@@ -1383,7 +1485,8 @@ export const DEFAULT_PR_DELIVERY: PrDeliveryConfig = {
   updateBeforeMerge: true,
   autoRepair: true,
   // The repository's instruction files, anywhere in the tree, are protected too.
-  protectedPaths: [".github/**", "package.json", "tsconfig*.json", "vitest.config.*", "vite.config.*", "**/AGENTS.md", "**/CLAUDE.md"],
+  // The dev container and the Dockerfiles it may name choose the image the checks and the evidence run in.
+  protectedPaths: [".github/**", "package.json", "tsconfig*.json", "vitest.config.*", "vite.config.*", "**/AGENTS.md", "**/CLAUDE.md", ".devcontainer/**", ".devcontainer.json", "**/Dockerfile", "**/Dockerfile.*", "**/*.Dockerfile", "**/*.dockerfile"],
   allowLocalWorkers: false,
   maxOpenPrs: 5,
   maxAutoMergesPerDay: 20,
@@ -1649,8 +1752,9 @@ export interface Landed {
 export class StaleWriteError extends Error {
   expected: number;
   actual: number;
-  constructor(expected: number, actual: number) {
-    super(`Stale write: edited revision ${expected}, current is ${actual}. Reload and reconcile.`);
+  /** `message`: what changed, when it is not the revision alone (the revisions may then be equal). */
+  constructor(expected: number, actual: number, message?: string) {
+    super(message ?? `Stale write: edited revision ${expected}, current is ${actual}. Reload and reconcile.`);
     this.name = "StaleWriteError";
     this.expected = expected;
     this.actual = actual;

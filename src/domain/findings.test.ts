@@ -600,3 +600,33 @@ describe("the PE's route (ORC-029 2d)", () => {
     expect(out.events.map((e) => e.message)).toContain(`${d2.id} sent to you by the PE: It changes what you asked for.`);
   });
 });
+
+describe("a follow-up of a finding cites the design parts it fixes (ORC-029 pass 5)", () => {
+  /** Two approved screens in force, both cited by the reviewed task. */
+  function withItems(s0: State, id: string): State {
+    const s = structuredClone(s0);
+    const item = (k: number) => ({ id: `bi-${k}`, kind: "screen" as const, title: `Screen ${k}`, artifactId: `sa-${k}`, version: 1, status: "approved" as const });
+    s.blueprint.revisions.push({ rev: s.blueprint.revisions.length + 1, at: at(0), visionRev: 1, reason: "approved two screens", items: [item(1), item(2)] });
+    M.currentSpec(task(s, id)).content.blueprintRefs = ["bi-1", "bi-2"];
+    return s;
+  }
+  const refsOf = (s: State, taskId: string) => M.currentSpec(task(s, taskId)).content.blueprintRefs;
+
+  it("your follow-up cites the parts the finding names, or every part the task cites when it names none", () => {
+    const named = reviewed([finding({ action: "ask-user", title: "[bi-2] The map is above the days" })]);
+    let s = F.decideFinding(withItems(named.s, named.id), named.s.decisions[0].id, "follow-up", undefined, at(5));
+    expect(refsOf(s, s.decisions[0].followUpTaskId!)).toEqual(["bi-2"]);
+    const none = reviewed([finding({ action: "ask-user", title: "The spacing is uneven" })]);
+    s = F.decideFinding(withItems(none.s, none.id), none.s.decisions[0].id, "follow-up", undefined, at(5));
+    expect(refsOf(s, s.decisions[0].followUpTaskId!)).toEqual(["bi-1", "bi-2"]);
+  });
+
+  it("the lead's follow-up does the same", () => {
+    const { s: s0, id } = reviewed([finding({ action: "ask-user", title: "[bi-1] The header is missing" })], { autopilot: true, route: "lead", author: "lead" });
+    const r = M.startLeadRun(withItems(s0, id), { provider: "claude", model: "claude-sample-large", trigger: "decisions" }, at(5));
+    const out = M.completeLeadRun(r.state, r.runId, { reply: "ok", proposals: [], decisions: [{ id: s0.decisions[0].id, decision: "follow-up", why: "Its own task." }] }, at(6));
+    const fu = out.decisions.find((d) => d.id === s0.decisions[0].id)!;
+    expect(fu.status).toBe("follow-up");
+    expect(refsOf(out, fu.followUpTaskId!)).toEqual(["bi-1"]);
+  });
+});

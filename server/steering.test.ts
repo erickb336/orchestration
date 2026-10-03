@@ -79,6 +79,9 @@ beforeEach(async () => {
   await scheduler.refreshHealth();
   cmd("initProject", { name: "Apps", repoPath: repo, vision: "Ship the apps.", focus: "Automate deployment" });
   cmd("startFactory", startFactoryArgs(store.read().state));
+  // The scripted adapters never answer a PE run. This file tests other things; PE review of new work (on for a new
+  // project) has its own tests: src/domain/peReview.test.ts and server/newwork.test.ts.
+  cmd("setPeReviewsNewWork", { on: false });
   cmd("setRoleDefault", { role: "coder", selection: { provider: "codex", model: "codex-sample-large" } });
   cmd("setRoleDefault", { role: "code_reviewer", selection: { provider: "claude", model: "claude-sample-large" } });
   cmd("setLeadSelection", { selection: { provider: "claude", model: "claude-sample-large" } });

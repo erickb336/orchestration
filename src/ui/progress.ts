@@ -35,7 +35,7 @@ export function liveIndicatorText(working: number, stopping: number, shaping = f
   const agents = (n: number) => `${n} agent${n === 1 ? "" : "s"}`;
   if (!working && !stopping) return "Idle";
   const text = working ? `${agents(working)} working${stopping ? `, ${stopping} stopping` : ""}` : `${agents(stopping)} stopping`;
-  return shaping && working ? `${text} (finishing; shaping)` : text;
+  return shaping && working ? `${text} (finishing; in Vision)` : text;
 }
 
 // ---------- the badges ----------

@@ -5,18 +5,23 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { ServiceInfo } from "../api";
+import { runCommand } from "../domain/commands";
 import * as D from "../domain/delivery";
 import * as M from "../domain/model";
 import { buildDemo } from "../domain/demo";
 import { buildSeed } from "../domain/seed";
+import { answerChangeOrder, changeOrdered, fullAnswer } from "../domain/testing/changeOrders";
+import { inVision } from "../domain/testing/factory";
 import { reviewedChange } from "../domain/testing/reviewed";
 import type { PrDelivery, State, SteeringChange } from "../domain/types";
 import { LeadButton, ProjectMenu, ResultsBadge, SimBanner, TABS } from "./App";
+import { floorScene } from "./floor/floorScene";
+import { reverseCommand } from "./floor/floorView";
 import { ConfirmProvider } from "./kit";
 import { Overview, focusProvenance } from "./Overview";
 import { landedVerdict, mergeVerdict, needsYouItems, optionsLine, prsNeedingYou } from "./progress";
-import { StartBuildingButton } from "./Shaping";
 import { StoreContext, type ServiceStore } from "./store";
+import { visible } from "./testStore";
 
 const T0 = Date.parse("2026-09-30T12:00:00Z");
 const at = (s: number) => new Date(T0 + s * 1000).toISOString();
@@ -155,11 +160,11 @@ describe("Home", () => {
   const s = buildDemo(T0);
   const markup = render(<Overview />, store(s));
 
-  it("shows Needs you, Progress by area, New results, the lead's latest reply and Focus, in that order, and nothing else", () => {
-    const order = ["Needs you", "Progress by area", "New results", "Latest from the lead", "Focus"].map((t) => markup.indexOf(`>${t}<`));
+  it("after the start is the factory floor: Needs you, the two budgets, the factory's lines, then New results, the lead's latest reply and Focus, in that order, and nothing else", () => {
+    const order = ["Needs you", "Building budget", "Maintenance budget, estimated", "The factory", "New results", "Latest from the lead", "Focus"].map((t) => markup.indexOf(`>${t}<`));
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
-    for (const gone of ["Team now", "Since your last visit", ">Usage<", ">Service<", "lead-inline", "Database", "Scheduler role", "Autopilot"]) expect(markup).not.toContain(gone);
+    for (const gone of ["Progress by area", "Team now", "Since your last visit", ">Usage<", ">Service<", "lead-inline", "Database", "Scheduler role", "Autopilot", "Shaping", "Start building"]) expect(markup).not.toContain(gone);
   });
 
   it("takes the demo's decisions in place with the task page's buttons", () => {
@@ -266,31 +271,120 @@ describe("Home's latest reply, in the conversation's words", () => {
 
 describe("the shaping panel", () => {
   const shaping = (vision: string) => {
-    const s = structuredClone(M.startVision(buildSeed(T0, { inFlightRuns: false }), at(1)));
+    const s = inVision(buildSeed(T0, { inFlightRuns: false }), at(1));
     s.project.visions[s.project.visions.length - 1].text = vision;
     return s;
   };
 
-  it("leads Home while shaping, on the kit: a card with the vision, its documents, what is clear, the planned tasks and Start building", () => {
+  it("leads Home while shaping, on the kit: a card with the vision, its documents, what is clear, the planned tasks and the way to Start the factory", () => {
     const markup = render(<Overview />, store(shaping("Hikers find trails without signal.")));
-    expect(markup.indexOf(">Shape the vision<")).toBeLessThan(markup.indexOf(">Needs you<"));
+    expect(markup.indexOf(">The vision<")).toBeLessThan(markup.indexOf(">Needs you<"));
     const start = markup.indexOf('class="k-card v-shape"');
     expect(start).toBeGreaterThan(-1);
     const panel = markup.slice(start, markup.indexOf(">Needs you<"));
     expect(panel).toContain('id="shape"');
-    for (const part of [">Vision so far<", "Vision documents (", ">What is clear so far<", "Planned tasks (", ">Start building<"]) expect(panel).toContain(part);
+    for (const part of [">Vision so far<", "Vision documents (", ">What is clear so far<", "Planned tasks ("]) expect(panel).toContain(part);
+    expect(panel).toMatch(/<a href="#\/vision\/pre-flight"[^>]*>Start the factory…<\/a>/);
+    expect(panel).not.toContain("Start building");
     expect(panel).not.toContain("style=");
     expect(panel).not.toContain('class="banner');
     expect(panel).not.toContain('class="chip');
   });
 
-  it("Start building says why it cannot start under the button, and what it will do when it can", () => {
-    const empty = render(<StartBuildingButton />, store(shaping("")));
-    expect(empty).toContain("Write or accept a vision first.");
-    expect(empty).toContain("k-btn-reason");
-    const ready = render(<StartBuildingButton />, store(shaping("Hikers find trails without signal.")));
-    expect(ready).not.toContain("k-btn-reason");
-    expect(ready).toContain("all nine count as open");
+  it("Home leads to the pre-flight, and says under the link why the factory cannot start with an empty vision", () => {
+    const empty = render(<Overview />, store(shaping("")));
+    expect(empty).toMatch(/>Start the factory…<\/a><p class="small muted no-margin">Write or accept a vision first.<\/p>/);
+    const ready = render(<Overview />, store(shaping("Hikers find trails without signal.")));
+    expect(ready).toMatch(/>Start the factory…<\/a><\/div>/);
+    expect(ready).not.toContain("Write or accept a vision first.");
+  });
+});
+
+describe("Home in Vision", () => {
+  it("stays as it was: the shaping panel, Needs you and Progress by area, and no factory floor", () => {
+    const s = inVision(floorScene().s, at(100));
+    const markup = render(<Overview />, store(s));
+    for (const part of [">The vision<", ">Needs you<", ">Progress by area<", ">New results<", ">Latest from the lead<"]) expect(markup).toContain(part);
+    for (const gone of [">Building budget<", ">The factory<", ">Decided by the PE<", "Open the change order"]) expect(markup).not.toContain(gone);
+  });
+});
+
+describe("the factory floor", () => {
+  const sc = floorScene();
+  const t = sc.tasks;
+  const text = (s: State) => visible(render(<Overview />, store(s)));
+
+  it("has one line per area, with each task at its step, a link to it, and a change order or 'needs you' marked on it", () => {
+    const markup = render(<Overview />, store(sc.s));
+    const v = visible(markup);
+    // The areas in the order of their first task; each line counts its tasks.
+    const areas = ["Trips 3 tasks", "Sharing 2 tasks · 1 landed", "CLI 1 task", "Offline 1 task"].map((a) => v.indexOf(a));
+    expect(areas.every((i) => i >= 0)).toBe(true);
+    expect([...areas].sort((a, b) => a - b)).toEqual(areas);
+    // Each task: its station, its id and title, and its marks.
+    expect(v).toContain(`building ${t.running} Trip plan screen change order`);
+    expect(v).toContain(`waiting ${t.queued} Trip list screen change order needs you`);
+    expect(v).toContain(`finished ${t.early} Early trip plan change order`);
+    expect(v).toContain(`review ${t.invite} Invite sheet`);
+    expect(v).toContain(`landed ${t.joined} Join from an invite`);
+    expect(v).toContain(`checks ${t.cli} trips plan and share`);
+    expect(v).toContain(`waiting ${t.offline} Offline maps needs you`);
+    expect(v).not.toContain(`${t.invite} Invite sheet change order`);
+    for (const id of Object.values(t)) expect(markup).toContain(`href="#/task/${id}"`);
+    expect(markup).toContain('href="#/tasks?area=Sharing"');
+    // Work that moves pulses (the Trip plan screen's build, the Invite sheet's review); the rest does not.
+    expect(count(markup, "k-pill--pulse")).toBe(2);
+  });
+
+  it("an open change order the lead is answering links to its screen; one that waits for you is under Needs you instead", () => {
+    const markup = render(<Overview />, store(sc.s));
+    expect(visible(markup)).toContain("Change order 2 · from Lock in 2");
+    expect(markup).toMatch(/<a href="#\/tasks\/change-order\/2"[^>]*>Open the change order<\/a>/);
+    // Under "ask me first", the lead's answer waits for your go-ahead: Needs you holds it, with its own way to the screen.
+    const f = changeOrdered("user");
+    const waiting = answerChangeOrder(f.s, fullAnswer(f), 30).s;
+    const w = render(<Overview />, store(waiting));
+    expect(visible(w)).toContain("Change order: blueprint r2");
+    expect(w).toContain('href="#/tasks/change-order/2"');
+    expect(w).not.toContain("Open the change order");
+    expect(visible(w)).toContain(`${f.tasks.queued} Trip list screen change order`);
+  });
+
+  it("shows the two budgets: spent of the budget, the PE's estimate for the rest, the stop, and maintenance a month against its budget", () => {
+    const v = text(sc.s);
+    expect(v).toContain("Building budget Change $8.10 of $40.00 spent PE estimate for the rest: $9.00–$16.00 Within budget At $40.00 the factory stops and asks you.");
+    expect(v).toContain("Maintenance budget, estimated $35.00 a month of your $50.00 The PE's estimate at the start, updated by each trade-off call the PE makes.");
+  });
+
+  it("without an estimate it says so, never $0; at the budget it says the factory stopped; with no budget, that it does not stop", () => {
+    const none = structuredClone(sc.s);
+    delete none.project.factoryStarts.at(-1)!.estimate;
+    const v = text(none);
+    expect(v).toContain("PE estimate for the rest: no estimate");
+    expect(v).toContain("Maintenance budget, estimated No estimate yet · your budget is $50.00 a month The PE estimates it before the factory starts. Until then it is unknown, never $0.");
+    expect(v).not.toMatch(/Maintenance budget, estimated \$0/);
+    const stopped = M.setBudgets(sc.s, { buildingUsd: 5, maintenanceUsdPerMonth: 50 }, at(40));
+    expect(text(stopped)).toContain("Stopped The building budget is reached: $8.10 of $5.00. Nothing new starts until you raise the budget or continue past it.");
+    const unset = M.setBudgets(sc.s, { buildingUsd: null, maintenanceUsdPerMonth: null }, at(40));
+    expect(text(unset)).toContain("$8.10 spent PE estimate for the rest: $9.00–$16.00 No budget No building budget is set, so the factory does not stop for cost.");
+    expect(text(unset)).toContain("$35.00 a month · no budget set");
+  });
+
+  it("lists the PE's call within budget with Reverse and its reasons; Reverse opens the decision again for you, with your reason", () => {
+    const markup = render(<Overview />, store(sc.s));
+    const v = visible(markup);
+    expect(v).toContain(`Decided by the PE 1 Trade-off calls the PE made within your budget. A call that would go past a budget comes to you. ${t.invite} Invite sheet Accept it as is: Invite links never expire`);
+    expect(markup).toMatch(/<button[^>]*>Reverse<\/button>/);
+    expect(v).toContain("See the reasons The PE: “The link is private to the group, and expiry needs a renewal flow nobody asked for. A link can be withdrawn by hand.” Cost: build $0.00, maintenance $0.00 a month (Nothing is built or run).");
+    // Reverse is the owner's decideFinding "reopen", with the reason.
+    const cmd = reverseCommand(sc.decisionId, "Expiry matters for a group chat.");
+    const after = runCommand(sc.s, cmd.name, cmd.args, at(50)).state;
+    const d = after.decisions.find((x) => x.id === sc.decisionId)!;
+    expect(d).toMatchObject({ status: "open", routedTo: "user", why: "Expiry matters for a group chat.", pe: { decision: "accept" } });
+    expect(after.events.at(-1)?.message).toContain("reopened (reversing the PE's call: accept): Expiry matters for a group chat.");
+    const back = render(<Overview />, store(after));
+    expect(back).not.toContain(">Decided by the PE<");
+    expect(visible(back)).toContain("Decide a finding: Invite links never expire");
   });
 });
 

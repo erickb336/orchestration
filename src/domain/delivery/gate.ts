@@ -113,7 +113,7 @@ export function prGate(s: State, task: Task, nowMs: number, o: { byUser: boolean
   if (s.project.hold) add("not-paused", "Not paused", "waiting", "The project is paused: nothing is pushed, opened, merged or commented.");
   else if (pr.userHold) add("not-paused", "Not paused", "waiting", `Kept for you${pr.userHold.reason ? `: ${pr.userHold.reason}` : ""}. Nothing is pushed, merged or commented until you let it continue.`);
   else if (pr.closeRequested) add("not-paused", "Not paused", "waiting", "You asked to close this pull request.");
-  else if (s.project.stage === "shaping") add("not-paused", "Not paused", "waiting", "Shaping: nothing is pushed, opened, merged or brought up to date until you start building. Nothing is paused.");
+  else if (s.project.stage === "shaping") add("not-paused", "Not paused", "waiting", "Vision: nothing is pushed, opened, merged or brought up to date until you start the factory. Nothing is paused.");
   else add("not-paused", "Not paused", "ok", "No pause or hold.");
 
   // 3. GitHub reachable, the same repository, and a repository the app can merge in

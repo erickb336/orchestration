@@ -5,7 +5,9 @@
 
 import { describe, expect, it } from "vitest";
 import * as M from "./model";
-import { startFactoryAsOwner } from "./testing/factory";
+import { runCommand } from "./commands";
+import { sendNoteInto } from "./model/notes";
+import { inVision, startFactoryAsOwner } from "./testing/factory";
 import { setPipeline } from "./testing/pipelines";
 import { buildSeed } from "./seed";
 import { ControlError, StaleWriteError, type LeadQuestion, type LeadRun, type State } from "./types";
@@ -17,7 +19,8 @@ const seed = () => buildSeed(T0);
 const quiet = () => buildSeed(T0, { inFlightRuns: false });
 const task = (s: State, id: string) => s.tasks.find((t) => t.id === id)!;
 const running = (s: State, id?: string) => M.activeAttempts(s, id);
-const shaping = (s: State) => M.startVision(s, at(0));
+/** The sample as a project in Vision, with its runs (a fixture: no command goes back from the factory since pass 5). */
+const shaping = (s: State) => inVision(s, at(0));
 const vision = (s: State) => M.currentVision(s);
 const oneStep = [{ id: "S1", purpose: "Implement", role: "coder" as const, dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" as const }] }];
 
@@ -85,6 +88,34 @@ describe("S1 stage and initProject", () => {
     expect(shaped.tasks).toEqual([]);
   });
 
+  it("a new project forgets the old repository's preview, local delivery and delivery baseline", () => {
+    let s = runCommand(quiet(), "setPreview", { preview: { preview: ["npm", "run", "preview"], port: 4173, cliEntry: "bin/trips.js" } }, at(1)).state;
+    s = runCommand(s, "setDeliveryMode", { mode: "local", branch: "old-repo-delivered" }, at(2)).state;
+    s = M.reportDeliveryResult(s, { status: "delivered", message: "delivered", sha: "abc123" }, at(3));
+    expect(s.project.preview?.port).toBe(4173);
+    expect(s.project.delivery?.lastSha).toBe("abc123");
+    const next = M.initProject(s, { name: "N", repoPath: "/tmp/n", vision: "", focus: "" }, at(4));
+    expect(next.project.preview).toBeUndefined();
+    expect(next.project.delivery).toBeUndefined();
+    expect(next.project.autonomy.autoDeliver).toEqual({ enabled: false, branch: "main" });
+  });
+
+  it("a new project forgets the old repository's environment (its image, prepare commands and hosts) and the notes queued for the old tasks (review finding 7)", () => {
+    const image = "python:3.13-slim-trixie@sha256:bb2988715db2cf7ace7b53f38f3cffbef7c7046a656bee66245eb0ed386e2e81";
+    let s = M.initProject(quiet(), { name: "Old", repoPath: "/tmp/old", vision: "", focus: "" }, at(1));
+    s = runCommand(s, "setEnvironment", { environment: { image, prepare: [["python3", "-m", "pip", "install", "--user", "-r", "requirements.txt"]], hosts: ["pypi.example.org"] } }, at(2)).state;
+    s = M.createTask(s, { title: "One", area: "A", outcome: "o", benefit: "", whyNow: "", acceptance: [], approach: "a", priority: 1, holdBeforeStart: true, flowId: "change" }, at(4)).state;
+    // A note queued for T-001's first run (the lead's, or the owner's to a run that was stopping).
+    s = structuredClone(s);
+    sendNoteInto(s, task(s, "T-001"), task(s, "T-001").steps[0], { text: "Use the old repository's fixtures", from: { by: "user" }, ifFinished: "report" }, at(5));
+    expect(s.project.environment?.image).toBe(image);
+    expect(s.notes.map((n) => [n.taskId, n.status])).toEqual([["T-001", "queued"]]);
+    const next = M.initProject(s, { name: "N", repoPath: "/tmp/n", vision: "", focus: "" }, at(6));
+    expect(next.project.environment).toBeUndefined();
+    // The new project's first task is T-001 too: a note queued for the old one must not reach its first run.
+    expect(next.notes).toEqual([]);
+  });
+
   it("an old project's drafts do not survive a new project", () => {
     const { state: s } = leadReply(shaping(quiet()), { vision: draft() });
     expect(s.visionDrafts).toHaveLength(1);
@@ -98,12 +129,12 @@ describe("S2 nothing new starts while shaping; running work finishes", () => {
     expect(running(M.dispatchEligible(ready, at(1)), "EX-004")).toHaveLength(1); // baseline
     let s = M.dispatchEligible(shaping(ready), at(1));
     expect(running(s, "EX-004")).toHaveLength(0);
-    expect(M.stateLabel(s, task(s, "EX-004"))).toBe("Ready (shaping)");
+    expect(M.stateLabel(s, task(s, "EX-004"))).toBe("Ready (in Vision)");
     s = M.dispatchEligible(startFactoryAsOwner(s, at(2)), at(3));
     expect(running(s, "EX-004")).toHaveLength(1);
   });
 
-  it("a running step is never interrupted by going back to shaping; its result is accepted; the next step waits for Start building", () => {
+  it("a running step in a project in Vision is never interrupted; its result is accepted; the next step waits for Start building", () => {
     let s = shaping(seed());
     const [a] = running(s, "EX-001");
     expect(a.outcome).toBe("running");
@@ -116,7 +147,7 @@ describe("S2 nothing new starts while shaping; running work finishes", () => {
     expect(task(s, "EX-001").hold).toBe(false);
     s = M.dispatchEligible(s, at(3));
     expect(running(s, "EX-001")).toHaveLength(0);
-    expect(M.stateLabel(s, task(s, "EX-001"))).toBe("Next step waits (shaping)");
+    expect(M.stateLabel(s, task(s, "EX-001"))).toBe("Next step waits (in Vision)");
     s = M.dispatchEligible(startFactoryAsOwner(s, at(4)), at(5));
     expect(running(s, "EX-001").length).toBeGreaterThan(0);
   });
@@ -136,13 +167,13 @@ describe("S2 nothing new starts while shaping; running work finishes", () => {
     const s = shaping(M.startHeldTask(seed(), "EX-004", at(0)));
     for (const t of s.tasks) if (!t.hold) expect(M.stateLabel(s, t)).not.toMatch(/Paused/);
     expect(M.stateLabel(s, task(s, "EX-005"))).toBe("Paused"); // the user's own hold still reads as it is
-    expect(M.SHAPING_LABEL).toBe("Shaping: new work waits until you start building");
+    expect(M.SHAPING_LABEL).toBe("Vision: new work waits until you start the factory");
     expect(s.project.hold).toBe(false);
   });
 
-  it("startVision is refused while already shaping; startFactory while already building", () => {
-    expect(() => shaping(shaping(seed()))).toThrow(/Already shaping/);
-    expect(() => startFactoryAsOwner(seed(), at(0))).toThrow(/Already building/);
+  it("startFactory is refused while already building, and no command goes back to Vision (pass 5: Vision stays open, Pause stops building)", () => {
+    expect(() => startFactoryAsOwner(seed(), at(0))).toThrow(/The factory is already running/);
+    expect(() => runCommand(seed(), "startVision", {}, at(0))).toThrow("Unknown command startVision");
   });
 });
 
@@ -271,7 +302,7 @@ describe("S6 the roadmap and Start building", () => {
     expect(t).toMatchObject({ heldForShaping: true, holdBeforeStart: false, fromShaping: true, lifecycle: "proposed" });
     const promoted = M.dispatchEligible(M.leadPromoteProposals(s, at(4)), at(4));
     expect(task(promoted, t.id).lifecycle).toBe("ready");
-    expect(M.stateLabel(promoted, task(promoted, t.id))).toBe("Planned; waits until you start building, then starts on Autopilot");
+    expect(M.stateLabel(promoted, task(promoted, t.id))).toBe("Planned; waits until you start the factory, then starts on Autopilot");
     expect(running(promoted, t.id)).toHaveLength(0);
     // Even while building, a task still under the roadmap hold never dispatches: only Start building lifts it.
     const forced = { ...promoted, project: { ...promoted.project, stage: "building" as const } };
@@ -326,7 +357,7 @@ describe("S6 the roadmap and Start building", () => {
     const released = M.dispatchEligible(M.leadPromoteProposals(M.startHeldTask(s, id, at(4)), at(4)), at(4));
     expect(task(released, id).holdBeforeStart).toBe(false);
     expect(running(released, id)).toHaveLength(0);
-    expect(M.stateLabel(released, task(released, id))).toBe("Ready (shaping)");
+    expect(M.stateLabel(released, task(released, id))).toBe("Ready (in Vision)");
   });
 });
 

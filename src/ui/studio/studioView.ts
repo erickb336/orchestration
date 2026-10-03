@@ -304,14 +304,18 @@ export function variantRules(a: StudioArtifact, variantId: string | undefined): 
 }
 
 /**
- * Where a dictionary version stands: the project's words (approved, in force), or not yet, and why. The dictionary
- * in force is the version the owner approved into the blueprint (domain/studio/blueprint.ts).
+ * Where a dictionary version stands (domain/studio/blueprint.ts): in force (locked in: the factory's agents get it),
+ * in the draft (approved: the studio works with it, and the factory's agents get it at your next Lock in), or not in
+ * force, and which version is.
  */
-export function dictionaryStanding(s: State, a: StudioArtifact): { inForce: boolean; text: string } {
+export function dictionaryStanding(s: State, a: StudioArtifact): { place: "in force" | "in the draft" | "not in force"; text: string } {
+  const is = (d: B.DictionaryInForce | undefined) => !!d && d.artifact.id === a.id && d.artifact.version === a.version;
   const force = B.dictionaryInForce(s);
-  if (force && force.artifact.id === a.id && force.artifact.version === a.version) return { inForce: true, text: "These are the project's words. Every agent gets them, and the writing check reports a word to avoid." };
-  if (force) return { inForce: false, text: `Not in force. ${force.artifact.title} v${force.artifact.version} is the project's dictionary until you approve this version.` };
-  return { inForce: false, text: "Not in force yet. Approve it into the blueprint to make these the project's words." };
+  const drafted = B.dictionaryInDraft(s);
+  if (is(force)) return { place: "in force", text: "These are the project's words. Every agent gets them, and the writing check reports a word to avoid." };
+  if (is(drafted)) return { place: "in the draft", text: `The studio uses these words now. The factory's agents get them at your next Lock in${force ? `; until then they keep ${force.artifact.title} v${force.artifact.version}` : ""}.` };
+  if (drafted) return { place: "not in force", text: `Not in force. ${drafted.artifact.title} v${drafted.artifact.version} is the project's dictionary until you approve this version.` };
+  return { place: "not in force", text: "Not in force yet. Approve it into the blueprint to make these the project's words." };
 }
 
 /** The versions whose draft differs from the owner's current feedback: the marks Send sends. Only versions the owner can answer (theirs, newest). */
@@ -488,11 +492,11 @@ function revisingText(a: StudioArtifact, r: Extract<S.PeReview, { status: "revis
 
 /**
  * Why a queued studio run does not start yet, as a sentence about `who`, or undefined when nothing holds it: a pause,
- * the factory stage, or the budget stop with its reason (the order dispatchStudioRuns checks them in).
+ * or the budget stop with its reason (the order dispatchStudioRuns checks them in). Studio runs go on while the
+ * factory runs (pass 5).
  */
 export function heldBecause(s: State, who = "It"): string | undefined {
   if (s.project.hold) return `${who} waits until you resume the project.`;
-  if (s.project.stage !== "shaping") return `${who} waits until the project is back in Vision.`;
   const stop = budgetStop(s);
   return stop ? `${who} waits at the budget stop. ${stop.why}.` : undefined;
 }
@@ -624,14 +628,13 @@ export function peView(s: State, a: StudioArtifact, providerLabel: (p: "claude" 
   if (a.shots?.status === "pending" || a.demo?.status === "pending") return view("neutral", "Waiting", `The PE reviews it once the ${a.shots?.status === "pending" ? "screenshots are taken" : "recording is made"}.`);
   if (run && R.isActiveStudioRun(run)) return view("work", "Reviewing", asIs ? "The PE is checking it against the code." : "The PE is reading this version: its files, screenshots and recordings.");
   if (run?.status === "queued") return view("neutral", "Queued", heldBecause(s, "The PE's run") ?? "Waiting to start.");
-  const later = s.project.stage === "shaping" ? "" : " The PE reviews it when the project is back in Vision.";
   if (run && S.endedWithoutResult([run])) {
     const why = run.note ?? `its run was ${run.status}`;
     return R.peRunDue(s, a)
       ? view("work", "Asking again", `The PE's run ended without a verdict (${why}). The service asks the PE again.`)
-      : view("neutral", "No verdict", `The PE's run ended without a verdict (${why}).${later}`);
+      : view("neutral", "No verdict", `The PE's run ended without a verdict (${why}).`);
   }
-  return view("neutral", "Waiting", r.passes ? `The designer revised it. The PE reviews it next, on pass ${r.passes + 1} of ${S.MAX_PE_PASSES}.${later}` : `Waiting for PE review.${later}`);
+  return view("neutral", "Waiting", r.passes ? `The designer revised it. The PE reviews it next, on pass ${r.passes + 1} of ${S.MAX_PE_PASSES}.` : "Waiting for PE review.");
 }
 
 // ---------- an artifact's versions (the PE loop, pass 4c) ----------

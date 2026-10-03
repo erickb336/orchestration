@@ -442,7 +442,7 @@ async function wordsAndRules() {
     if (!words) throw new Error("no dictionary to approve");
     await cmd("sendFeedback", { entries: [{ artifactId: words.id, version: words.version, mark: "keep", pins: [], rows: words.dictionary.map((e) => ({ row: e.term, mark: "keep" })), note: "Studio trial: these are our words." }] });
     await cmd("approveArtifact", { artifactId: words.id, version: words.version });
-    const found = B.dictionaryInForce((await state()).state);
+    const found = B.dictionaryInDraft((await state()).state);
     inForce = found ? { artifact: `${found.artifact.title} v${found.artifact.version}`, terms: found.entries.length } : null;
   } catch (e) {
     inForce = { error: e instanceof Error ? e.message : String(e) };

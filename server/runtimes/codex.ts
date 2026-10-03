@@ -35,6 +35,13 @@ import type { AdapterEvent, Assignment, Connection, ProviderHealth, RuntimeAdapt
 const PINNED_CODEX_VERSION = "0.159.2";
 
 /**
+ * The name the service gives Codex when it connects (`clientInfo.name`). Codex writes it into each thread's session
+ * file as the `originator`, and housekeeping (../housekeeping.ts) finds the threads Orchestrator's runs left by it.
+ * Changing it hides older threads from housekeeping.
+ */
+export const CODEX_CLIENT_NAME = "orchestration";
+
+/**
  * Extra CLI arguments for every app-server we start. Both verified against 0.159.2:
  * `agents.enabled` is a typed boolean config field (rejected with "expected a boolean" for a string
  * under --strict-config), and `multi_agent` is a known feature flag (`codex features list` shows it
@@ -120,6 +127,9 @@ const EXIT_GRACE_MS = 3_000;
 const ENDED_MAX = 500;
 
 export type SpawnFn = (command: string, args: string[], options: SpawnOptions) => ChildProcess;
+
+/** What became of one thread that housekeeping asked Codex to archive. */
+export type ArchiveOutcome = "archived" | "held" | { error: string };
 
 export interface CodexAdapterOptions {
   /** Path to the Codex CLI. Default: ./node_modules/.bin/codex, falling back to `codex` on PATH. A .js/.mjs path is run with this Node. */
@@ -692,6 +702,36 @@ export class CodexAdapter implements RuntimeAdapter {
     }
   }
 
+  /**
+   * Archive threads through a short-lived app-server, for housekeeping (../housekeeping.ts). Codex keeps an archived
+   * thread, and the owner can unarchive it. "held": another app holds the thread open (Codex answers "already has an
+   * active writer"); housekeeping tries again at its next sweep. The app-server is isolated like every probe: the
+   * owner's MCP servers stay off, so it does not start until they are known.
+   */
+  async archiveThreads(threadIds: string[]): Promise<Map<string, ArchiveOutcome>> {
+    const out = new Map<string, ArchiveOutcome>();
+    if (!threadIds.length) return out;
+    try {
+      if (!this.configuredMcp) await this.refreshIsolation();
+      if (!this.configuredMcp) throw new Error(this.isolationError);
+      await this.withAppServer(async (rpc) => {
+        for (const threadId of threadIds) {
+          try {
+            await rpc.request("thread/archive", { threadId });
+            out.set(threadId, "archived");
+          } catch (e) {
+            if (!(e instanceof RpcError)) throw e;
+            out.set(threadId, /active writer/i.test(e.message) ? "held" : { error: truncate(this.clean(e.message), 200) });
+          }
+        }
+      }, this.probeTimeoutMs + threadIds.length * 2_000);
+    } catch (e) {
+      const error = truncate(this.clean(e instanceof Error ? e.message : String(e)), 200);
+      for (const id of threadIds) if (!out.has(id)) out.set(id, { error });
+    }
+    return out;
+  }
+
   async listModels(): Promise<CatalogModel[] | null> {
     try {
       return await this.withAppServer(async (rpc) => {
@@ -749,7 +789,7 @@ export class CodexAdapter implements RuntimeAdapter {
   }
 
   /** Run `fn` against a short-lived, initialized app-server; always terminates it. */
-  private async withAppServer<T>(fn: (rpc: JsonRpcConnection) => Promise<T>): Promise<T> {
+  private async withAppServer<T>(fn: (rpc: JsonRpcConnection) => Promise<T>, timeoutMs = this.probeTimeoutMs): Promise<T> {
     const child = this.spawnProcess(this.appServerArgs(), true);
     let stderr = "";
     child.stderr?.setEncoding("utf8");
@@ -761,7 +801,7 @@ export class CodexAdapter implements RuntimeAdapter {
       child.on("exit", (code) =>
         setTimeout(() => reject(new Error(`app-server exited (code ${code})${stderr.trim() ? `: ${truncate(stderr, 200)}` : ""}`)), 100),
       );
-      timer = setTimeout(() => reject(new Error(`no answer within ${Math.round(this.probeTimeoutMs / 1000)}s`)), this.probeTimeoutMs);
+      timer = setTimeout(() => reject(new Error(`no answer within ${Math.round(timeoutMs / 1000)}s`)), timeoutMs);
     });
     failure.catch(() => {});
     try {
@@ -876,7 +916,7 @@ export class CodexAdapter implements RuntimeAdapter {
   }
 
   private initializeParams(): InitializeParams {
-    return { clientInfo: { name: "orchestration", title: "Orchestrator", version: "0.1.0" }, capabilities: null };
+    return { clientInfo: { name: CODEX_CLIENT_NAME, title: "Orchestrator", version: "0.1.0" }, capabilities: null };
   }
 
   private spawnFailure(e: unknown) {

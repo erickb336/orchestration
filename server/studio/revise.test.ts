@@ -91,12 +91,14 @@ describe("asking for the designer's revision", () => {
     expect(loop.events.at(-1)).toMatchObject({ actor: "system", message: expect.stringMatching(/^Designer run studio-\d+ asked for in round 1, revising Trip plan v1, on Claude/) });
   });
 
-  it("asks for none when the PE agreed, outside Vision, or after the round closed", () => {
+  it("asks for none when the PE agreed or after the round closed; while the factory runs it asks as in Vision (pass 5)", () => {
     const agreed = sentBack([{ variant: "A", verdict: "feasible" }, { variant: "B", verdict: "feasible" }, { variant: "C", verdict: "feasible" }]).s;
     expect(askForRevisions(agreed, at(5))).toBe(agreed);
-    const { s } = sentBack();
+    const { s, id } = sentBack();
     const building = startFactoryAsOwner(s, at(5));
-    expect(askForRevisions(building, at(6))).toBe(building);
+    const asked = askForRevisions(building, at(6));
+    expect(designerRuns(asked)).toHaveLength(designerRuns(building).length + 1);
+    expect(designerRuns(asked).at(-1)).toMatchObject({ artifactId: id, baseVersion: 1, status: "queued" });
     const closed = run(s, "closeRound", { round: 1 }, at(5)).state;
     expect(askForRevisions(closed, at(6))).toBe(closed);
   });

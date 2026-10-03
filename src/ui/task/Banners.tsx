@@ -135,8 +135,8 @@ export function StatusBanners({ state, task, onEdit }: { state: State; task: Tas
   if (task.heldForShaping && task.lifecycle !== "active")
     out.push(
       <Banner key="hfs">
-        Planned while shaping: it waits until you start building{M.waitingOn(state, task) ? ` and on ${M.waitingOn(state, task)}` : ""}, then {M.startFactoryPlan(state).release ? "starts on Autopilot" : "waits for your go-ahead"} (your involvement setting at the moment you start building decides). Changing "Wait for my go-ahead" under More takes it out of the roadmap's wait.{" "}
-        <a href="#/overview">Shape the vision</a>
+        Planned in Vision: it waits until you start the factory{M.waitingOn(state, task) ? ` and on ${M.waitingOn(state, task)}` : ""}, then {M.startFactoryPlan(state).release ? "starts on Autopilot" : "waits for your go-ahead"} (your involvement setting at the moment you start the factory decides). Changing "Wait for my go-ahead" under More takes it out of the roadmap's wait.{" "}
+        <a href="#/overview">Work on the vision</a>
       </Banner>,
     );
   // A deferral is not a pause. The running step finishes and its result is kept; then nothing new starts.

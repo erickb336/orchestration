@@ -3,9 +3,11 @@
 // (server/runtimes/fakeStatus.ts) agree.
 
 import * as D from "./delivery";
+import { unconfirmedDevcontainer } from "./environment";
 import * as F from "./findings";
 import * as M from "./model";
-import { lastObjection, PE_REVIEW_HOLD, peReviewHold } from "./peReview";
+import { changeOrderNeeds } from "./model/changeOrderUpdates";
+import { lastObjection, PE_OBJECTS_HOLD, PE_REVIEW_HOLD, taskReviewHold } from "./peReview";
 import { budgetStop, buildingSpend, type UnknownCost } from "./spend";
 import { blueprintItems, openChangeOrders } from "./studio/blueprint";
 import type { ChangeOrder } from "./studio/types";
@@ -39,9 +41,10 @@ export function needsYouOf(state: State, task: Task, nowMs = Date.now()): NeedsY
   if (task.steps.some((st) => st.role === "checks" && st.state === "blocked" && st.blockedReason?.startsWith("Checks failed"))) return { what: "decide on failing checks", action: "Decide", href };
   if (F.openDecisions(state, "user").some((d) => d.taskId === task.id)) return { what: "decide a finding", action: "Decide", href };
   if (open && task.hold && task.holdReason) return { what: "review the step", action: "Open", href };
-  // PE review comes before your go-ahead: an objection after three rounds is yours; pending work is the PE's.
-  const review = open ? peReviewHold(task.peReview) : undefined;
-  if (review && review !== PE_REVIEW_HOLD) return { what: PE_OBJECTION, action: "Open", href };
+  // PE review comes before your go-ahead: an objection after three rounds is yours, and so is a review that could not
+  // finish; pending work is the PE's. The task's own review (a proposal) or a step's (a breakdown, a design).
+  const review = open ? taskReviewHold(task)?.hold : undefined;
+  if (review && review !== PE_REVIEW_HOLD) return { what: review === PE_OBJECTS_HOLD ? PE_OBJECTION : PE_UNFINISHED, action: "Open", href };
   if (review) return undefined;
   if (open && task.holdBeforeStart && task.lifecycle !== "active" && !task.heldForShaping && !task.hold && !M.deferredBy(state, task)) {
     return { what: M.currentSpec(task).content.options.length > 1 ? "choose an option" : "give the go-ahead", action: "Open", href };
@@ -54,6 +57,14 @@ export const PR_PROBLEM = "decide on the pull request";
 
 /** The "what" of new work the PE still objects to after three rounds; Home shows the objection under it. */
 export const PE_OBJECTION = "answer the PE's objection";
+/** The "what" of new work whose PE review could not finish (the PE could not run); Home shows why under it. */
+export const PE_UNFINISHED = "decide without the PE's review";
+
+/** What the owner reads under a PE objection: the review that holds the task, and its objection or why it ended. */
+function peDetail(task: Task): string | undefined {
+  const r = taskReviewHold(task)?.review;
+  return r ? lastObjection(r) : undefined;
+}
 
 /** One mark of the verdict line: "Code ✓", "Security ✓", "Checks ✓". */
 export interface VerdictMark {
@@ -102,18 +113,19 @@ const mergeAsked = (pr: PrDelivery) => pr.mergeRequested?.headSha === pr.headSha
 export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[] {
   const items: NeedsYouEntry[] = [];
   const stop = budgetStop(state);
-  if (stop) items.push({ kind: "open", key: "budget", what: stop.why, detail: budgetDetail(), action: "Settings", href: "#/settings/project" });
+  if (stop) items.push({ kind: "open", key: "budget", what: stop.why, detail: budgetDetail(), action: "Settings", href: "#/settings/project/budgets" });
   // Apart from the stop: while a building budget is set, a run with no recorded cost is the owner's to know about.
   const unknown = state.project.budgets.buildingUsd === null ? [] : (stop?.spend ?? buildingSpend(state)).unknown;
-  if (unknown.length) items.push({ kind: "open", key: "budget-unknown", what: unknownCostLine(unknown), detail: unknownCostDetail(unknown), action: "Settings", href: "#/settings/project" });
-  // You asked to see change orders before the lead updates tasks. The Tasks page lists the affected tasks until the blueprint has its own page (ORC-029 pass 6).
-  for (const co of openChangeOrders(state, "user")) items.push({ kind: "open", key: `change-order-${co.rev}`, what: `Change order: blueprint r${co.rev}`, detail: changeOrderDetail(state, co), action: "Open", href: "#/tasks" });
-  // The PE still objects to the lead's updates for a change order after three rounds (2e).
+  if (unknown.length) items.push({ kind: "open", key: "budget-unknown", what: unknownCostLine(unknown), detail: unknownCostDetail(unknown), action: "Settings", href: "#/settings/project/budgets" });
+  // A change order the lead answered that still waits for you: its updates for your go-ahead ("ask me first"), or what
+  // the lead left (pass 5). "Open" goes to the change order's screen (#/tasks/change-order/<rev>).
   for (const co of openChangeOrders(state)) {
-    const hold = peReviewHold(co.peReview);
-    if (!co.peReview || !hold || hold === PE_REVIEW_HOLD) continue;
-    items.push({ kind: "open", key: `change-order-pe-${co.rev}`, what: `The PE objects to the updates for change order r${co.rev}`, detail: lastObjection(co.peReview), action: "Open", href: "#/tasks" });
+    const needs = changeOrderNeeds(state, co);
+    if (needs) items.push({ kind: "open", key: `change-order-${co.rev}`, what: `Change order: blueprint r${co.rev}`, detail: changeOrderDetail(state, co, needs.words), action: "Open", href: `#/tasks/change-order/${co.rev}` });
   }
+  // A dev container that changed (or appeared) at the trusted base is not used until the owner confirms it.
+  const dc = unconfirmedDevcontainer(state);
+  if (dc) items.push({ kind: "open", key: "devcontainer", what: "the repository's dev container is not confirmed", detail: `${dc.file} at ${dc.sha.slice(0, 12)} chooses the image the checks and the evidence run in. It is not used until you confirm it (sha256 ${dc.sha256.slice(0, 12)}…): until then they use the image you confirmed, or run on this computer.`, action: "Settings", href: "#/settings/project/environment" });
   const gh = state.project.github;
   if (gh?.problem && (state.project.prDelivery.enabled || D.openPrTasks(state).length > 0)) {
     items.push({ kind: "open", key: "gh", what: "GitHub delivery is stopped", detail: gh.problem.message, action: "Settings", href: "#/settings/project/delivery" });
@@ -125,7 +137,7 @@ export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[]
     const n = needsYouOf(state, task, nowMs);
     if (!n) continue;
     const pr = task.integration?.pr;
-    const open = (): NeedsYouEntry => ({ kind: "open", key: task.id, task, what: n.what, detail: n.what === PR_PROBLEM ? pr?.attention?.message : n.what === PE_OBJECTION && task.peReview ? lastObjection(task.peReview) : undefined, action: n.action, href: n.href });
+    const open = (): NeedsYouEntry => ({ kind: "open", key: task.id, task, what: n.what, detail: n.what === PR_PROBLEM ? pr?.attention?.message : n.what === PE_OBJECTION || n.what === PE_UNFINISHED ? peDetail(task) : undefined, action: n.action, href: n.href });
     if (n.what === "merge PR" && pr && mergeAsked(pr)) continue;
     if (n.what === "merge PR" && pr && mergeInPlace(state, task, pr, nowMs)) {
       items.push({ kind: "merge", key: task.id, task, pr, verdict: mergeVerdict(state, task, nowMs), simulated: !!pr.simulated });
@@ -145,11 +157,17 @@ export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[]
   return items;
 }
 
-/** What changed and what it touches: "You changed Invite sheet. It touches WT-6 and WT-7; the lead updates them after you look." */
-function changeOrderDetail(state: State, co: ChangeOrder): string {
-  const titles = blueprintItems(state).filter((i) => co.changedItems.includes(i.id)).map((i) => `${i.title} (v${i.version}${i.status === "open" ? ", open" : ""})`);
-  const touches = co.affectedTasks.length ? `It touches ${co.affectedTasks.join(", ")}.` : "No task cites what changed.";
-  return `You changed the blueprint: ${titles.join(", ")}. ${touches} You asked to look before the lead updates tasks.`;
+/** What changed, what it touches and what waits: "You changed the blueprint: Invite sheet (v2); dropped Reminders (v1). It touches WT-6, WT-7. …" */
+function changeOrderDetail(state: State, co: ChangeOrder, waits: string): string {
+  // The items as the Lock in put them into force.
+  const items = state.blueprint.revisions.find((r) => r.rev === co.rev)?.items ?? blueprintItems(state);
+  const name = (id: string) => {
+    const i = items.find((x) => x.id === id);
+    return i ? `${i.title} (v${i.version})` : id;
+  };
+  const what = [co.changedItems.map(name).join(", "), co.droppedItems.length ? `dropped ${co.droppedItems.map(name).join(", ")}` : ""].filter(Boolean).join("; ");
+  const touches = co.tasks.length ? `It touches ${co.tasks.map((t) => t.taskId).join(", ")}.` : "No task cites what changed.";
+  return `You changed the blueprint: ${what}. ${touches} ${waits[0].toUpperCase()}${waits.slice(1)}.`;
 }
 
 /** What the budget stop means (the runs with no recorded cost have their own item). */

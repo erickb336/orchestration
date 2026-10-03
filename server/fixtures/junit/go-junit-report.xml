@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Hand-written in go-junit-report 2's shape (go test -v | go-junit-report); no Go was run. Go writes a subtest's spaces as "_". -->
+<testsuites tests="3" failures="2">
+	<testsuite name="example.com/trips/join" tests="3" failures="2" errors="0" id="0" hostname="host.local" time="0.004" timestamp="2026-10-02T12:00:00Z">
+		<properties>
+			<property name="go.version" value="go1.23.2 darwin/arm64"></property>
+		</properties>
+		<testcase name="TestJoin/[bi-12_R1]_shows_the_trip" classname="example.com/trips/join" time="0.000"></testcase>
+		<testcase name="TestJoin/[bi-12_R4]_expired_link" classname="example.com/trips/join" time="0.000">
+			<failure message="Failed"><![CDATA[    join_test.go:21: got "an empty page", want "Ask the organizer for a new link"]]></failure>
+		</testcase>
+		<testcase name="TestJoin" classname="example.com/trips/join" time="0.001">
+			<failure message="Failed"><![CDATA[]]></failure>
+		</testcase>
+	</testsuite>
+</testsuites>

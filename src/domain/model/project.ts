@@ -4,6 +4,7 @@
 import * as C from "../checks";
 import { flowRef } from "../flows";
 import { instantiate, toDef, validatePipeline } from "../pipeline";
+import { validateBlueprintRefs } from "../studio/blueprint";
 import { activeStudioRuns } from "../studio/runs";
 import { emptyBlueprint, emptyStudio } from "../studio/types";
 import {
@@ -16,6 +17,7 @@ import {
   type ChosenBy,
   ControlError,
   autoModelDefaults,
+  DEFAULT_AUTONOMY,
   DEFAULT_CHECKS,
   DEFAULT_PR_DELIVERY,
   NO_BUDGETS,
@@ -41,6 +43,15 @@ export function setRunLimits(state: State, limits: RunLimits, now: string): Stat
   }
   s.project.runLimits = { maxTurns: Math.round(limits.maxTurns), timeoutMinutes: limits.timeoutMinutes, maxBudgetUsd: limits.maxBudgetUsd };
   event(s, now, "user", "config", `Run limits: ${s.project.runLimits.maxTurns} turns, ${limits.timeoutMinutes} min, $${limits.maxBudgetUsd} (Claude)`);
+  return s;
+}
+
+/** Whether housekeeping also cleans what runs left in the owner's Codex and Claude (server/housekeeping.ts). */
+export function setHousekeepOwnerApps(state: State, on: boolean, now: string): State {
+  if (state.project.housekeepOwnerApps === on) return state;
+  const s = draft(state);
+  s.project.housekeepOwnerApps = on;
+  event(s, now, "user", "config", on ? "Housekeeping cleans what runs leave in Codex and Claude again" : "Housekeeping no longer touches Codex or Claude; it still removes the service's own containers and stage folders");
   return s;
 }
 
@@ -100,12 +111,21 @@ export function initProject(state: State, init: { name: string; repoPath: string
   s.project.domains = [];
   s.project.factoryStarts = [];
   s.project.changeOrders = "lead";
+  // New work in the factory waits for PE review: on for a new project (ORC-029 pass 5).
+  s.project.peReviewsNewWork = true;
   s.project.hold = false;
   s.project.lastVisitAt = now;
   // Delivery to GitHub is a choice made per project and repository: a new project starts with it off
   // and with nothing observed about the previous repository.
   s.project.prDelivery = structuredClone(DEFAULT_PR_DELIVERY);
   delete s.project.github;
+  // Local delivery writes to a branch of the previous repository, and its baseline is a commit there.
+  s.project.autonomy.autoDeliver = { ...DEFAULT_AUTONOMY.autoDeliver };
+  delete s.project.delivery;
+  // The preview runs the previous repository's commands; only the owner sets it for this one.
+  delete s.project.preview;
+  // The environment's image, prepare commands and hosts were confirmed for the previous repository.
+  delete s.project.environment;
   // Checks are off until the user turns them on for this repository, and nothing has been probed for it.
   s.project.checks = structuredClone(DEFAULT_CHECKS);
   delete s.project.checksHealth;
@@ -123,12 +143,14 @@ export function initProject(state: State, init: { name: string; repoPath: string
   s.leadRuns = [];
   // An old project's change sets must not rewrite a new project's task with the same id.
   s.steering = [];
+  // A note queued for an old task's step would go into the first run of the new task with the same ids.
+  s.notes = [];
   s.visionDrafts = [];
   // The studio and the blueprint belong to the project too.
   s.studio = emptyStudio();
   s.blueprint = emptyBlueprint();
   s.project.lastPlanningAt = undefined;
-  event(s, now, "user", "vision", `Project "${s.project.name}" created for ${s.project.repoPath}; shaping the vision first`);
+  event(s, now, "user", "vision", `Project "${s.project.name}" created for ${s.project.repoPath}; it starts in Vision`);
   return s;
 }
 
@@ -148,6 +170,8 @@ export interface NewTask {
   chosenBy?: ChosenBy;
   /** The user chose the priority (not the form's default): the lead may not reorder it. */
   priorityPinned?: boolean;
+  /** The blueprint items the task builds (ORC-029 pass 5), for example a review finding's fix; checked like a spec edit. */
+  blueprintRefs?: string[];
 }
 
 /**
@@ -187,6 +211,7 @@ export function createTask(state: State, t: NewTask, now: string): { state: Stat
     validationPlan: "",
     rollback: "Discard the orchestration branch.",
     effort: "small",
+    ...(t.blueprintRefs?.length ? { blueprintRefs: validateBlueprintRefs(state, t.blueprintRefs) } : {}),
   };
   const defs = structuredClone(flow.steps).map(toDef);
   const ref = flowRef(flow, t.chosenBy ?? "user");

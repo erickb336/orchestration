@@ -14,3 +14,16 @@ export function startFactoryArgs(s: State, settings: Partial<FactorySettings> = 
 export function startFactoryAsOwner(s: State, now: string, settings: Partial<FactorySettings> = {}): State {
   return M.startFactory(s, startFactoryArgs(s, settings), now);
 }
+
+/**
+ * A fixture: this state as a project in Vision. Since ORC-029 pass 5 no command moves a project back from the factory
+ * (Vision stays open while it runs), so a test that needs a project in Vision with the sample's tasks and runs builds
+ * it here, as seeds build projects in the factory directly. Not a way in.
+ */
+export function inVision(s: State, now: string): State {
+  const v = structuredClone(s);
+  v.project.stage = "shaping";
+  v.project.shapingSince = now;
+  delete v.project.budgetContinued;
+  return v;
+}

@@ -25,6 +25,39 @@ export interface ServiceInfo {
   repo?: { ok: boolean; reason?: string; branch?: string };
   /** ORC-029: the port of the prototype listener (studio artifacts at p-<artifactId>-v<n>.localhost:<port>), when it is running. */
   prototypePort?: number;
+  /** Housekeeping of what runs leave behind (server/housekeeping.ts), when this service runs it. */
+  housekeeping?: HousekeepingInfo;
+}
+
+/** Housekeeping: its last sweep, and whether one runs now. */
+export interface HousekeepingInfo {
+  running: boolean;
+  /** Hours between two sweeps of the timer. */
+  everyHours: number;
+  /** False in the simulated runtime: it never touches the owner's Codex or Claude, whatever the setting says. */
+  ownerApps: boolean;
+  last?: SweepReport;
+}
+
+/** One sweep: what it cleaned, what it left and why. Counts, not names: the Activity event and the log carry the rest. */
+export interface SweepReport {
+  at: string;
+  trigger: "start" | "timer" | "owner";
+  /** Whether the owner's apps were part of it (the setting, and the runtime). */
+  ownerApps: boolean;
+  /** Codex threads archived. */
+  archived: number;
+  /** Claude session folders moved to the Trash. */
+  trashed: number;
+  /** The recorder's containers and stage folders removed. */
+  containers: number;
+  stages: number;
+  /** Threads another app holds open: tried again at the next sweep. */
+  held: number;
+  /** Items changed in the last hour: a run may still write them, so the next sweep looks again. */
+  recent: number;
+  /** What was found and left, or could not be checked, each with the reason. */
+  notes: string[];
 }
 
 interface ProviderInfo {
@@ -110,6 +143,19 @@ export interface CheckSuggestions {
   /** The trusted base the files were read at ("" when nothing was read). */
   ref: string;
   /** Why there is nothing to suggest, when the list is empty. */
+  reason?: string;
+}
+
+/**
+ * Body of GET /api/environment/found: what the repository says about its environment, read at `ref` (the trusted
+ * base): its dev container (the first source), and the image the table proposes from its root files. Nothing is saved.
+ */
+export interface EnvironmentFound {
+  ref: string;
+  /** sha256: the digest the owner confirms (Settings › Project › Environment); absent when the dev container is refused. */
+  devcontainer?: { file: string; image?: string; dockerfile?: string; context?: string; refused?: string; sha256?: string };
+  proposal?: { label: string; image: string; prepare: string[][]; because: string };
+  /** Why nothing could be read (the sample project, the simulated runtime). */
   reason?: string;
 }
 

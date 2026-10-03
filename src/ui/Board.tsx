@@ -11,6 +11,7 @@ import { FlowPicker } from "./FlowPicker";
 import { Actions, Button, ButtonLink, Card, Checkbox, Chip, EmptyState, Field, Input, SegmentedControl, Select, SimulatedChip, StatePill, Textarea } from "./kit";
 import { useLeadContext } from "./LeadDrawer";
 import { OTHER_AREA, areaOf, serviceOwned } from "./progress";
+import { ChangeOrderBanners } from "./changeOrder/ChangeOrder";
 import { ShapingBanner } from "./Shaping";
 import { newIdOf, useStore } from "./store";
 import { GROUPS, GROUP_LABEL, cardLine, cardState, groupOf, lineText, type Group } from "./tasksView";
@@ -235,6 +236,7 @@ export function Board() {
       </div>
       {creating && <NewTask onClose={() => setCreating(false)} />}
       <ShapingBanner />
+      <ChangeOrderBanners />
       <div className="tl-toolbar" role="search" aria-label="Filter tasks">
         <SegmentedControl<View>
           label="View"

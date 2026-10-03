@@ -25,7 +25,7 @@ export {
 } from "./model/controls";
 export { setProjectDefault, setProviderEnabled, setProviderLimit, setRoleDefault, setStepSelection, setTaskRoleOverride, setWorkerLimit } from "./model/steps";
 export { autoRetryCandidates, autoRetryStep, rerunStep, retryStep } from "./model/retries";
-export { editVision, markVisited, setSteeringMode } from "./model/vision";
+export { draftVisionText, editVision, markVisited, setSteeringMode } from "./model/vision";
 export { dispatchEligible, dispatchRank, leadPromoteProposals } from "./model/dispatch";
 export {
   acknowledgeStop, type OutputReport, reportActivity, reportCompletion, reportProgress, reportRunContext, reportRunFailed, reportRunLost,
@@ -35,13 +35,17 @@ export {
   acceptedOutput, artifactPipelineRev, consumedInputs, editArtifact, fromEarlierFlow, latestArtifact, setReviewEveryStep, staleInputs,
 } from "./model/artifacts";
 export { changeFlow, flowChangeBlocker, flowChangePreview, serviceOwned, setDefaultFlow, setFlows } from "./model/taskFlow";
-export { createTask, initProject, type NewTask, setCatalog, setRepoPath, setRunLimits, setWorkerConnections, setWorkerEnvironment } from "./model/project";
+export { createTask, initProject, type NewTask, setCatalog, setHousekeepOwnerApps, setRepoPath, setRunLimits, setWorkerConnections, setWorkerEnvironment } from "./model/project";
 export {
   activeLeadRun, applyAutopilot, autonomyMode, deferredLeadRoots, deliveryNews, leadDue, messageStatus, openLeadProposals, pendingMessages, postMessage,
   reportLeadActivity, reportLeadFailed, reportLeadStarted, reportLeadStopped, reportLeadStopTimeout, setAutonomy, setLeadSelection, startLeadRun,
   stopLeadReply,
 } from "./model/lead";
 export { completeLeadRun, type LeadProposal, type LeadReplyProblem, leadReplyNote, proposeTask, validateProposal } from "./model/leadOutput";
+export {
+  changeOrderLines, type ChangeOrderLineView, changeOrderNeeds, changeOrderShownTo, changeOrdersDueForLead, closeChangeOrder, leadAnswered,
+  lineOf as changeOrderLineOf, MAX_CHANGE_ORDER_UPDATES, outstanding, settleChangeOrders,
+} from "./model/changeOrderUpdates";
 export { stripHostile, stripInvisible } from "./model/textSafety";
 export { steerPermission, validateSteer, visionContentMovedSince } from "./model/steering";
 export {
@@ -54,7 +58,7 @@ export {
 export {
   acceptVisionDraft, answersMessage, coverageOf, dismissVisionDraft, latestQuestions, openAreas, openVisionDraft, roadmapTasks, SHAPING_LABEL,
   currentFactorySettings, type FactoryRequest, preflightOpenItems, setChangeOrders, setDevices, startFactory, startFactoryBlocker, startFactoryPlan,
-  startFactoryRequest, startVision,
+  startFactoryRequest,
   validateCoverage, validateQuestions, validateVisionDraft,
 } from "./model/shaping";
 export {

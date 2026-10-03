@@ -4,6 +4,10 @@
 // One `docker run` per tape, with a fixed argument list (containerArgs; never a shell string):
 //
 //   no network       --network none: the container has only its own loopback, where VHS, ttyd and Chromium talk.
+//                    One exception: the capture of evidence's dependency download (evidence.ts), which runs npm,
+//                    pnpm or yarn with every install hook off, gets Docker's bridge network; nothing else does.
+//                    The capture's browser beside a preview in a project's environment (unit E2) shares the network
+//                    of the preview's container, which is --network none too: one loopback, nothing else.
 //   no host files    two bind mounts and nothing else: a fresh copy of the artifact (/work) and an empty output folder
 //                    (/out), both inside a stage folder the service makes for this one recording. No Docker socket.
 //   read-only root   --read-only, with small tmpfs folders for /tmp and HOME. The VHS image's own volume (/vhs) is
@@ -22,14 +26,16 @@
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { createServer, type Server } from "node:net";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
+import type { Duplex } from "node:stream";
 import { killGroup, trackLive } from "../processes";
 
 /** The recorder's image. `npm run recorder:build` tags it; bump both when docker/recorder changes. */
-export const RECORDER_IMAGE = "orchestrator-recorder:1";
+export const RECORDER_IMAGE = "orchestrator-recorder:2";
 /** The image's user (docker/recorder/Dockerfile). Every container runs as it, never as root. */
 export const RECORDER_USER = "10001:10001";
 export const CONTAINER_HOME = "/home/recorder";
@@ -64,7 +70,20 @@ export interface ContainerSpec {
   stdin?: boolean;
   /** Only for the probe: a hosts entry for the host gateway, so it can show the host is out of reach. */
   hostGateway?: boolean;
+  /**
+   * "none" (the default): only the container's own loopback. "bridge": Docker's network, for the capture of evidence's
+   * dependency download alone (evidence.ts: an allowlisted install with every install hook off). Never for anything
+   * that runs repository code. `{ container }`: the network of that container, for the capture's browser beside a
+   * preview in the project's environment, which has no network but its loopback (unit E2).
+   */
+  network?: "none" | "bridge" | { container: string };
+  /** More environment variables, after the image's own (HOME, LANG, TMPDIR stay the service's). */
+  env?: Record<string, string>;
 }
+
+/** An environment variable a container may be given: a plain name, and a value with no NUL or newline. */
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+const RESERVED_ENV = new Set(["HOME", "LANG", "TMPDIR"]);
 
 /** A host path a `--mount` can name: absolute, with no comma (the option's separator), quote or control character. */
 const MOUNTABLE = /^\/[^,"\u0000-\u001f\u007f]*$/;
@@ -73,8 +92,10 @@ const CONTAINER_NAME = /^[a-z0-9][a-z0-9_.-]{0,62}$/;
 /** `docker run`'s arguments for one container. Throws on a name or a path it cannot pass safely. */
 export function containerArgs(s: ContainerSpec): string[] {
   if (!CONTAINER_NAME.test(s.name)) throw new Error(`not a container name: ${JSON.stringify(s.name)}`);
+  if (typeof s.network === "object" && (!CONTAINER_NAME.test(s.network.container) || s.hostGateway)) throw new Error(`not a container to share a network with: ${JSON.stringify(s.network.container)}`);
   for (const p of [s.work, s.out]) if (!MOUNTABLE.test(p)) throw new Error(`Docker cannot mount ${JSON.stringify(p)} (a comma, a quote or a control character)`);
   if (s.workdir !== WORK && !s.workdir.startsWith(`${WORK}/`)) throw new Error(`the working directory must be under ${WORK}`);
+  for (const [k, v] of Object.entries(s.env ?? {})) if (!ENV_NAME.test(k) || RESERVED_ENV.has(k) || /[\0\n\r]/.test(v)) throw new Error(`not a container variable: ${JSON.stringify(k)}`);
   const L = RECORDER_LIMITS;
   return [
     "run",
@@ -85,7 +106,7 @@ export function containerArgs(s: ContainerSpec): string[] {
     "--pull",
     "never",
     "--network",
-    "none",
+    typeof s.network === "object" ? `container:${s.network.container}` : (s.network ?? "none"),
     ...(s.hostGateway ? ["--add-host", `${HOST_ALIAS}:host-gateway`] : []),
     "--read-only",
     "--tmpfs",
@@ -114,6 +135,7 @@ export function containerArgs(s: ContainerSpec): string[] {
     "LANG=C.UTF-8",
     "--env",
     "TMPDIR=/tmp",
+    ...Object.entries(s.env ?? {}).flatMap(([k, v]) => ["--env", `${k}=${v}`]),
     "--mount",
     `type=bind,source=${s.work},target=${WORK}`,
     "--mount",
@@ -125,7 +147,7 @@ export function containerArgs(s: ContainerSpec): string[] {
   ];
 }
 
-export const containerName = (what: "rec" | "probe") => `orc-${what}-${process.pid}-${randomBytes(6).toString("hex")}`;
+export const containerName = (what: "rec" | "probe" | "ev") => `orc-${what}-${process.pid}-${randomBytes(6).toString("hex")}`;
 
 // ---------- running docker ----------
 
@@ -201,18 +223,45 @@ function remember(name: string, docker: string, env: Record<string, string>) {
   LIVE.set(name, { docker, env });
 }
 
+/** Whether the container is gone after its removal: Docker no longer lists it, or why that is not known. */
+export type Removal = { gone: true } | { gone: false; reason: string };
+
 export interface RunningContainer {
   name: string;
   /** When `docker run` exits: its exit code (null when it could not start) and the end of its output. */
   done: Promise<{ code: number | null; output: string }>;
   /** Kill the container by its name, end the docker command, and remove the container. */
   stop(): Promise<void>;
-  /** Make sure the container is gone (it removes itself when it ends; this covers a docker command that did not). */
-  remove(): Promise<void>;
+  /**
+   * Make sure the container is gone (it removes itself when it ends; this covers a docker command that did not). It
+   * waits until Docker no longer lists it (Docker's own removal can still be in progress), at most `goneWithinMs`.
+   */
+  remove(): Promise<Removal>;
+}
+
+/** How long a removal waits for Docker to stop listing the container. */
+const GONE_WITHIN_MS = 5000;
+
+/**
+ * Ask Docker, every quarter second up to `withinMs`, whether it still lists a container of exactly this name (its
+ * name filter matches parts of names, so the answer is compared whole).
+ */
+export async function waitGone(docker: string, name: string, env: Record<string, string>, withinMs: number): Promise<Removal> {
+  const until = Date.now() + withinMs;
+  for (;;) {
+    const r = await runDocker(docker, ["ps", "--all", "--filter", `name=${name}`, "--format", "{{.Names}}"], { env, timeoutMs: 15_000 });
+    const listed = r.code !== 0 || r.stdout.split("\n").some((l) => l.trim() === name);
+    if (!listed) return { gone: true };
+    if (Date.now() >= until) {
+      const why = r.code !== 0 ? `Docker could not say whether the container ${name} is gone (exit ${r.code ?? "?"})` : `Docker still lists the container ${name}`;
+      return { gone: false, reason: `${why} ${(withinMs / 1000).toFixed(1)} s after its removal.` };
+    }
+    await new Promise((res) => setTimeout(res, 250));
+  }
 }
 
 /** Start `docker run` with `args` (from containerArgs, whose name is `name`), writing `stdin` to it when given. */
-export function startContainer(docker: string, args: string[], o: { env: Record<string, string>; name: string; stdin?: string; cap?: number }): RunningContainer {
+export function startContainer(docker: string, args: string[], o: { env: Record<string, string>; name: string; stdin?: string; cap?: number; goneWithinMs?: number }): RunningContainer {
   const cap = o.cap ?? 4000;
   remember(o.name, docker, o.env);
   let child: ChildProcess | undefined;
@@ -233,9 +282,12 @@ export function startContainer(docker: string, args: string[], o: { env: Record<
     child.on("error", (e) => res({ code: null, output: tailOf(`${output}\n${e.message}`, cap) }));
     child.on("close", (code) => res({ code, output }));
   });
-  const remove = async () => {
+  const remove = async (): Promise<Removal> => {
     await runDocker(docker, ["rm", "--force", o.name], { env: o.env, timeoutMs: 15_000 });
-    LIVE.delete(o.name);
+    const r = await waitGone(docker, o.name, o.env, o.goneWithinMs ?? GONE_WITHIN_MS);
+    // One Docker still lists stays known, so this process kills it when it exits.
+    if (r.gone) LIVE.delete(o.name);
+    return r;
   };
   const stop = async () => {
     await runDocker(docker, ["kill", o.name], { env: o.env, timeoutMs: 15_000 });
@@ -247,6 +299,66 @@ export function startContainer(docker: string, args: string[], o: { env: Record<
     if (child?.exitCode === 0) LIVE.delete(o.name);
   });
   return { name: o.name, done, stop, remove };
+}
+
+// ---------- a container's terminal, through the daemon's own API (unit E2) ----------
+
+/**
+ * The local socket of the Docker daemon that `docker` talks to: DOCKER_HOST when it is a unix:// address, else the
+ * current context's endpoint. Undefined for a daemon reached another way (tcp://, ssh://).
+ */
+export async function dockerSocket(docker: string, env: Record<string, string>): Promise<string | undefined> {
+  const host = env.DOCKER_HOST ? env.DOCKER_HOST : (await runDocker(docker, ["context", "inspect", "--format", "{{.Endpoints.docker.Host}}"], { env, timeoutMs: 15_000 })).stdout.trim();
+  return host.startsWith("unix:///") ? host.slice("unix://".length) : undefined;
+}
+
+/** One request to the daemon's API on its socket; the status and the end of the body. */
+function dockerApi(socket: string, method: "POST", path: string, timeoutMs: number): Promise<{ status: number; body: string }> {
+  return new Promise((res, rej) => {
+    const req = httpRequest({ socketPath: socket, method, path }, (r) => {
+      let body = "";
+      r.setEncoding("utf8").on("data", (d: string) => (body = tailOf(body + d, 2000)));
+      r.on("end", () => res({ status: r.statusCode ?? 0, body }));
+    });
+    req.setTimeout(timeoutMs, () => req.destroy(new Error(`Docker did not answer ${method} ${path.split("?")[0]} within ${timeoutMs / 1000} s`)));
+    req.on("error", rej);
+    req.end();
+  });
+}
+
+/**
+ * Attach to the terminal of a created container (`docker create --tty --interactive`), before it starts, through the
+ * daemon's API on its socket: one raw stream, where what is written is typed into the terminal and what it shows comes
+ * back. The docker command cannot do this here: it refuses an interactive terminal when its own input is not one.
+ */
+export function attachTty(socket: string, name: string, timeoutMs = 15_000): Promise<Duplex> {
+  if (!CONTAINER_NAME.test(name)) return Promise.reject(new Error(`not a container name: ${JSON.stringify(name)}`));
+  return new Promise((res, rej) => {
+    const req = httpRequest({ socketPath: socket, method: "POST", path: `/containers/${name}/attach?stream=1&stdin=1&stdout=1&stderr=1`, headers: { Connection: "Upgrade", Upgrade: "tcp" } });
+    req.setTimeout(timeoutMs, () => req.destroy(new Error(`Docker did not attach to ${name} within ${timeoutMs / 1000} s`)));
+    req.on("upgrade", (_r, sock: Duplex & { setTimeout?: (ms: number) => void }, head: Buffer) => {
+      sock.setTimeout?.(0);
+      if (head.length) sock.unshift(head);
+      res(sock);
+    });
+    req.on("response", (r) => {
+      let body = "";
+      r.setEncoding("utf8").on("data", (d: string) => (body = tailOf(body + d, 500)));
+      r.on("end", () => rej(new Error(`Docker did not attach to ${name} (HTTP ${r.statusCode}): ${body.trim()}`)));
+    });
+    req.on("error", rej);
+    req.end();
+  });
+}
+
+/** Set the size of a running container's terminal. Whether Docker took it. */
+export async function resizeTty(socket: string, name: string, size: { cols: number; rows: number }): Promise<boolean> {
+  if (!CONTAINER_NAME.test(name) || !Number.isInteger(size.cols) || !Number.isInteger(size.rows)) return false;
+  try {
+    return (await dockerApi(socket, "POST", `/containers/${name}/resize?h=${size.rows}&w=${size.cols}`, 15_000)).status < 300;
+  } catch {
+    return false;
+  }
 }
 
 // ---------- one recording at a time ----------
@@ -305,9 +417,9 @@ export function startRecording(docker: string, args: string[], o: { env: Record<
       cancelled = true;
       await run?.stop();
     },
-    remove: async () => {
+    remove: async (): Promise<Removal> => {
       cancelled = true;
-      await run?.remove();
+      return run ? run.remove() : { gone: true };
     },
   };
 }
@@ -507,14 +619,15 @@ export function probeRecorder(o: { docker?: string; env?: NodeJS.ProcessEnv; ima
   })();
 }
 
-/** The prefixes of the stage folders: a recording's (terminal.ts) and the probe's. makeStage takes no other. */
-type StagePrefix = "orc-rec-" | "orc-probe-";
+/** The prefixes of the stage folders: a recording's (terminal.ts), a capture of evidence's (evidence.ts) and the probe's. makeStage takes no other. */
+type StagePrefix = "orc-rec-" | "orc-ev-" | "orc-probe-";
 /** A stage folder's name: a StagePrefix and the six characters mkdtemp adds. Any other name under the root is not ours. */
-const STAGE_NAME = /^orc-(?:rec|probe)-[A-Za-z0-9]{6}$/;
+const STAGE_NAME = /^orc-(?:rec|ev|probe)-[A-Za-z0-9]{6}$/;
 /**
  * How old a stage folder must be before the sweep removes it. A recording ends within its limit (120 s, and the
- * container's own timeout 15 s after it) and the probe within 60 s, so a folder this old has no live recording; a
- * second service on the same machine records in it only while it is new.
+ * container's own timeout 15 s after it), the probe within 60 s, and a capture of evidence within its limits
+ * (evidence.ts: the install's 10 minutes and the capture's, under 40 minutes for the largest plan), so a folder this
+ * old has no live run; a second service on the same machine records in it only while it is new.
  */
 export const STAGE_SWEEP_AGE_MS = 60 * 60_000;
 
@@ -541,13 +654,43 @@ export function sweepStages(root: string, o: { minAgeMs?: number; now?: number }
     try {
       const st = lstatSync(dir);
       if (!st.isDirectory() || now - st.mtimeMs < minAge) continue;
-      rmSync(dir, { recursive: true, force: true });
-      out.removed.push(name);
     } catch {
       out.failed.push(name);
+      continue;
     }
+    if (removeStage(dir) === undefined) out.removed.push(name);
+    else out.failed.push(name);
   }
   return out;
+}
+
+/**
+ * Remove a stage folder and everything in it, never following a link. The built app runs as this user on the mounts,
+ * so it can leave a folder this user cannot read or write (mode 000): such a folder is made the owner's again (rwx)
+ * before it is read. Never throws: undefined when the folder is gone, else why not.
+ */
+export function removeStage(dir: string): string | undefined {
+  try {
+    rmSync(dir, { recursive: true, force: true });
+    return undefined;
+  } catch {
+    // A folder the removal could not read or empty: open each one up, then remove again.
+  }
+  try {
+    openUp(dir);
+    rmSync(dir, { recursive: true, force: true });
+    return undefined;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+}
+
+/** Give this user rwx on every folder under `dir`, by lstat: a link is never followed, nor changed. */
+function openUp(dir: string): void {
+  const st = lstatSync(dir, { throwIfNoEntry: false });
+  if (!st?.isDirectory()) return;
+  if ((st.mode & 0o700) !== 0o700) chmodSync(dir, (st.mode & 0o7777) | 0o700);
+  for (const name of readdirSync(dir)) openUp(join(dir, name));
 }
 
 /** A new stage folder under `root`: `work/` and `out/`, private to this user. */
@@ -611,6 +754,6 @@ async function probe(docker: string, env: Record<string, string>, image: string,
     return { ok: false, detail: `the probe failed: ${e instanceof Error ? e.message : String(e)}`, checks: [] };
   } finally {
     listener?.close();
-    rmSync(stage.dir, { recursive: true, force: true });
+    removeStage(stage.dir);
   }
 }

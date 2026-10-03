@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Hostile page</title>
+  </head>
+  <body>
+    <h1>Hostile page</h1>
+    <p id="out">probing…</p>
+    <script>
+      // Each way out of the capture's browser, and the server's own tries (/probe). One line reports them all.
+      const tryFetch = (url) => fetch(url, { mode: "no-cors" }).then(() => `${url} REACHED`, (e) => `${url} blocked`);
+      const stun = () =>
+        new Promise((done) => {
+          try {
+            const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+            const found = [];
+            pc.onicecandidate = (e) => {
+              if (e.candidate) found.push(e.candidate.type);
+              else done(`webrtc ${found.includes("srflx") ? "REACHED" : "no srflx"} (${found.join(",") || "none"})`);
+            };
+            pc.createDataChannel("x");
+            pc.createOffer().then((o) => pc.setLocalDescription(o));
+            setTimeout(() => done(`webrtc no srflx (${found.join(",") || "none"}, timeout)`), 4000);
+          } catch (e) {
+            done(`webrtc ${e.message}`);
+          }
+        });
+      (async () => {
+        const { port } = await (await fetch("/canary.json")).json();
+        const results = await Promise.all([tryFetch("http://1.1.1.1/"), tryFetch(`http://192.168.5.2:${port}/`), tryFetch(`http://host.docker.internal:${port}/`), stun(), fetch("/probe").then((r) => r.text())]);
+        document.getElementById("out").textContent = results.join("; ");
+        console.error(`PROBES ${results.join("; ")}`);
+      })();
+    </script>
+  </body>
+</html>

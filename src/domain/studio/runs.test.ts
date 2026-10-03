@@ -61,9 +61,10 @@ describe("asking for a studio run", () => {
     expect(runOf(r.state, r.result.runId)).toMatchObject({ artifactId: a.id, baseVersion: 1 });
   });
 
-  it("is refused outside Vision, outside an open lead round, for an unknown artifact, without a brief, and for probes until pass 4", () => {
+  it("is asked for while the factory runs too (pass 5), and refused outside an open lead round, for an unknown artifact, without a brief, and for probes until pass 4", () => {
     const { s, n } = inRound();
-    expect(() => ask(startFactoryAsOwner(s, at(2)), { round: n })).toThrow("Studio runs happen in Vision. Go back to vision first.");
+    const building = ask(startFactoryAsOwner(s, at(2)), { round: n }, 3);
+    expect(runOf(building.state, building.result.runId)).toMatchObject({ kind: "designer", round: n, status: "queued" });
     expect(() => ask(s, { round: 2 })).toThrow("There is no round 2.");
     expect(() => ask(run(s, "closeRound", { round: n }, at(2)).state, { round: n })).toThrow("Round 1 is closed.");
     expect(() => ask(s, { round: n, artifactId: "sa-99" })).toThrow("Unknown studio artifact sa-99.");
@@ -89,15 +90,15 @@ describe("dispatch", () => {
     expect(M.activeAttempts(M.dispatchEligible(M.leadPromoteProposals(building, at(6)), at(6))).map((a) => a.taskId)).toEqual([task.newId]);
   });
 
-  it("waits, queued, while the project is paused, outside Vision, or at the building budget", () => {
+  it("waits, queued, while the project is paused or at the building budget; while the factory runs it starts (pass 5)", () => {
     const { s: base, n } = inRound();
     const { state: s, result } = ask(base, { round: n });
     const paused = M.pauseProject(s, at(3));
     expect(dispatch(paused, 4)).toEqual({ state: paused, started: [] });
-    // Started the factory with the run still queued: it waits until the project is back in Vision.
+    // Started the factory with the run still queued: the studio goes on while the factory runs.
     const building = startFactoryAsOwner(s, at(3));
-    expect(dispatch(building, 4).started).toEqual([]);
-    expect(dispatch(M.startVision(building, at(5)), 6).started).toEqual([result.runId]);
+    expect(dispatch(building, 4).started).toEqual([result.runId]);
+    expect(dispatch(M.pauseProject(building, at(4)), 5).started).toEqual([]);
     // At the building budget nothing new starts, studio runs included; raising it lets them start.
     const spent = { ...s, leadRuns: [{ id: "lead-1", trigger: "message" as const, provider: "claude" as const, model: "claude-sample-large", startedAt: at(2), endedAt: at(3), outcome: "completed" as const, messageIds: [], usage: { costUsd: 5 } }] };
     const atBudget = runCommand(spent, "setBudgets", { buildingUsd: 5, maintenanceUsdPerMonth: null }, at(3)).state;
@@ -267,14 +268,14 @@ describe("the PE's runs (pass 3)", () => {
     expect(asked.events.at(-1)!.message).toMatch(/on Claude · claude-sample-large \(on the designer's own provider: Codex is not enabled, so this review is not independent\)$/);
   });
 
-  it("waits for the screenshots and the recording; never for what the owner brought, a closed round, an older version, outside Vision, or a version already reviewed", () => {
+  it("waits for the screenshots and the recording; never for what the owner brought, a closed round, an older version, or a version already reviewed; also while the factory runs (pass 5)", () => {
     const { s, id, n } = imported();
     const pending = S.startArtifactMedia(s, id, 1);
     expect(peRuns(R.askForPeReviews(pending, at(3)))).toEqual([]);
     const shot = S.recordArtifactMedia(pending, id, 1, { shots: { status: "skipped", at: at(3), reason: "no Chrome found" } }, at(3));
     expect(peRuns(R.askForPeReviews(shot, at(4)))).toHaveLength(1);
     expect(peRuns(R.askForPeReviews(run(s, "closeRound", { round: n }, at(3)).state, at(4)))).toEqual([]);
-    expect(peRuns(R.askForPeReviews(startFactoryAsOwner(s, at(3)), at(4)))).toEqual([]);
+    expect(peRuns(R.askForPeReviews(startFactoryAsOwner(s, at(3)), at(4))).map((r) => [r.artifactId, r.baseVersion])).toEqual([[id, 1]]);
     expect(peRuns(R.askForPeReviews(peAgrees(s, id, 1, ["A", "B", "C"], at(3)), at(4)))).toEqual([]);
     // Only the newest version is reviewed.
     const v2 = addScreen(s, n, at(3), { artifactId: id });

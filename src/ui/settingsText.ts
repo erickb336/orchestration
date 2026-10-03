@@ -56,13 +56,13 @@ export function proposalsLine(open: number, deferred: number, max: number): stri
   return `${openText} ${deferredText}`;
 }
 
-// ---------- Start building ----------
+// ---------- Start the factory ----------
 
 const AUTONOMY_WORD = { autopilot: "Autopilot", checkin: "Check-in", manual: "Manual" } as const;
 
 /**
- * How the factory runs once started, in one line: the settings Start building sends and records with the owner's
- * agreement (a stand-in for the pre-flight screen, ORC-029 pass 6). They are changed in Settings before starting.
+ * How the factory runs once started, in one line: the settings the pre-flight's Start the factory records with the
+ * owner's agreement (ORC-029 pass 6). The pre-flight sets them, and Settings changes them later.
  */
 export function factorySettingsText(x: FactorySettings): string {
   const d = x.delivery;

@@ -109,10 +109,11 @@ describe("the built-in files", () => {
   it("the six flows and the three internal pipelines equal the format-14 templates apart from the security review beside each code review and the principles", () => {
     // The verify purposes are plain descriptions now; the format-14 record keeps the sentence that moved to the lead's
     // role brief, so it is stripped here. The security review step and every reference to it are stripped too, so that
-    // nothing else changed. The principles are stripped as well (principles.test.ts pins them step by step).
+    // nothing else changed. The principles are stripped as well (principles.test.ts pins them step by step). So is
+    // Feature's Capture evidence step (ORC-029 pass 5), run by the service, and the UX review's input from it.
     const described = (st: StepDef): StepDef => ({ ...st, purpose: st.purpose.replace(` ${VERIFY_CHECKS_NOTE}`, "").replace(/\.$/, "") });
     const withoutSecurity = (steps: StepDef[]): StepDef[] => {
-      const sec = new Set(steps.filter((s) => s.role === "security_reviewer").map((s) => s.id));
+      const sec = new Set(steps.filter((s) => s.role === "security_reviewer" || s.role === "evidence").map((s) => s.id));
       return steps
         .filter((s) => !sec.has(s.id))
         .map(({ principles: _p, ...s }) => toDef({ ...s, dependsOn: s.dependsOn.filter((d) => !sec.has(d)), inputs: s.inputs.filter((r) => !sec.has(r.step)), ...(s.runIf ? { runIf: s.runIf.filter((r) => !sec.has(r.step)) } : {}) }));
@@ -134,6 +135,7 @@ describe("the built-in files", () => {
       expect(withoutSecurity(p.steps), id).toEqual(expected);
       expect(p.name, id).toBe(t.name);
       expect(p.steps.some((s) => s.role === "security_reviewer"), id).toBe(["change", "feature", "bugfix"].includes(id));
+      expect(p.steps.some((s) => s.role === "evidence"), id).toBe(id === "feature");
     }
     for (const p of INTERNAL_FLOWS) {
       const t = V14_TEMPLATES[p.id];

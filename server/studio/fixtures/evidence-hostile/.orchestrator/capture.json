@@ -1,0 +1,4 @@
+{
+  "screens": [{ "item": "bi-2", "path": "/", "devices": ["desktop", "mobile"] }],
+  "terminals": [{ "item": "bi-4", "tape": ".orchestrator/hostile.tape" }]
+}

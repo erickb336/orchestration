@@ -50,17 +50,21 @@ Without setup, the same choices are environment variables:
 
 In subscription mode no API key or cloud setting is passed to agents.
 
+**Agents sign in with the inference-only token, not your full login** (the owner's choice, 2026-10-03). A full login would let agents use your claude.ai connectors (Figma, Linear, Slack, Drive) and show your plan's usage, but every agent would then reach everything you are connected to, and they would share your own Claude Code login. With the inference-only token, agents can call the model and use MCP servers configured on this computer, and nothing else of your account.
+
 ## Checking that real agents work
 
 `npm run test:real` runs one short scenario with real agents, against a throwaway repository inside this checkout's ignored `evidence/` folder:
 
+- in Vision, one studio round: the lead opens it, a designer makes an artifact, the PE reviews it, and the test approves it into the draft as you would;
+- the test starts the factory with the pre-flight's own command, which names the Lock in summary it showed;
 - a Codex agent and a Claude agent work at the same time;
 - each is paused and resumed, then the whole project is;
 - each gets a note the moment it is dispatched;
 - each task's review findings are revised before the lead writes its spec (if a review asks for a decision, the test answers "fix" and records it);
 - both tasks then finish.
 
-The latest run took 88 seconds and about $0.19 of Claude usage; each extra review round adds about $0.03. It reads the same environment variables as above, and prints only whether each provider is ready, never a credential.
+The latest run took 88 seconds and about $0.19 of Claude usage; each extra review round adds about $0.03. That run had no studio round: the round adds a lead run, a designer run and a PE run, and no real run has measured their time or cost yet. It reads the same environment variables as above, and prints only whether each provider is ready, never a credential.
 
 **What it leaves:**
 

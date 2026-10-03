@@ -26,6 +26,7 @@ const KIND_WORD: Record<Artifact["kind"], string> = {
   handoff: "Handoff",
   breakdown: "The breakdown",
   "check-results": "Checks",
+  evidence: "The evidence",
 };
 
 export function ResultCard({ state, task, prAtTop }: { state: State; task: Task; prAtTop: boolean }) {

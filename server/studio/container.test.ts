@@ -4,11 +4,11 @@
 // needed. Where Docker and the image are present, the real probe passes, and a docker that drops the isolation flags
 // fails it.
 
-import { chmodSync, existsSync, lutimesSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lutimesSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
-import { RECORDER_IMAGE, STAGE_SWEEP_AGE_MS, containerArgs, containerName, defaultRecorderRoot, dockerReady, judgeProbe, parseProbe, probeRecorder, startContainer, startRecording, sweepStages, type HostSide, type ProbeFacts } from "./container";
+import { RECORDER_IMAGE, STAGE_SWEEP_AGE_MS, containerArgs, containerName, defaultRecorderRoot, dockerReady, judgeProbe, parseProbe, probeRecorder, removeStage, startContainer, startRecording, sweepStages, type HostSide, type ProbeFacts } from "./container";
 
 let dir: string;
 beforeEach(() => {
@@ -19,7 +19,7 @@ afterEach(() => {
 });
 
 /** A stand-in docker: logs each call's arguments, and answers each subcommand with the given bash. */
-function standIn(name: string, answers: { version?: string; image?: string; run?: string }) {
+function standIn(name: string, answers: { version?: string; image?: string; run?: string; ps?: string }) {
   const log = join(dir, `${name}.log`);
   const file = join(dir, name);
   writeFileSync(
@@ -30,6 +30,7 @@ case "$1" in
   version) ${answers.version ?? "echo 29.0.0"} ;;
   image) ${answers.image ?? "echo sha256:feed"} ;;
   run) ${answers.run ?? "exit 0"} ;;
+  ps) ${answers.ps ?? "exit 0"} ;;
 esac
 `,
   );
@@ -221,9 +222,9 @@ describe("when recording is unavailable, and why", () => {
     expect(await dockerReady({ docker: join(dir, "no-docker") })).toEqual({ ok: false, reason: `Docker is not installed (${join(dir, "no-docker")} was not found)` });
     const down = standIn("down", { version: 'echo "Cannot connect to the Docker daemon at unix:///x/docker.sock. Is the docker daemon running?" >&2; exit 1' });
     expect(await dockerReady({ docker: down.file })).toEqual({ ok: false, reason: "Docker is not running (start it, for example with colima start): Cannot connect to the Docker daemon at unix:///x/docker.sock. Is the docker daemon running?" });
-    const bare = standIn("bare", { image: 'echo "Error: No such image: orchestrator-recorder:1" >&2; exit 1' });
-    expect(await dockerReady({ docker: bare.file })).toEqual({ ok: false, reason: "the recorder image orchestrator-recorder:1 is missing: run npm run recorder:build" });
-    expect(bare.calls()).toEqual(["version --format {{.Server.Version}}", "image inspect --format {{.Id}} orchestrator-recorder:1"]);
+    const bare = standIn("bare", { image: 'echo "Error: No such image: orchestrator-recorder:2" >&2; exit 1' });
+    expect(await dockerReady({ docker: bare.file })).toEqual({ ok: false, reason: "the recorder image orchestrator-recorder:2 is missing: run npm run recorder:build" });
+    expect(bare.calls()).toEqual(["version --format {{.Server.Version}}", "image inspect --format {{.Id}} orchestrator-recorder:2"]);
     // The service never builds or pulls: nothing but those two questions was asked.
     expect(bare.calls().some((c) => /^(build|pull|run)/.test(c))).toBe(false);
   });
@@ -253,7 +254,27 @@ describe("when recording is unavailable, and why", () => {
     const r = await run.done;
     expect(Date.now() - t0).toBeLessThan(10_000);
     expect(r.code).toBeNull(); // killed, not finished
-    expect(slow.calls()).toEqual([`run --name ${name} image`, `kill ${name}`, `rm --force ${name}`]);
+    expect(slow.calls()).toEqual([`run --name ${name} image`, `kill ${name}`, `rm --force ${name}`, `ps --all --filter name=${name} --format {{.Names}}`]);
+  });
+
+  it("remove waits until Docker no longer lists the container; one it still lists at the bound is reported, not claimed gone", async () => {
+    const env = { PATH: process.env.PATH ?? "" };
+    const name = containerName("rec");
+    // Docker's own --rm removal can still be in progress when `rm --force` returns: the first `ps` still lists it.
+    const count = join(dir, "ps-count");
+    const lagging = standIn("lagging", { ps: `n=$(cat ${JSON.stringify(count)} 2>/dev/null || echo 0); echo $((n + 1)) > ${JSON.stringify(count)}; if [ "$n" = 0 ]; then echo ${name}-other; echo ${name}; fi` });
+    const run = startContainer(lagging.file, ["run", "--name", name, "image"], { env, name });
+    await run.done;
+    expect(await run.remove()).toEqual({ gone: true });
+    expect(lagging.calls().filter((c) => c.startsWith("ps "))).toEqual([`ps --all --filter name=${name} --format {{.Names}}`, `ps --all --filter name=${name} --format {{.Names}}`]);
+    // Another container whose name only starts with this one's does not count: its listing alone is "gone".
+    const other = standIn("other", { ps: `echo ${name}-other` });
+    expect(await startContainer(other.file, ["run", "--name", name, "image"], { env, name }).remove()).toEqual({ gone: true });
+    // Still listed when the bound ends: the result says so.
+    const stuck = standIn("stuck", { ps: `echo ${name}` });
+    const kept = startContainer(stuck.file, ["run", "--name", name, "image"], { env, name, goneWithinMs: 600 });
+    await kept.done;
+    expect(await kept.remove()).toEqual({ gone: false, reason: `Docker still lists the container ${name} 0.6 s after its removal.` });
   });
 });
 
@@ -353,6 +374,34 @@ describe("the stage folders a crash left (the sweep at the service's start)", ()
     expect(sweepStages(join(dir, "root-link"))).toEqual({ removed: [], failed: [] });
     expect(readdirSync(real)).toEqual(["orc-rec-a1B2c3"]);
     expect(sweepStages(join(dir, "missing"))).toEqual({ removed: [], failed: [] });
+  });
+
+  it("a folder the built app made unreadable (mode 000) is made the owner's again and removed, never through a link", () => {
+    const root = join(dir, "recorder");
+    const outside = join(dir, "outside");
+    mkdirSync(root);
+    mkdirSync(join(outside, "keep"), { recursive: true });
+    writeFileSync(join(outside, "keep", "keep.txt"), "not the recorder's");
+    chmodSync(join(outside, "keep"), 0o500);
+    const old = make(root, "orc-ev-a1B2c3", 2 * HOUR);
+    mkdirSync(join(old, "work", "locked", "inner"), { recursive: true });
+    writeFileSync(join(old, "work", "locked", "inner", "f.txt"), "x");
+    symlinkSync(join(outside, "keep"), join(old, "work", "locked", "out"));
+    chmodSync(join(old, "work", "locked", "inner"), 0o000);
+    chmodSync(join(old, "work", "locked"), 0o000);
+    const t = new Date(Date.now() - 2 * HOUR);
+    lutimesSync(old, t, t);
+    expect(sweepStages(root)).toEqual({ removed: ["orc-ev-a1B2c3"], failed: [] });
+    expect(readdirSync(root)).toEqual([]);
+    // The link went; the folder it pointed at kept its mode and its file.
+    expect([statSync(join(outside, "keep")).mode & 0o777, readFileSync(join(outside, "keep", "keep.txt"), "utf8")]).toEqual([0o500, "not the recorder's"]);
+    // A capture's own clean-up, the same way.
+    const stage = join(dir, "stage");
+    mkdirSync(join(stage, "out", "locked"), { recursive: true });
+    chmodSync(join(stage, "out", "locked"), 0o000);
+    expect(removeStage(stage)).toBeUndefined();
+    expect(existsSync(stage)).toBe(false);
+    chmodSync(join(outside, "keep"), 0o700);
   });
 
   it("a folder younger than the age, an hour by default, stays; the age counts from the folder's own time", () => {

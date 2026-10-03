@@ -334,10 +334,10 @@ describe("migration 12 → 13 keeps state visible", () => {
     expect(s.project.stage).toBe("shaping");
     expect(s.project.shapingSince).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     // The 13 → 14 upgrade records its own template events after this one, so it is found by its text.
-    const ev = s.events.find((e) => e.message.startsWith("Moved from building to shaping when the state format was upgraded"))!;
+    const ev = s.events.find((e) => e.message.startsWith("Moved from the factory back to Vision when the state format was upgraded"))!;
     expect(ev).toMatchObject({ actor: "system", kind: "config", at: s.project.shapingSince });
     expect(ev.id).toMatch(/^ev-\d+$/);
-    expect(ev.message).toMatch(/^Moved from building to shaping when the state format was upgraded: the project has no vision yet/);
+    expect(ev.message).toMatch(/^Moved from the factory back to Vision when the state format was upgraded: the project has no vision yet/);
     const raw = new DatabaseSync(path);
     expect(raw.prepare("SELECT COUNT(*) AS n FROM events WHERE id = ?").get(ev.id)).toEqual({ n: 1 });
     raw.close();
@@ -346,13 +346,13 @@ describe("migration 12 → 13 keeps state visible", () => {
     });
     expect(kept.state.project.stage).toBe("building");
     expect(kept.state.project.shapingSince).toBeUndefined();
-    expect(kept.state.events.some((e) => e.message.startsWith("Moved from building to shaping"))).toBe(false);
+    expect(kept.state.events.some((e) => e.message.startsWith("Moved from the factory back to Vision"))).toBe(false);
     // Already shaping without a start time: it gets one, and no event (nothing moved).
     const already = reopen((d) => {
       d.project.stage = "shaping";
     });
     expect(already.state.project.shapingSince).toMatch(/^\d{4}/);
-    expect(already.state.events.some((e) => e.message.startsWith("Moved from building to shaping"))).toBe(false);
+    expect(already.state.events.some((e) => e.message.startsWith("Moved from the factory back to Vision"))).toBe(false);
   });
 
   it("a hold the user set on a shaping-era task stays the user's hold; the roadmap's own hold becomes the roadmap flag; a hold the user released is the roadmap's again", () => {

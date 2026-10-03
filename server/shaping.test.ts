@@ -1,8 +1,8 @@
 // Shaping the vision with the lead first, service level. Scripted adapters for both providers
 // and a temporary git repository; no real providers. Shaping end to end (no planning, no dispatch, the
 // shaping brief, a draft accepted, Start building releasing the roadmap), a planning run that cannot
-// draft, going back to shaping with a live run, the format 11 → 12 migration, the simulated lead's
-// draft, and command validation.
+// draft, a project in Vision with a live run (an upgraded one that went back before ORC-029 pass 5; no command goes
+// back since), the format 11 → 12 migration, the simulated lead's draft, and command validation.
 
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { startFactoryArgs } from "../src/domain/testing/factory";
+import { inVision, startFactoryArgs } from "../src/domain/testing/factory";
 import * as M from "../src/domain/model";
 import { buildSeed } from "../src/domain/seed";
 import type { State } from "../src/domain/types";
@@ -106,7 +106,7 @@ describe("A. shaping end to end", () => {
     expect(r.trigger).toBe("message");
     const prompt = claude.runs.get(r.id)!.prompt;
     expect(prompt).toContain("Project stage: shaping");
-    expect(prompt).toContain("## Shaping the vision");
+    expect(prompt).toContain("## Draft the vision with the user");
     expect(prompt).toContain('"vision": {');
     expect(prompt).toContain("(not written yet)");
     claude.reply(r.id, "Here is a first draft and one planned task.", [proposal({ title: "One-command local dev", priority: 1 })], undefined, visionDraft());
@@ -121,7 +121,7 @@ describe("A. shaping end to end", () => {
     tick();
     tick();
     expect(M.activeAttempts(state())).toHaveLength(0); // still nothing runs, the user task included
-    expect(M.stateLabel(state(), task(planned.id))).toBe("Planned; waits until you start building, then starts on Autopilot");
+    expect(M.stateLabel(state(), task(planned.id))).toBe("Planned; waits until you start the factory, then starts on Autopilot");
     expect(state().leadRuns.filter((x) => x.trigger === "planning")).toHaveLength(0);
 
     const refused = failure(() => cmd("startFactory", startFactoryArgs(state())));
@@ -143,10 +143,11 @@ describe("A. shaping end to end", () => {
     expect(active.length).toBeGreaterThan(0);
     expect(active.map((a) => a.taskId).sort()).toEqual([planned.id, state().tasks.find((t) => t.specs[0].author === "user")!.id].sort());
     expect(codex.started.length).toBeGreaterThan(0);
-    // The next message run is a building one: no shaping brief, no vision contract.
+    // The next lead run is a building one: no shaping brief and no coverage. (A message run while building still gets
+    // the vision draft and the studio, ORC-029 pass 5: server/envelope.studio.test.ts.)
     const r2 = ask("how is it going?");
     expect(claude.runs.get(r2.id)!.prompt).not.toContain("Project stage: shaping");
-    expect(claude.runs.get(r2.id)!.prompt).not.toContain('"vision": {');
+    expect(claude.runs.get(r2.id)!.prompt).not.toContain('"coverage": {');
   });
 
   it("with manual involvement the roadmap keeps waiting after Start building, as lead proposals do", () => {
@@ -219,14 +220,17 @@ describe("B. only message runs may draft", () => {
   });
 });
 
-describe("C. back to shaping stops nothing", () => {
+/** The project in Vision, as a fixture: an upgraded project that went back before pass 5, with its runs. */
+const toVision = () => store.update((s) => inVision(s, iso()), iso());
+
+describe("C. a project in Vision with a run in flight stops nothing", () => {
   it("a running step finishes and its result is accepted; the next step waits until Start building", () => {
     init("building", "Ship the apps.");
     const id = createTask("Two-step task", 1);
     tick();
     const [a] = M.activeAttempts(state());
     expect(a.taskId).toBe(id);
-    cmd("startVision");
+    toVision();
     expect(state().project.stage).toBe("shaping");
     tick();
     expect(codex.interrupts).toEqual([]);
@@ -238,7 +242,7 @@ describe("C. back to shaping stops nothing", () => {
     expect(state().artifacts.some((x) => x.attemptId === a.id)).toBe(true);
     for (let i = 0; i < 3; i++) tick();
     expect(M.activeAttempts(state())).toHaveLength(0);
-    expect(M.stateLabel(state(), task(id))).toBe("Next step waits (shaping)");
+    expect(M.stateLabel(state(), task(id))).toBe("Next step waits (in Vision)");
     expect(M.stateLabel(state(), task(id))).not.toMatch(/Paused/);
     cmd("startFactory", startFactoryArgs(state()));
     tick();
@@ -251,7 +255,7 @@ describe("C. back to shaping stops nothing", () => {
     const id = createTask("Survives", 1);
     tick();
     const [a] = M.activeAttempts(state());
-    cmd("startVision");
+    toVision();
     const claude2 = new ScriptedAdapter("claude");
     const codex2 = new ScriptedAdapter("codex");
     const s2 = new Scheduler(store, { claude: claude2, codex: codex2 }, { workspaces: new WorkspaceManager(join(dir, "worktrees")), leaseMs: 60_000 });
@@ -278,7 +282,7 @@ describe("C. back to shaping stops nothing", () => {
 });
 
 describe("D. migration and the simulated lead", () => {
-  it("a format-11 database migrates to 12: every existing project is building, with no drafts, and accepts the new commands", () => {
+  it("a format-11 database migrates to 12: every existing project is building, with no drafts", () => {
     const path = join(dir, "old.sqlite");
     const seeded = new Store(path);
     seeded.close();
@@ -296,8 +300,6 @@ describe("D. migration and the simulated lead", () => {
     expect(s.project.stage).toBe("building");
     expect(s.visionDrafts).toEqual([]);
     expect(s.tasks.every((t) => t.fromShaping === undefined)).toBe(true);
-    upgraded.command("startVision", {}, "m1", iso());
-    expect(upgraded.read().state.project.stage).toBe("shaping");
     upgraded.close();
     const check = new DatabaseSync(path);
     expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(19);
@@ -307,7 +309,7 @@ describe("D. migration and the simulated lead", () => {
 
   it("the simulated lead drafts a vision from the user's message only while shaping, labelled simulated; planning never drafts", () => {
     const base = buildSeed(now, { inFlightRuns: false });
-    const shaping = M.postMessage(M.startVision(base, iso()), "Build a notes app that syncs offline", iso());
+    const shaping = M.postMessage(inVision(base, iso()), "Build a notes app that syncs offline", iso());
     const run = M.startLeadRun(shaping, { provider: "claude", model: "m", trigger: "message" }, iso());
     const prompt = buildLeadEnvelope(run.state, M.activeLeadRun(run.state)!, "read");
     const v = fakeVision(prompt)!;
@@ -337,7 +339,7 @@ describe("F. coverage and questions", () => {
   it("a shaping reply with a draft, questions and coverage is stored and survives a reopen of the store; the answers arrive as one message", () => {
     init("shaping");
     const r = ask("I want fast note capture on my phone.");
-    expect(claude.runs.get(r.id)!.prompt).toContain("## Shaping the vision");
+    expect(claude.runs.get(r.id)!.prompt).toContain("## Draft the vision with the user");
     expect(claude.runs.get(r.id)!.prompt).toContain('"coverage": {');
     expect(claude.runs.get(r.id)!.prompt).toContain('"questions": [');
     expect(claude.runs.get(r.id)!.prompt).toContain("- intent: Intent and why now — open (not reported yet)");
@@ -390,7 +392,7 @@ describe("F. coverage and questions", () => {
 
   it("the simulated lead in shaping sends a living draft with marked assumptions, three questions with options and a coverage, all labelled simulated, from the first exchange", () => {
     const base = buildSeed(now, { inFlightRuns: false });
-    const shaping = M.postMessage(M.startVision(base, iso()), "Build a notes app that syncs offline", iso());
+    const shaping = M.postMessage(inVision(base, iso()), "Build a notes app that syncs offline", iso());
     const run = M.startLeadRun(shaping, { provider: "claude", model: "m", trigger: "message" }, iso());
     const prompt = buildLeadEnvelope(run.state, M.activeLeadRun(run.state)!, "read");
     const out = parseLeadOutput(fakeLeadText(run.runId, "message", prompt));
@@ -449,6 +451,7 @@ describe("E. command validation", () => {
     cmd("acceptVisionDraft", { draftId: d.id, expectedRev: 1, text: "My words.", focus: "Mine" });
     expect(M.currentVision(state())).toMatchObject({ rev: 2, text: "My words.", focus: "Mine", author: "user" });
     expect(M.currentVision(state()).reason).toMatch(/with edits/);
-    expect(failure(() => cmd("startVision")).message).toMatch(/Already shaping/);
+    // There is no Back to vision (pass 5): the command is unknown.
+    expect(failure(() => cmd("startVision"))).toMatchObject({ kind: "invalid", message: "Unknown command startVision" });
   });
 });

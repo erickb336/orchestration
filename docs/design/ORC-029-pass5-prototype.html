@@ -1,0 +1,782 @@
+<title>Draft and Lock In</title>
+<style>
+/* ORC-029 pass 5 prototype; the styles come from pass 1 (docs/design/ORC-029-pass1-prototype.html). Layout: light review strips (Orchestrator's inverted demo-bar style) wrap a dark product frame; inside it, the
+   studio is a three-column canvas: rounds and artifacts | the artifact | the lead. Single dark look on purpose:
+   Orchestrator is dark-only (ORC-025). The sample products keep their own palettes inside their frames. */
+:root {
+  color-scheme: dark;
+  /* Orchestrator */
+  --bg: #121315; --surface: #1a1b1e; --surface-2: #222327; --border: #2b2d31; --border-strong: #3a3c42;
+  --text: #ececea; --muted: #a3a6ad; --focus: #7fa4f5;
+  --work: #7fa4f5; --you: #e3a14a; --fail: #ef8a83; --done: #6cc28b;
+  --work-bg: #1f2633; --you-bg: #2a2219; --fail-bg: #2b1f1f; --done-bg: #1c2a22;
+  /* review strips: the inverted, "not the product" look */
+  --rv-bg: #ececea; --rv-fg: #121315; --rv-muted: #55585e; --rv-line: #c9cac6; --rv-chip: #dcdcd8;
+  /* Weekend Trips, the sample app: its own outdoor palette */
+  --wt-bg: #f5f3ec; --wt-ink: #1f2a24; --wt-muted: #5d6a61; --wt-green: #2f6b4f; --wt-sky: #cfe3ef; --wt-sand: #e9e0cc; --wt-line: #d9d3c5; --wt-sun: #d98c2b;
+  /* terminal */
+  --t-bg: #0b0c0d; --t-fg: #d7dad3; --t-dim: #7d837c; --t-green: #8fd19e; --t-yellow: #e7c46b; --t-red: #f08a7e; --t-blue: #8ab4f8; --t-sel: #26303a;
+  --font: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --fs-micro: 0.75rem; --fs-small: 0.8125rem; --fs-meta: 0.875rem; --fs-body: 0.9375rem; --fs-h3: 1.0625rem; --fs-h2: 1.25rem; --fs-h1: 1.5rem;
+  --r-chip: 6px; --r-ctl: 8px; --r: 12px;
+}
+* { box-sizing: border-box; }
+html, body { background: var(--bg); color: var(--text); }
+body { font-family: var(--font); font-size: var(--fs-body); line-height: 1.5; padding-inline: 16px; padding-block: 16px 48px; -webkit-font-smoothing: antialiased; }
+h1, h2, h3, h4 { margin: 0; line-height: 1.25; font-weight: 650; text-wrap: balance; }
+p { margin: 0; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.wrap { max-width: 1240px; margin: 0 auto; display: grid; gap: 14px; }
+.muted { color: var(--muted); }
+.small { font-size: var(--fs-small); }
+.micro { font-size: var(--fs-micro); }
+.mono { font-family: var(--mono); }
+.num { font-variant-numeric: tabular-nums; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+/* ---------- review (light) ---------- */
+.rv { background: var(--rv-bg); color: var(--rv-fg); border-radius: var(--r); padding: 14px 16px; display: grid; gap: 10px; }
+.rv .rv-muted { color: var(--rv-muted); }
+.rv h1 { font-size: var(--fs-h2); }
+.rv-intro { display: grid; gap: 8px; max-width: 78ch; }
+.rv-intro p { font-size: var(--fs-meta); }
+.rv-row { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.rv-tag { font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.06em; color: var(--rv-muted); font-weight: 600; }
+.rv-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 16px; align-items: start; }
+.rv-bar .ask { display: grid; gap: 4px; min-width: 0; }
+.rv-bar .ask p { font-size: var(--fs-meta); }
+.rv-marks { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.rv-btn { border: 1px solid var(--rv-line); background: transparent; color: var(--rv-fg); padding: 5px 11px; border-radius: 999px; font-size: var(--fs-small); cursor: pointer; font-weight: 550; }
+.rv-btn:hover { background: var(--rv-chip); }
+.rv-btn[aria-pressed="true"][data-v="agree"] { background: #1c5b3c; border-color: #1c5b3c; color: #fff; }
+.rv-btn[aria-pressed="true"][data-v="change"] { background: #8a5410; border-color: #8a5410; color: #fff; }
+.rv-btn[aria-pressed="true"][data-v="skip"] { background: #55585e; border-color: #55585e; color: #fff; }
+.rv-note { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; }
+.rv-note textarea { flex: 1; min-width: 0; font: inherit; font-size: var(--fs-small); background: #fff; color: var(--rv-fg); border: 1px solid var(--rv-line); border-radius: var(--r-ctl); padding: 6px 8px; min-height: 34px; resize: vertical; }
+.rv-saved { font-size: var(--fs-micro); color: var(--rv-muted); min-width: 9ch; }
+.rv-progress { display: flex; gap: 10px; align-items: center; font-size: var(--fs-small); }
+.rv-meter { width: 140px; height: 6px; background: var(--rv-chip); border-radius: 99px; overflow: hidden; }
+.rv-meter span { display: block; height: 100%; width: 0; background: var(--rv-fg); transition: width 200ms ease-out; }
+.rv-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.rv-link { background: none; border: none; padding: 0; color: var(--rv-fg); text-decoration: underline; cursor: pointer; font-size: var(--fs-small); }
+
+/* ---------- screen tabs ---------- */
+.tabs { display: flex; gap: 4px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin; }
+.tab { flex: none; border: 1px solid var(--border); background: var(--surface); color: var(--muted); padding: 7px 12px; border-radius: var(--r-ctl); font-size: var(--fs-small); cursor: pointer; display: flex; gap: 6px; align-items: center; }
+.tab[aria-selected="true"] { color: var(--text); border-color: var(--border-strong); background: var(--surface-2); }
+.tab .dot { width: 7px; height: 7px; border-radius: 99px; background: var(--border-strong); }
+.tab .dot[data-v="agree"] { background: var(--done); } .tab .dot[data-v="change"] { background: var(--you); } .tab .dot[data-v="skip"] { background: var(--muted); }
+
+/* ---------- the product frame ---------- */
+.app { border: 1px solid var(--border); border-radius: var(--r); background: var(--bg); overflow: hidden; }
+.hdr { display: flex; align-items: center; gap: 14px; padding: 10px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.brand { font-weight: 700; letter-spacing: -0.01em; }
+.stepper { display: flex; align-items: center; gap: 6px; font-size: var(--fs-small); }
+.step { display: flex; align-items: center; gap: 6px; padding: 3px 10px 3px 4px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+.step b { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 99px; background: var(--surface-2); font-size: var(--fs-micro); color: var(--muted); }
+.step.on { color: var(--text); border-color: var(--border-strong); background: var(--surface); }
+.step.on b { background: var(--text); color: var(--bg); }
+.step.vision.on { border-color: #4b5a78; } .step.vision.on b { background: var(--work); }
+.step.factory.on b { background: var(--done); }
+.arrow { color: var(--muted); }
+.hdr .meta { margin-left: auto; display: flex; gap: 10px; align-items: center; font-size: var(--fs-small); color: var(--muted); flex-wrap: wrap; }
+.sim { background: var(--text); color: var(--bg); font-size: var(--fs-micro); font-weight: 650; padding: 1px 7px; border-radius: var(--r-chip); }
+.pill { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-micro); padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+.pill.work { color: var(--work); background: var(--work-bg); border-color: transparent; }
+.pill.you { color: var(--you); background: var(--you-bg); border-color: transparent; }
+.pill.done { color: var(--done); background: var(--done-bg); border-color: transparent; }
+.pill.fail { color: var(--fail); background: var(--fail-bg); border-color: transparent; }
+.btn { border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text); padding: 6px 12px; border-radius: var(--r-ctl); font-size: var(--fs-small); cursor: pointer; font-weight: 550; }
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+.btn.quiet { background: transparent; border-color: transparent; color: var(--muted); }
+.btn.quiet:hover { color: var(--text); }
+.btn[disabled] { opacity: 0.45; cursor: not-allowed; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r-ctl); overflow: hidden; }
+.seg button { border: none; background: transparent; color: var(--muted); padding: 5px 10px; font-size: var(--fs-small); cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button[aria-pressed="true"] { background: var(--surface-2); color: var(--text); }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 14px; display: grid; gap: 10px; min-width: 0; }
+.card h3 { font-size: var(--fs-h3); }
+.label { font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
+
+/* ---------- studio canvas: three columns ---------- */
+.studio { display: grid; grid-template-columns: 220px minmax(0, 1fr) 300px; min-height: 620px; }
+.col { min-width: 0; }
+.left { border-right: 1px solid var(--border); padding: 12px; display: grid; gap: 14px; align-content: start; }
+.right { border-left: 1px solid var(--border); padding: 12px; display: grid; gap: 12px; align-content: start; background: var(--surface); }
+.center { padding: 12px; display: grid; gap: 10px; align-content: start; }
+.rounds { display: grid; gap: 4px; }
+.round { display: flex; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: var(--r-ctl); font-size: var(--fs-small); color: var(--muted); border: 1px solid transparent; }
+.round.on { background: var(--surface-2); color: var(--text); border-color: var(--border); }
+.alist { display: grid; gap: 4px; }
+.aitem { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; text-align: left; padding: 7px 8px; border-radius: var(--r-ctl); border: 1px solid transparent; background: none; color: var(--text); cursor: pointer; font-size: var(--fs-small); }
+.aitem:hover { background: var(--surface); }
+.aitem[aria-current="true"] { background: var(--surface-2); border-color: var(--border); }
+.aitem .k { color: var(--muted); font-size: var(--fs-micro); grid-column: 1; }
+.aitem .m { grid-row: 1 / span 2; grid-column: 2; align-self: center; }
+.mk { font-size: var(--fs-micro); padding: 1px 6px; border-radius: 99px; border: 1px solid var(--border); color: var(--muted); }
+.mk[data-v="keep"] { color: var(--done); border-color: transparent; background: var(--done-bg); }
+.mk[data-v="change"] { color: var(--you); border-color: transparent; background: var(--you-bg); }
+.mk[data-v="drop"] { color: var(--fail); border-color: transparent; background: var(--fail-bg); }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.toolbar .grp { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.stage { position: relative; background: #0e0f11; border: 1px solid var(--border); border-radius: var(--r); min-height: 470px; display: grid; place-items: center; padding: 18px; overflow: auto; }
+.stage.pinning { cursor: crosshair; }
+.stage.pinning * { cursor: crosshair !important; }
+.markbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.markbtn { border: 1px solid var(--border-strong); background: transparent; color: var(--text); padding: 5px 12px; border-radius: 999px; font-size: var(--fs-small); cursor: pointer; }
+.markbtn[aria-pressed="true"][data-v="keep"] { background: var(--done-bg); color: var(--done); border-color: var(--done); }
+.markbtn[aria-pressed="true"][data-v="change"] { background: var(--you-bg); color: var(--you); border-color: var(--you); }
+.markbtn[aria-pressed="true"][data-v="drop"] { background: var(--fail-bg); color: var(--fail); border-color: var(--fail); }
+.variants { display: flex; gap: 6px; align-items: center; }
+.varbtn { border: 1px solid var(--border); background: var(--surface); color: var(--muted); border-radius: var(--r-ctl); padding: 4px 10px; font-size: var(--fs-small); cursor: pointer; }
+.varbtn[aria-pressed="true"] { color: var(--text); border-color: var(--work); }
+.varbtn .pick { color: var(--done); }
+.leadmsg { display: grid; gap: 6px; font-size: var(--fs-meta); }
+.leadmsg .who { display: flex; gap: 6px; align-items: center; font-size: var(--fs-small); color: var(--muted); }
+.qs { display: grid; gap: 10px; }
+.q { display: grid; gap: 6px; font-size: var(--fs-small); }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { border: 1px solid var(--border-strong); background: transparent; color: var(--text); padding: 3px 9px; border-radius: 999px; font-size: var(--fs-micro); cursor: pointer; }
+.chip[aria-pressed="true"] { background: var(--text); color: var(--bg); }
+.composer { display: grid; gap: 6px; }
+.composer textarea, .field textarea, .field input { font: inherit; font-size: var(--fs-small); background: var(--bg); color: var(--text); border: 1px solid var(--border-strong); border-radius: var(--r-ctl); padding: 7px 9px; width: 100%; }
+.composer textarea { min-height: 64px; resize: vertical; }
+.feedback-sum { font-size: var(--fs-small); color: var(--muted); }
+.framing { border-left: 3px solid var(--work); padding: 4px 10px; font-size: var(--fs-small); color: var(--muted); }
+.critic { border: 1px solid var(--border-strong); border-radius: var(--r); padding: 10px; display: grid; gap: 8px; background: var(--bg); }
+.critic .who { display: flex; gap: 6px; align-items: center; font-size: var(--fs-small); color: var(--muted); flex-wrap: wrap; }
+.verdicts { display: grid; gap: 6px; font-size: var(--fs-small); }
+.verdict { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 8px; }
+.verdict .vb { font-size: var(--fs-micro); font-weight: 650; padding: 1px 6px; border-radius: 99px; align-self: start; white-space: nowrap; }
+.vb.yes { color: var(--done); background: var(--done-bg); } .vb.if { color: var(--you); background: var(--you-bg); } .vb.no { color: var(--fail); background: var(--fail-bg); }
+.probe { border-top: 1px solid var(--border); padding-top: 8px; display: grid; gap: 4px; font-size: var(--fs-small); }
+.cb { font-size: var(--fs-micro); margin-left: 4px; }
+.cb.yes { color: var(--done); } .cb.if { color: var(--you); } .cb.no { color: var(--fail); }
+
+/* ---------- device frames ---------- */
+.device { background: var(--wt-bg); color: var(--wt-ink); container-type: inline-size; overflow: hidden; position: relative; font-family: var(--font); }
+.device.desktop { width: min(100%, 860px); border-radius: 10px; box-shadow: 0 0 0 1px #3a3c42; }
+.device.phone { width: min(100%, 300px); border-radius: 36px; box-shadow: 0 0 0 9px #26272b, 0 0 0 10px #3a3c42; }
+.chrome { display: flex; gap: 6px; align-items: center; padding: 8px 10px; background: #e7e3d8; border-bottom: 1px solid var(--wt-line); font-size: 11px; color: var(--wt-muted); }
+.chrome i { width: 9px; height: 9px; border-radius: 99px; background: #cfc9bb; display: block; }
+.chrome .url { margin-left: 8px; background: #f7f5ef; border-radius: 6px; padding: 2px 10px; flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.notch { height: 26px; display: grid; place-items: center; }
+.notch span { width: 84px; height: 20px; background: #111; border-radius: 0 0 14px 14px; display: block; }
+.device.phone .chrome { display: none; }
+.device:not(.phone) .notch { display: none; }
+.wt { padding: 14px; display: grid; gap: 12px; }
+.wt-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.wt h4 { font-size: 1.15rem; font-weight: 700; letter-spacing: -0.01em; }
+.wt .sub { font-size: 12px; color: var(--wt-muted); }
+.wt .btnwt { background: var(--wt-green); color: #fff; border: none; border-radius: 999px; padding: 6px 12px; font-size: 12px; font-weight: 650; }
+.wt .ghost { background: transparent; color: var(--wt-green); border: 1px solid var(--wt-green); }
+.map { position: relative; height: 170px; border-radius: 10px; overflow: hidden; background:
+  repeating-radial-gradient(circle at 30% 60%, transparent 0 14px, rgba(47,107,79,0.16) 14px 15px),
+  repeating-radial-gradient(circle at 72% 30%, transparent 0 11px, rgba(47,107,79,0.12) 11px 12px),
+  linear-gradient(160deg, #dfe9dc, #eef0e4); }
+.map svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.map .lbl { position: absolute; font-size: 10px; background: #fff; padding: 1px 6px; border-radius: 99px; color: var(--wt-ink); box-shadow: 0 1px 2px rgba(0,0,0,0.12); }
+.days { display: grid; gap: 8px; }
+.day { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; background: #fff; border: 1px solid var(--wt-line); border-radius: 10px; padding: 9px 11px; }
+.day .d { font-weight: 700; font-size: 12px; color: var(--wt-green); width: 34px; }
+.day .t { font-size: 13px; font-weight: 600; } .day .s { font-size: 11px; color: var(--wt-muted); }
+.wx { font-size: 11px; padding: 2px 7px; border-radius: 99px; background: var(--wt-sky); white-space: nowrap; }
+.wx.warn { background: #f6dfbd; }
+.tl { display: grid; gap: 0; border-left: 2px solid var(--wt-line); margin-left: 6px; }
+.tl .ev { position: relative; padding: 4px 0 12px 14px; display: grid; gap: 2px; }
+.tl .ev::before { content: ""; position: absolute; left: -6px; top: 8px; width: 10px; height: 10px; border-radius: 99px; background: var(--wt-green); }
+.tl .ev .time { font-size: 11px; color: var(--wt-muted); font-variant-numeric: tabular-nums; }
+.tl .ev .what { font-size: 13px; font-weight: 600; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+.dcard { background: #fff; border: 1px solid var(--wt-line); border-radius: 12px; padding: 10px; display: grid; gap: 6px; }
+.dcard svg { width: 100%; height: 34px; }
+.split { display: grid; gap: 12px; }
+@container (min-width: 600px) { .split { grid-template-columns: 1.3fr 1fr; } .map { height: 240px; } }
+.sheet { background: #fff; border-radius: 16px 16px 0 0; border: 1px solid var(--wt-line); padding: 14px; display: grid; gap: 10px; }
+.sheet .linkbox { display: flex; gap: 8px; align-items: center; background: var(--wt-bg); border: 1px dashed var(--wt-line); border-radius: 10px; padding: 8px 10px; font-family: var(--mono); font-size: 11.5px; }
+.sheet .exp { font-size: 13px; } .sheet .exp b { color: var(--wt-ink); }
+
+/* ---------- pins ---------- */
+.pin { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 99px 99px 99px 0; transform: rotate(-45deg); background: var(--you); border: 2px solid #121315; display: grid; place-items: center; pointer-events: auto; z-index: 3; }
+.pin span { transform: rotate(45deg); font-size: 10px; font-weight: 800; color: #121315; }
+
+/* ---------- terminal ---------- */
+.term { background: var(--t-bg); color: var(--t-fg); font-family: var(--mono); font-size: 12.5px; line-height: 1.45; border-radius: 10px; overflow: hidden; box-shadow: 0 0 0 1px #2b2d31; max-width: 100%; }
+.term .bar { display: flex; gap: 6px; align-items: center; padding: 7px 10px; background: #1b1c1f; color: #8b8f96; font-size: 11px; font-family: var(--font); }
+.term .bar i { width: 10px; height: 10px; border-radius: 99px; background: #3a3c42; display: block; }
+.term .scr { padding: 10px 12px; white-space: pre; overflow-x: auto; min-height: 120px; }
+.g { color: var(--t-green); } .y { color: var(--t-yellow); } .r { color: var(--t-red); } .b { color: var(--t-blue); } .d { color: var(--t-dim); } .sel { background: var(--t-sel); }
+.cursor { display: inline-block; width: 0.6em; background: var(--t-fg); animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.chapters { display: flex; gap: 6px; flex-wrap: wrap; }
+.player { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.scrub { flex: 1; min-width: 120px; accent-color: var(--text); }
+
+/* ---------- tables, flows, blueprint ---------- */
+.tblwrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: var(--fs-small); }
+th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.05em; }
+td code, .code { font-family: var(--mono); font-size: 12px; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.bpitem { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: var(--fs-small); }
+.bpitem:last-child { border-bottom: none; }
+.bpitem .v { color: var(--muted); font-size: var(--fs-micro); }
+.mermaid { background: var(--surface); border-radius: var(--r); padding: 10px; overflow-x: auto; }
+pre.mermaid { margin: 0; }
+.states { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.state { border: 1px dashed var(--border-strong); border-radius: var(--r-ctl); padding: 8px; font-size: var(--fs-small); display: grid; gap: 3px; }
+
+/* ---------- start, pre-flight, factory ---------- */
+.choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.drop { border: 1px dashed var(--border-strong); border-radius: var(--r); padding: 16px; display: grid; gap: 8px; text-align: center; color: var(--muted); font-size: var(--fs-small); }
+.files { display: grid; gap: 6px; }
+.file { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 7px 9px; background: var(--surface-2); border-radius: var(--r-ctl); font-size: var(--fs-small); }
+.checklist { display: grid; gap: 6px; font-size: var(--fs-small); padding: 0; margin: 0; list-style: none; }
+.checklist li { display: flex; gap: 8px; align-items: baseline; }
+.ok { color: var(--done); } .open { color: var(--you); }
+.agree { display: flex; gap: 10px; align-items: flex-start; font-size: var(--fs-meta); }
+.agree input { margin-top: 4px; width: 16px; height: 16px; }
+.started { border: 1px solid var(--done); background: var(--done-bg); border-radius: var(--r); padding: 12px; font-size: var(--fs-small); display: grid; gap: 4px; }
+.lines { display: grid; gap: 10px; }
+.line { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 12px; align-items: center; }
+.belt { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-ctl); position: relative; overflow: hidden; }
+.belt::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: repeating-linear-gradient(90deg, var(--border-strong) 0 8px, transparent 8px 16px); animation: belt 1.6s linear infinite; }
+@keyframes belt { to { background-position: 16px 0; } }
+.job { font-size: var(--fs-micro); padding: 3px 8px; border-radius: var(--r-chip); background: var(--surface-2); border: 1px solid var(--border); display: flex; gap: 6px; align-items: center; }
+.job.run { border-color: #3c4b66; } .job.done { opacity: 0.6; }
+.co { border: 1px solid var(--you); background: var(--you-bg); border-radius: var(--r); padding: 12px; display: grid; gap: 6px; font-size: var(--fs-small); }
+
+.screen { display: grid; gap: 12px; }
+.pad { padding: 14px; display: grid; gap: 14px; }
+
+@media (max-width: 980px) {
+  .studio { grid-template-columns: minmax(0, 1fr); }
+  .left, .right { border: none; border-bottom: 1px solid var(--border); }
+  .left { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+  .line { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .rv-bar { grid-template-columns: minmax(0, 1fr); }
+  .rv-marks { justify-content: flex-start; }
+  .stage { padding: 10px; min-height: 360px; }
+}
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* ---------- pass 5 additions ---------- */
+[hidden] { display: none !important; }
+.split2.wide { grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr); }
+.places { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.place { display: inline-flex; align-items: center; gap: 7px; font-size: var(--fs-small); padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; text-decoration: none; }
+.place .dotp { width: 8px; height: 8px; border-radius: 99px; background: var(--muted); }
+.place.vision .dotp { background: var(--work); }
+.place.factory .dotp { background: var(--done); animation: pulse 1.6s ease-in-out infinite; }
+.place.factory.paused .dotp { background: var(--you); animation: none; }
+@keyframes pulse { 50% { opacity: 0.35; } }
+.place .cnt { color: var(--you); font-weight: 650; }
+.nav { display: flex; gap: 4px; font-size: var(--fs-small); }
+.nav a { color: var(--muted); padding: 4px 9px; border-radius: var(--r-ctl); text-decoration: none; }
+.nav a.on { color: var(--text); background: var(--surface-2); }
+.nav .badge { font-size: var(--fs-micro); background: var(--text); color: var(--bg); border-radius: 99px; padding: 0 6px; margin-left: 4px; font-weight: 650; }
+.gone { text-decoration: line-through; color: var(--muted); font-size: var(--fs-small); }
+.callout { border-left: 3px solid var(--work); padding: 4px 10px; font-size: var(--fs-small); color: var(--muted); }
+.draftbar { border: 1px solid #4b5a78; background: var(--work-bg); border-radius: var(--r); padding: 10px 12px; display: grid; gap: 8px; }
+.draftbar .top { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.chg { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px 10px; align-items: baseline; font-size: var(--fs-small); }
+.chg .tag { font-size: var(--fs-micro); padding: 1px 7px; border-radius: 99px; font-weight: 600; white-space: nowrap; }
+.tag.add { color: var(--done); background: var(--done-bg); }
+.tag.chgd { color: var(--work); background: var(--work-bg); }
+.tag.drop { color: var(--fail); background: var(--fail-bg); }
+.tag.open { color: var(--you); background: var(--you-bg); }
+.tag.retire { color: var(--muted); background: var(--surface-2); }
+.tag.upd { color: var(--work); background: var(--work-bg); }
+.tag.new { color: var(--done); background: var(--done-bg); }
+.sum { display: grid; gap: 12px; }
+.sumsec { display: grid; gap: 6px; }
+.sumsec h4 { font-size: var(--fs-meta); }
+.rows { display: grid; gap: 6px; }
+.row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px 10px; align-items: start; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-ctl); background: var(--surface); font-size: var(--fs-small); }
+.row .why { grid-column: 2 / -1; color: var(--muted); }
+.row.undone { opacity: 0.5; }
+.row.undone .why::after { content: " · Undone: the task is as it was."; color: var(--you); }
+.budget { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+.meter { height: 8px; border-radius: 99px; background: var(--surface-2); overflow: hidden; position: relative; }
+.meter i { display: block; height: 100%; background: var(--work); }
+.meter b { position: absolute; top: 0; bottom: 0; background: repeating-linear-gradient(45deg, var(--you) 0 4px, transparent 4px 8px); opacity: 0.8; }
+.warn { color: var(--you); }
+.bad { color: var(--fail); }
+.good { color: var(--done); }
+.status { font-size: var(--fs-micro); padding: 2px 8px; border-radius: 99px; font-weight: 600; white-space: nowrap; display: inline-flex; gap: 5px; align-items: center; }
+.status.designed { color: var(--muted); background: var(--surface-2); }
+.status.draft { color: var(--work); background: var(--work-bg); }
+.status.building { color: var(--you); background: var(--you-bg); }
+.status.verified { color: var(--done); background: var(--done-bg); }
+.status.failing { color: var(--fail); background: var(--fail-bg); }
+.status.inforce { color: var(--text); background: var(--surface-2); }
+.bplist { display: grid; gap: 6px; }
+.bprow { display: grid; grid-template-columns: minmax(0, 1.4fr) auto minmax(0, 1fr) auto; gap: 6px 12px; align-items: center; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-ctl); background: var(--surface); font-size: var(--fs-small); cursor: pointer; text-align: left; color: var(--text); width: 100%; }
+.bprow[aria-current="true"] { border-color: var(--work); }
+.bprow .k { color: var(--muted); font-size: var(--fs-micro); display: block; }
+.thumbs { display: flex; gap: 4px; }
+.thumb { width: 54px; height: 36px; border-radius: 5px; border: 1px solid var(--border-strong); background: var(--wt-bg); position: relative; overflow: hidden; }
+.thumb.term { background: var(--t-bg); }
+.thumb i { position: absolute; left: 5px; right: 5px; height: 4px; border-radius: 2px; background: #c9c2b2; }
+.thumb.term i { background: #3a4a3e; }
+.thumb .lbl { position: absolute; right: 3px; bottom: 2px; font-size: 8px; color: #6b665c; }
+.thumb.term .lbl { color: var(--t-dim); }
+.board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.bcol { display: grid; gap: 6px; align-content: start; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-ctl); padding: 8px; min-width: 0; }
+.bcol h4 { font-size: var(--fs-small); display: flex; justify-content: space-between; }
+.bcard { display: grid; gap: 4px; padding: 7px 8px; border-radius: var(--r-ctl); border: 1px solid var(--border); background: var(--surface-2); font-size: var(--fs-small); cursor: pointer; text-align: left; color: var(--text); }
+.bcard[aria-current="true"] { border-color: var(--work); }
+.side { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.pane { display: grid; gap: 6px; align-content: start; min-width: 0; }
+.pane .cap { display: flex; justify-content: space-between; gap: 8px; font-size: var(--fs-small); color: var(--muted); flex-wrap: wrap; }
+.mini { background: var(--wt-bg); color: var(--wt-ink); border-radius: 8px; box-shadow: 0 0 0 1px #3a3c42; padding: 10px; display: grid; gap: 8px; font-size: 11px; min-height: 190px; }
+.mini h5 { font-size: 13px; margin: 0; }
+.mini .map { height: 58px; border-radius: 6px; background: linear-gradient(135deg, #cfe3ef, #e9e0cc); position: relative; }
+.mini .map::after { content: "map"; position: absolute; right: 6px; bottom: 4px; font-size: 10px; color: #5d6a61; }
+.mini .day { border: 1px solid #d9d3c5; border-radius: 6px; padding: 5px 7px; background: #fff; display: flex; justify-content: space-between; }
+.mini .tl { color: #5d6a61; }
+.mini.diff { outline: 2px dashed var(--fail); outline-offset: 3px; }
+.rtable { width: 100%; border-collapse: collapse; font-size: var(--fs-small); }
+.rtable th, .rtable td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.rtable th { color: var(--muted); font-weight: 600; font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.05em; }
+.split2 { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 12px; }
+.choicebar .opt { border: 1px solid var(--rv-line); background: transparent; color: var(--rv-fg); padding: 6px 12px; border-radius: 10px; font-size: var(--fs-small); cursor: pointer; text-align: left; font-weight: 550; }
+.choicebar .opt[aria-pressed="true"] { background: #1c5b3c; border-color: #1c5b3c; color: #fff; }
+.choicebar .opts { display: flex; gap: 6px; flex-wrap: wrap; }
+.locked { border: 1px solid var(--done); background: var(--done-bg); border-radius: var(--r); padding: 10px 12px; font-size: var(--fs-small); display: grid; gap: 4px; }
+@media (max-width: 980px) {
+  .board { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .split2, .split2.wide { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .side { grid-template-columns: minmax(0, 1fr); }
+  .board { grid-template-columns: minmax(0, 1fr); }
+  .bprow { grid-template-columns: minmax(0, 1fr) auto; }
+  .bprow .thumbs, .bprow .tasks { grid-column: 1 / -1; }
+}
+</style>
+
+<div class="wrap">
+
+  <!-- ===== what this page is (review) ===== -->
+  <section class="rv" aria-labelledby="t-intro" data-uncommentable>
+    <div class="rv-intro">
+      <span class="rv-tag">Orchestrator · ORC-029 · pass 5 of 6 · prototype with sample data</span>
+      <h1 id="t-intro">Draft, Lock in, and design beside reality</h1>
+      <p>This is a clickable prototype of the screens that pass 5 adds. Nothing here runs agents. Every task, number and screenshot is a sample from the Weekend Trips project.</p>
+      <p><b>Where it fits.</b> Passes 1 to 4 built the studio: you shape the product with the lead, the designer and the PE. You decided (r10 to r12) that Vision stays open after the factory starts. Your edits collect in a draft, and only your <b>Lock in</b> puts them into force. Then the lead adjusts the factory's tasks. Each part of the design shows how far the factory has built it, with evidence beside the design. These screens show that. I build the backend after your marks.</p>
+      <p><b>What I need from you.</b> Open each tab. In each light bar, choose <b>Agree</b>, <b>Change</b> or <b>Skip</b>, or pick an answer, and add a note if you want. Three bars ask a question, each with my recommendation first. The dark controls are part of the prototype: try them, but they are not your review.</p>
+    </div>
+    <div class="rv-row">
+      <div class="rv-progress"><span><b id="rv-count" class="num">0</b> of <span id="rv-total" class="num">8</span> answered</span><span class="rv-meter" aria-hidden="true"><span id="rv-meter"></span></span></div>
+      <span class="rv-muted small" id="rv-status" role="status">Connecting…</span>
+      <span class="rv-actions"><button class="rv-link" id="rv-copy" type="button">Copy my marks</button></span>
+    </div>
+  </section>
+
+  <nav class="tabs" role="tablist" aria-label="Screens to review" data-uncommentable>
+    <button class="tab" role="tab" data-tab="header" id="tab-header"><span class="dot" data-for="p5-header"></span>1 · The header</button>
+    <button class="tab" role="tab" data-tab="draft" id="tab-draft"><span class="dot" data-for="p5-draft"></span>2 · Vision with a draft</button>
+    <button class="tab" role="tab" data-tab="lockin" id="tab-lockin"><span class="dot" data-for="p5-lockin"></span>3 · Lock in</button>
+    <button class="tab" role="tab" data-tab="co" id="tab-co"><span class="dot" data-for="p5-co"></span>4 · The change order</button>
+    <button class="tab" role="tab" data-tab="reality" id="tab-reality"><span class="dot" data-for="p5-reality"></span>5 · Design and reality</button>
+  </nav>
+
+  <!-- ===== the product frame: header (shared) ===== -->
+  <div class="app" aria-label="Orchestrator (prototype)">
+    <div class="hdr">
+      <span class="brand">Orchestrator</span><span class="muted small">Weekend Trips</span>
+      <nav class="nav" aria-label="Main">
+        <a href="#" data-go="header">Home</a>
+        <a href="#" data-go="draft" class="on" id="nav-vision">Vision<span class="badge" id="nav-badge">3</span></a>
+        <a href="#" data-go="co">Tasks</a>
+        <a href="#" data-go="reality">Results</a>
+        <a href="#">Settings</a>
+      </nav>
+      <div class="places" aria-label="Where things stand">
+        <a href="#" class="place vision" data-go="draft"><span class="dotp"></span>Vision · <span id="hdr-draft">draft, <span class="cnt">3 changes</span></span></a>
+        <a href="#" class="place factory" id="hdr-factory" data-go="reality"><span class="dotp"></span><span id="hdr-factory-text">Factory running · 4 agents</span></a>
+      </div>
+      <div class="meta">
+        <button class="btn" type="button" id="pause">Pause the factory</button>
+        <button class="btn primary" type="button">Message the lead</button>
+      </div>
+    </div>
+
+    <!-- ===== 1 · the header ===== -->
+    <section class="screen pad" role="tabpanel" data-panel="header" aria-labelledby="tab-header" hidden>
+      <div class="rv rv-bar" data-review="p5-header" data-uncommentable>
+        <div class="ask"><span class="rv-tag">Screen 1 · The header: Vision and the factory at once</span>
+          <p>The two places sit side by side in the header on every screen. <b>Vision</b> says whether a draft waits for you, and how many changes it holds. <b>The factory</b> says whether it runs, and how many agents work. Each is a link: Vision opens the studio, and the factory opens the work. The stage switch "Back to vision" is gone, because Vision is always one click away. Pause the factory stays in the header. Try it.</p>
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="card">
+          <span class="label">Today</span>
+          <div class="stepper"><span class="step vision"><b>1</b>Vision</span><span class="arrow">→</span><span class="step factory on"><b>2</b>Factory</span></div>
+          <p class="small muted">A two-step indicator, and on Home a <span class="gone">Back to vision</span> switch that stops new work.</p>
+        </div>
+        <div class="card">
+          <span class="label">Pass 5</span>
+          <div class="places"><span class="place vision"><span class="dotp"></span>Vision · draft, <span class="cnt">3 changes</span></span><span class="place factory"><span class="dotp"></span>Factory running · 4 agents</span></div>
+          <p class="small muted">Two places that both last for the life of the project. Vision is open while the factory runs or is paused. The factory always builds from the last version you locked in, never from the draft.</p>
+        </div>
+      </div>
+      <div class="card">
+        <span class="label">What each place can say</span>
+        <table class="rtable">
+          <thead><tr><th>Vision</th><th>Factory</th></tr></thead>
+          <tbody>
+            <tr><td>Vision · no draft</td><td>Factory not started (before your first Lock in, Start the factory)</td></tr>
+            <tr><td>Vision · draft, 3 changes</td><td>Factory running · 4 agents</td></tr>
+            <tr><td>Vision · draft, 1 open item</td><td>Factory paused · by you</td></tr>
+            <tr><td>Vision · locked in 2 minutes ago</td><td>Factory stopped at the budget · needs you</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ===== 2 · Vision with a draft ===== -->
+    <section class="screen" role="tabpanel" data-panel="draft" aria-labelledby="tab-draft" hidden>
+      <div class="pad" style="padding-bottom:0">
+        <div class="rv rv-bar" data-review="p5-draft" data-uncommentable>
+          <div class="ask"><span class="rv-tag">Screen 2 · The studio while the factory runs, with a draft</span>
+            <p>You keep working in the studio while the factory builds. Each approval goes into the <b>draft</b>, not into the factory. A bar at the top lists the draft's changes since your last Lock in, each with what it replaces. The artifacts show "in the draft" or "in force". When you are ready, <b>Review and lock in</b> opens the summary (screen 3).</p>
+          </div>
+        </div>
+        <div class="draftbar" id="draftbar">
+          <div class="top">
+            <div><b>Draft · 3 changes</b> <span class="small muted">since Lock in 2 (yesterday, 16:40). The factory builds from Lock in 2.</span></div>
+            <div class="grp" style="display:flex;gap:8px"><button class="btn quiet" type="button">Discard the draft</button><button class="btn primary" type="button" data-go="lockin">Review and lock in</button></div>
+          </div>
+          <div class="chg">
+            <span class="tag chgd">Changed</span><span><b>Trip plan</b> v4, variant A · Day list first <span class="muted">(replaces v3: the map moves below the days)</span></span><span class="muted small">you approved it 14:02</span>
+            <span class="tag add">Added</span><span><b>Packing list</b> v1, variant B · Shared list <span class="muted">(new; no task builds it yet)</span></span><span class="muted small">14:20</span>
+            <span class="tag drop">Dropped</span><span><b>Reminders</b> flow v1 <span class="muted">(you marked it Drop: "Not for the first release")</span></span><span class="muted small">14:31</span>
+            <span class="tag open">Open</span><span><b>Words</b> v2 <span class="muted">(you marked "outing" Change; the designer revises it. It stays out of the Lock in, and the agents keep Words v1.)</span></span><span class="muted small">waits</span>
+          </div>
+        </div>
+      </div>
+      <div class="studio">
+        <div class="col left">
+          <div class="rounds"><span class="label">Rounds</span>
+            <div class="round on"><span>4 · The flows</span><span class="pill work">open</span></div>
+            <div class="round"><span>3 · The data</span><span class="pill">closed</span></div>
+            <div class="round"><span>2 · The experience</span><span class="pill">closed</span></div>
+          </div>
+          <div class="alist"><span class="label">Round 4</span>
+            <button class="aitem" type="button" aria-current="true"><span>Trip plan</span><span class="k">screen · v4</span><span class="m"><span class="status draft">in the draft</span></span></button>
+            <button class="aitem" type="button"><span>Packing list</span><span class="k">screen · v1</span><span class="m"><span class="status draft">in the draft</span></span></button>
+            <button class="aitem" type="button"><span>Join flow</span><span class="k">flow · v1</span><span class="m"><span class="status inforce">in force</span></span></button>
+            <button class="aitem" type="button"><span>Words</span><span class="k">dictionary · v2</span><span class="m"><span class="status building">open</span></span></button>
+          </div>
+        </div>
+        <div class="col center">
+          <div class="toolbar"><div class="grp"><b>Trip plan</b><span class="muted small">Designer · Claude · v4 · PE agreed on pass 1</span></div><div class="seg"><button aria-pressed="true" type="button">Desktop</button><button type="button">Mobile</button></div></div>
+          <div class="side">
+            <div class="pane"><div class="cap"><span>v4 · in the draft</span><span class="status draft">approved 14:02</span></div>
+              <div class="mini"><h5>Coast weekend · Fri 12 to Sun 14</h5><div class="day"><span>Fri · Drive, check in</span><span class="tl">3 stops</span></div><div class="day"><span>Sat · Cliff walk, market</span><span class="tl">4 stops</span></div><div class="day"><span>Sun · Brunch, drive home</span><span class="tl">2 stops</span></div><div class="map"></div></div></div>
+            <div class="pane"><div class="cap"><span>v3 · in force (Lock in 2)</span><span class="status building">being built: T-012</span></div>
+              <div class="mini"><h5>Coast weekend · Fri 12 to Sun 14</h5><div class="map"></div><div class="day"><span>Fri · Drive, check in</span><span class="tl">3 stops</span></div><div class="day"><span>Sat · Cliff walk, market</span><span class="tl">4 stops</span></div></div></div>
+          </div>
+          <p class="callout">A changed item shows the draft version beside the version in force, so you see what your Lock in changes.</p>
+        </div>
+        <div class="col right">
+          <span class="label">The lead</span>
+          <div class="leadmsg"><div class="who"><span>Claude · lead</span><span class="pill">round 4</span></div><p>I moved the map below the days, as you asked. T-012 builds the map-first version now. It updates when you lock in this draft.</p></div>
+          <span class="label">PE review</span>
+          <p class="small"><span class="pill done">Agreed</span> on pass 1. Questions for you: none.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 3 · Lock in ===== -->
+    <section class="screen pad" role="tabpanel" data-panel="lockin" aria-labelledby="tab-lockin" hidden>
+      <div class="rv rv-bar" data-review="p5-lockin" data-uncommentable>
+        <div class="ask"><span class="rv-tag">Screen 3 · The Lock in summary</span>
+          <p>Before a Lock in, one screen says what it does, like the pre-flight before Start the factory: what changes, the tasks it touches, the new work, the effect on the budgets, and what stays open. Only you can lock in. Your agreement is recorded with this summary. Then the lead adjusts the tasks (screen 4).</p>
+        </div>
+      </div>
+      <div class="rv rv-bar choicebar" data-review="p5-q-running" data-options="Let it finish, then the lead revises it (recommended)|Pause it until the lead updates its spec" data-uncommentable>
+        <div class="ask"><span class="rv-tag">Question 1 · A task is building something you changed</span>
+          <p>T-012 builds the Trip plan from v3 while you lock in v4. <b>Let it finish</b>: no work is lost, and the lead's update builds the change on top (more total work, no idle agent). <b>Pause it</b>: nothing more is built on the old design, but the work so far may be thrown away, and an agent waits.</p>
+        </div>
+      </div>
+      <div class="rv rv-bar choicebar" data-review="p5-q-partial" data-options="Lock in the whole draft at once (recommended)|Let me choose which changes to lock in" data-uncommentable>
+        <div class="ask"><span class="rv-tag">Question 2 · All changes, or a choice</span>
+          <p><b>The whole draft</b>: one click, and the design stays consistent, because changes often depend on each other. An open item never goes in. <b>A choice</b>: you lock in part of the draft and keep the rest, but the summary must then check that the parts fit together.</p>
+        </div>
+      </div>
+      <div class="split2">
+        <div class="card sum" id="lockin-card">
+          <div><span class="label">Lock in 3 · the summary</span><h3>3 changes go into force</h3></div>
+          <div class="sumsec"><h4>What changes</h4>
+            <div class="chg">
+              <span class="tag chgd">Changed</span><span><b>Trip plan</b> v3 → v4: the map moves below the days.</span><span></span>
+              <span class="tag add">Added</span><span><b>Packing list</b> v1 · B, Shared list.</span><span></span>
+              <span class="tag drop">Dropped</span><span><b>Reminders</b> flow: not in the first release.</span><span></span>
+            </div>
+          </div>
+          <div class="sumsec"><h4>The tasks it touches</h4>
+            <div class="rows">
+              <div class="row"><span class="tag upd">Update</span><span><b>T-012</b> Trip plan screen · building, about 60% done</span><span class="muted small">Claude · coder</span><span class="why">It cites Trip plan v3. The lead updates its spec to v4. Your answer to question 1 decides what happens to the running work.</span></div>
+              <div class="row"><span class="tag retire">Retire</span><span><b>T-009</b> Outing reminders · queued, not started</span><span></span><span class="why">It builds only the Reminders flow, which you dropped. Nothing is lost.</span></div>
+            </div>
+          </div>
+          <div class="sumsec"><h4>New work</h4>
+            <p class="small">The Packing list has no task yet. The lead plans its tasks after the Lock in, and the PE reviews them before they start.</p>
+          </div>
+          <div class="sumsec"><h4>The budgets (the PE's estimate)</h4>
+            <div class="budget">
+              <div class="card" style="padding:10px;gap:6px"><span class="small">Building: <b class="num">$18.20</b> spent of <b class="num">$40</b></span><div class="meter" aria-hidden="true"><i style="width:45%"></i><b style="left:78%;width:22%"></b></div><span class="small warn">To finish after this Lock in: $34 to $44. It may pass the budget. The factory stops and asks you at $40.</span></div>
+              <div class="card" style="padding:10px;gap:6px"><span class="small">Maintenance: <b class="num">$6.10</b> a month of <b class="num">$10</b></span><div class="meter" aria-hidden="true"><i style="width:61%"></i><b style="left:61%;width:7%"></b></div><span class="small">The Packing list adds $0.40 to $0.80 a month (storage of shared lists).</span></div>
+            </div>
+          </div>
+          <div class="sumsec"><h4>What stays open</h4>
+            <p class="small"><span class="tag open">Open</span> <b>Words</b> v2: "outing" is marked Change. It stays in the draft, and the agents keep Words v1.</p>
+          </div>
+          <label class="agree"><input type="checkbox" id="li-agree"> <span>I read the summary. Put these 3 changes into force, and let the lead adjust the tasks.</span></label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" type="button" id="li-go" disabled>Lock in 3 changes</button><button class="btn quiet" type="button" data-go="draft">Not yet</button></div>
+          <div class="locked" id="li-done" hidden><b>Locked in, as Lock in 3.</b><span>The factory now builds from Lock in 3. The lead adjusts the tasks as change order 3: <a href="#" data-go="co" style="color:inherit">open it</a>.</span></div>
+        </div>
+        <div class="card">
+          <span class="label">Who acts next (your settings)</span>
+          <ul class="checklist">
+            <li><span class="ok">✓</span><span>Change orders: the lead updates the tasks, the PE reviews them, and you can undo each update. Settings › Factory can make it "ask me first".</span></li>
+            <li><span class="ok">✓</span><span>New tasks wait for PE review, then start on Autopilot.</span></li>
+            <li><span class="ok">✓</span><span>At the building budget, the factory always stops and asks you.</span></li>
+          </ul>
+          <p class="small muted">Start the factory was your first Lock in (Lock in 1, 1 October). Every later Lock in shows this summary.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 4 · the change order ===== -->
+    <section class="screen pad" role="tabpanel" data-panel="co" aria-labelledby="tab-co" hidden>
+      <div class="rv rv-bar" data-review="p5-co" data-uncommentable>
+        <div class="ask"><span class="rv-tag">Screen 4 · The change order: the lead adjusts the factory</span>
+          <p>After a Lock in, the lead updates the tasks that the change touches, plans new ones, and retires the ones that no longer apply. Each line says what changed and why, in the design's words, not the code's. The PE reviews new and updated work before it starts. You can undo any line. Nothing here asks you to act unless the PE still objects after three passes.</p>
+        </div>
+      </div>
+      <div class="card">
+        <div class="toolbar"><div><span class="label">Change order 3 · from Lock in 3 · today 14:40</span><h3>4 updates: 2 applied, 2 waiting for PE review</h3></div><span class="pill work">the lead · Claude</span></div>
+        <div class="rows" id="co-rows">
+          <div class="row"><span class="tag upd">Updated</span><span><b>T-012</b> Trip plan screen → builds <b>Trip plan v4</b></span><span><span class="pill done">PE agreed</span> <button class="btn quiet" type="button" data-undo>Undo</button></span><span class="why">"Day list first, the map below it." The work so far stays: the map is done and moves down. Applied 14:41.</span></div>
+          <div class="row"><span class="tag new">New</span><span><b>T-021</b> Packing list screen · cites <b>Packing list v1 · B</b></span><span><span class="pill work">PE reviewing</span> <button class="btn quiet" type="button" data-undo>Undo</button></span><span class="why">One shared list per trip, as variant B shows. It waits for PE review, then starts.</span></div>
+          <div class="row"><span class="tag new">New</span><span><b>T-022</b> Packing list data · cites <b>Trip data v2</b> and <b>Packing list v1</b></span><span><span class="pill you">PE asks a change</span> <button class="btn quiet" type="button" data-undo>Undo</button></span><span class="why">The PE: "Store items per trip, not per person: one list is shared." The lead revises the task (pass 1 of 3).</span></div>
+          <div class="row"><span class="tag retire">Retired</span><span><b>T-009</b> Outing reminders</span><span><span class="pill">applied</span> <button class="btn quiet" type="button" data-undo>Undo</button></span><span class="why">It builds only the Reminders flow, which you dropped in Lock in 3. It had not started.</span></div>
+        </div>
+        <p class="small muted">Not changed: T-015 Trip data API, T-017 trips CLI plan command, T-018 Join by link. They cite nothing that changed.</p>
+      </div>
+    </section>
+
+    <!-- ===== 5 · design and reality ===== -->
+    <section class="screen pad" role="tabpanel" data-panel="reality" aria-labelledby="tab-reality" hidden>
+      <div class="rv rv-bar choicebar" data-review="p5-reality" data-options="A · A list with evidence (recommended)|B · A board by status" data-uncommentable>
+        <div class="ask"><span class="rv-tag">Screen 5 · Design and reality: pick a layout</span>
+          <p>Each part of the design shows where it stands in the factory: <b>designed</b>, <b>in the draft</b>, <b>being built</b>, <b>built and verified</b>, or <b>fails a check</b>. Evidence sits beside the design, so you never look at the code: the built screen beside its prototype, the built CLI's recording beside its demo, and each rule of a flow with its test. Switch the layout below, and click an item to open its side-by-side.</p>
+        </div>
+      </div>
+      <div class="rv rv-bar choicebar" data-review="p5-q-verified" data-options="Its rule tests pass, and the UX review matches the prototype (recommended)|That, and I confirm each side-by-side myself" data-uncommentable>
+        <div class="ask"><span class="rv-tag">Question 3 · When is a part "built and verified"?</span>
+          <p><b>The checks decide</b>: each rule of its flows has a passing test, and the UX review finds the built screen matches the approved prototype. You see the evidence, but you need not act. <b>You confirm</b>: the same, and then a "Looks right" from you on each part. That is more certain, but it puts you back in the loop for every part.</p>
+        </div>
+      </div>
+      <div class="toolbar"><div class="seg" role="group" aria-label="Layout"><button type="button" data-layout="list" aria-pressed="true">A · List</button><button type="button" data-layout="board" aria-pressed="false">B · Board</button></div><span class="small muted">Lock in 3 · 6 parts</span></div>
+      <div class="split2 wide">
+        <div>
+          <div class="bplist" id="lay-list"></div>
+          <div class="board" id="lay-board" hidden></div>
+        </div>
+        <div class="card" id="detail"></div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+  // ---------- tabs ----------
+  const tabs = $$("[role=tab]");
+  function show(name) {
+    tabs.forEach((t) => t.setAttribute("aria-selected", String(t.dataset.tab === name)));
+    $$("[data-panel]").forEach((p) => { p.hidden = p.dataset.panel !== name; });
+    $$(".nav a").forEach((a) => a.classList.toggle("on", a.dataset.go === name || (name !== "header" && name !== "co" && name !== "reality" && a.id === "nav-vision")));
+    try { localStorage.setItem("p5-tab", name); } catch {}
+  }
+  tabs.forEach((t) => t.addEventListener("click", () => show(t.dataset.tab)));
+  document.addEventListener("click", (e) => { const g = e.target.closest("[data-go]"); if (g) { e.preventDefault(); show(g.dataset.go); window.scrollTo({ top: 0, behavior: "smooth" }); } });
+  let first = "header"; try { first = localStorage.getItem("p5-tab") || "header"; } catch {}
+  show($(`[data-panel="${first}"]`) ? first : "header");
+
+  // ---------- the prototype's own controls ----------
+  $("#pause").addEventListener("click", () => {
+    const f = $("#hdr-factory"); const paused = !f.classList.contains("paused");
+    f.classList.toggle("paused", paused);
+    $("#hdr-factory-text").textContent = paused ? "Factory paused · by you" : "Factory running · 4 agents";
+    $("#pause").textContent = paused ? "Resume the factory" : "Pause the factory";
+  });
+  $("#li-agree").addEventListener("change", (e) => { $("#li-go").disabled = !e.target.checked; });
+  $("#li-go").addEventListener("click", () => {
+    $("#li-done").hidden = false; $("#li-go").disabled = true; $("#li-agree").disabled = true;
+    $("#hdr-draft").innerHTML = "locked in just now"; $("#nav-badge").hidden = true;
+    $("#draftbar .top b").textContent = "No draft";
+  });
+  $$("[data-undo]").forEach((b) => b.addEventListener("click", () => { const row = b.closest(".row"); const off = row.classList.toggle("undone"); b.textContent = off ? "Redo" : "Undo"; }));
+
+  // ---------- design and reality ----------
+  const ST = { designed: "designed", draft: "in the draft", building: "being built", verified: "built and verified", failing: "fails a check", inforce: "in force" };
+  const ITEMS = [
+    { id: "plan", name: "Trip plan", kind: "screen", ver: "v4", status: "building", tasks: "T-012 · Claude coder, 70%", thumbs: ["proto", "built"],
+      note: "The built screen is still the v3 layout: the map is first. T-012 moves it below the days.",
+      side: "screen" },
+    { id: "join", name: "Join flow", kind: "flow", ver: "v1", status: "failing", tasks: "T-018 · landed, 1 rule fails → fix task T-023", thumbs: [],
+      note: "4 of 5 rules pass. One rule's test fails, so the lead opened a fix task.",
+      side: "rules" },
+    { id: "data", name: "Trip data", kind: "contract", ver: "v2", status: "verified", tasks: "T-015 · landed 11:20", thumbs: [],
+      note: "Every example in the contract is a passing test.",
+      side: "examples" },
+    { id: "cli", name: "trips CLI", kind: "terminal demo", ver: "v2", status: "building", tasks: "T-017 · Codex coder, 40%", thumbs: ["termproto", "termbuilt"],
+      note: "The built CLI prints the plan, but not the cost line yet.",
+      side: "cli" },
+    { id: "pack", name: "Packing list", kind: "screen", ver: "v1", status: "designed", tasks: "T-021, T-022 · waiting for PE review", thumbs: ["proto"],
+      note: "Locked in. Its tasks wait for PE review, then start.",
+      side: "screenOnly" },
+    { id: "words", name: "Words", kind: "dictionary", ver: "v1", status: "inforce", tasks: "used by every agent; v2 is open in the draft", thumbs: [],
+      note: "A dictionary is not built. It is in force: every agent's brief and the writing check use it.",
+      side: "words" },
+  ];
+  let sel = "plan";
+  const thumb = (t) => {
+    const term = t.startsWith("term");
+    const lines = term ? [5, 11, 17, 23] : t === "built" ? [16, 22, 28] : [6, 12, 18];
+    return `<span class="thumb${term ? " term" : ""}" aria-hidden="true">${lines.map((y) => `<i style="top:${y}px"></i>`).join("")}<span class="lbl">${t.includes("built") ? "built" : "design"}</span></span>`;
+  };
+  function renderList() {
+    $("#lay-list").innerHTML = ITEMS.map((i) => `<button type="button" class="bprow" data-item="${i.id}" aria-current="${i.id === sel}">
+      <span><b>${esc(i.name)}</b> <span class="muted">${esc(i.ver)}</span><span class="k">${esc(i.kind)}</span></span>
+      <span class="status ${i.status}">${ST[i.status]}</span>
+      <span class="small muted tasks">${esc(i.tasks)}</span>
+      <span class="thumbs">${i.thumbs.map(thumb).join("")}</span></button>`).join("");
+  }
+  function renderBoard() {
+    const cols = [["designed", "Designed"], ["building", "Being built"], ["verified", "Built and verified"], ["failing", "Fails a check"]];
+    $("#lay-board").innerHTML = cols.map(([k, label]) => {
+      const items = ITEMS.filter((i) => i.status === k);
+      return `<div class="bcol"><h4><span>${label}</span><span class="muted num">${items.length}</span></h4>${items.map((i) => `<button type="button" class="bcard" data-item="${i.id}" aria-current="${i.id === sel}"><b>${esc(i.name)} <span class="muted">${esc(i.ver)}</span></b><span class="small muted">${esc(i.kind)}</span><span class="thumbs">${i.thumbs.map(thumb).join("")}</span></button>`).join("")}</div>`;
+    }).join("") + ITEMS.filter((i) => i.status === "inforce").map((i) => `<p class="small muted" style="grid-column:1/-1">Not built: <button type="button" class="btn quiet" data-item="${i.id}">${esc(i.name)} ${esc(i.ver)} · ${esc(i.kind)}</button> is in force.</p>`).join("");
+  }
+  const miniV4 = `<div class="mini"><h5>Coast weekend</h5><div class="day"><span>Fri · Drive, check in</span><span class="tl">3 stops</span></div><div class="day"><span>Sat · Cliff walk, market</span><span class="tl">4 stops</span></div><div class="day"><span>Sun · Brunch, home</span><span class="tl">2 stops</span></div><div class="map"></div></div>`;
+  const miniBuilt = `<div class="mini diff"><h5>Coast weekend</h5><div class="map"></div><div class="day"><span>Fri · Drive, check in</span><span class="tl">3 stops</span></div><div class="day"><span>Sat · Cliff walk, market</span><span class="tl">4 stops</span></div></div>`;
+  const term = (lines) => `<div class="term" style="min-height:150px;font-size:12px">${lines.map((l) => `<div>${l}</div>`).join("")}</div>`;
+  function renderDetail() {
+    const i = ITEMS.find((x) => x.id === sel);
+    let body = "";
+    if (i.side === "screen") body = `<div class="side"><div class="pane"><div class="cap"><span>Design · Trip plan v4</span></div>${miniV4}</div><div class="pane"><div class="cap"><span>Built · main, 14:55</span><span class="bad">differs</span></div>${miniBuilt}</div></div><p class="small">The UX review compared them: <span class="bad">the map comes first; the design puts it last.</span> T-012 is building that change now.</p>`;
+    else if (i.side === "cli") body = `<div class="side"><div class="pane"><div class="cap"><span>Demo · trips CLI v2</span></div>${term(["<span class='g'>$</span> trips plan coast", "Fri  Drive, check in", "Sat  Cliff walk, market", "Sun  Brunch, home", "<span style='color:var(--t-yellow)'>Cost each: $142</span>"])}</div><div class="pane"><div class="cap"><span>Built · recorded 14:50</span><span class="warn">partly</span></div>${term(["<span class='g'>$</span> trips plan coast", "Fri  Drive, check in", "Sat  Cliff walk, market", "Sun  Brunch, home", "<span style='color:var(--t-dim)'>(no cost line yet)</span>"])}</div></div>`;
+    else if (i.side === "rules") body = `<div class="tblwrap"><table class="rtable"><thead><tr><th>Rule (EARS)</th><th>Test</th></tr></thead><tbody>
+      <tr><td>When a friend opens the link, the app shall show the trip and a "Join" button.</td><td class="good">passes</td></tr>
+      <tr><td>When a friend joins, the app shall add them to "Who's in".</td><td class="good">passes</td></tr>
+      <tr><td>While the trip is full, the app shall show "The trip is full".</td><td class="good">passes</td></tr>
+      <tr><td>If the link has expired, then the app shall show "Ask the organizer for a new link".</td><td class="bad">fails: shows an empty page</td></tr>
+      <tr><td>The app shall never show other trips to a friend who joins by link.</td><td class="good">passes</td></tr></tbody></table></div>`;
+    else if (i.side === "examples") body = `<div class="tblwrap"><table class="rtable"><thead><tr><th>Example from the contract</th><th>Test</th></tr></thead><tbody>
+      <tr><td>Given a trip with 4 people and $568 of costs, when the plan is read, then each person's share is $142.</td><td class="good">passes</td></tr>
+      <tr><td>Given a cost shared by 3 people, when it is split, then the remainder cent goes to the organizer.</td><td class="good">passes</td></tr>
+      <tr><td>Given a trip with no dates, when the plan is read, then the answer is NoDates.</td><td class="good">passes</td></tr></tbody></table></div>`;
+    else if (i.side === "screenOnly") body = `<div class="side"><div class="pane"><div class="cap"><span>Design · Packing list v1 · B</span></div><div class="mini"><h5>Packing list · shared</h5><div class="day"><span>Tent</span><span class="tl">Ana</span></div><div class="day"><span>Stove</span><span class="tl">Kai</span></div><div class="day"><span>First aid</span><span class="tl">nobody yet</span></div></div></div><div class="pane"><div class="cap"><span>Built</span></div><div class="mini" style="place-items:center;color:#5d6a61">Not built yet</div></div></div>`;
+    else body = `<div class="tblwrap"><table class="rtable"><thead><tr><th>Term</th><th>Meaning</th><th>Not</th></tr></thead><tbody><tr><td>trip</td><td>A weekend away that a group plans together.</td><td>journey, outing</td></tr><tr><td>friend</td><td>A person in the group, who joins by link.</td><td>member, user</td></tr></tbody></table></div>`;
+    $("#detail").innerHTML = `<div><span class="label">${esc(i.kind)} · ${esc(i.ver)}</span><h3>${esc(i.name)} <span class="status ${i.status}">${ST[i.status]}</span></h3></div><p class="small muted">${esc(i.note)}</p>${body}<p class="small muted">${esc(i.tasks)}</p>`;
+  }
+  function renderReality() { renderList(); renderBoard(); renderDetail(); }
+  document.addEventListener("click", (e) => { const it = e.target.closest("[data-item]"); if (it) { sel = it.dataset.item; renderReality(); } });
+  $$("[data-layout]").forEach((b) => b.addEventListener("click", () => {
+    $$("[data-layout]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    $("#lay-list").hidden = b.dataset.layout !== "list"; $("#lay-board").hidden = b.dataset.layout !== "board";
+  }));
+  renderReality();
+
+  // ---------- review marks (the light bars): the artifact's db, read by Claude; else this browser ----------
+  const rvBars = $$("[data-review]");
+  const marks = {};
+  const STORE = "p5-review";
+  for (const bar of rvBars) {
+    const id = bar.dataset.review;
+    const opts = bar.dataset.options ? bar.dataset.options.split("|") : null;
+    const box = document.createElement("div"); box.className = opts ? "opts" : "rv-marks"; box.setAttribute("role", "group"); box.setAttribute("aria-label", "Your answer");
+    box.innerHTML = opts
+      ? opts.map((o) => `<button class="opt" type="button" data-v="${esc(o)}" aria-pressed="false">${esc(o)}</button>`).join("")
+      : ["agree", "change", "skip"].map((v) => `<button class="rv-btn" type="button" data-v="${v}" aria-pressed="false">${v[0].toUpperCase() + v.slice(1)}</button>`).join("");
+    const note = document.createElement("div"); note.className = "rv-note";
+    note.innerHTML = `<label class="sr" for="note-${id}">Note</label><textarea id="note-${id}" rows="1" placeholder="Note (optional)"></textarea><span class="rv-saved" aria-live="polite"></span>`;
+    if (opts) { bar.querySelector(".ask").append(box); bar.append(note); } else bar.append(box, note);
+    box.addEventListener("click", (e) => { const b = e.target.closest("[data-v]"); if (b) setChoice(id, marks[id]?.choice === b.dataset.v ? null : b.dataset.v); });
+    let timer; $("textarea", note).addEventListener("input", (e) => { clearTimeout(timer); const v = e.target.value; timer = setTimeout(() => setNote(id, v), 500); });
+  }
+  $("#rv-total").textContent = String(rvBars.length);
+  function render(id) {
+    const bar = $(`[data-review="${id}"]`); if (!bar) return;
+    const m = marks[id] || {};
+    $$("[data-v]", bar).forEach((b) => b.setAttribute("aria-pressed", String(m.choice === b.dataset.v)));
+    const ta = $(`#note-${id}`); if (ta && document.activeElement !== ta) ta.value = m.note || "";
+    const dot = $(`.dot[data-for="${id}"]`); if (dot) dot.dataset.v = !m.choice ? "" : ["agree", "change", "skip"].includes(m.choice) ? m.choice : "agree";
+  }
+  function renderCounts() {
+    const n = rvBars.filter((b) => marks[b.dataset.review]?.choice).length;
+    $("#rv-count").textContent = String(n);
+    $("#rv-meter").style.width = `${(100 * n) / rvBars.length}%`;
+  }
+  function flash(id, text) { const s = $(`[data-review="${id}"] .rv-saved`) || $(`#note-${id}`)?.parentElement.querySelector(".rv-saved"); if (s) { s.textContent = text; setTimeout(() => { if (s.textContent === text) s.textContent = ""; }, 1800); } }
+  function localSave() { try { localStorage.setItem(STORE, JSON.stringify(marks)); } catch {} }
+  function localLoad() { try { return JSON.parse(localStorage.getItem(STORE) || "{}"); } catch { return {}; } }
+  let db = null;
+  const pending = {};
+  function write(id) {
+    const m = marks[id] || {};
+    localSave();
+    if (!db) { flash(id, "Saved here"); return; }
+    const body = { choice: m.choice || null, note: m.note || "", at: new Date().toISOString() };
+    pending[id] = (pending[id] || Promise.resolve()).then(() => db.doc(`review/${id}`).set(body)).then(
+      () => flash(id, "Saved"),
+      () => { flash(id, "Not saved"); $("#rv-status").textContent = "Saving failed; your marks are kept in this browser. Use Copy my marks."; },
+    );
+  }
+  function setChoice(id, choice) { marks[id] = { ...(marks[id] || {}), choice }; render(id); renderCounts(); write(id); }
+  function setNote(id, note) { marks[id] = { ...(marks[id] || {}), note }; render(id); write(id); }
+  $("#rv-copy").addEventListener("click", async () => {
+    const text = rvBars.map((b) => { const m = marks[b.dataset.review] || {}; return `${b.dataset.review}: ${m.choice || "unmarked"}${m.note ? ` — ${m.note}` : ""}`; }).join("\n");
+    try { await navigator.clipboard.writeText(text); $("#rv-status").textContent = "Copied. Paste it in the chat."; }
+    catch { $("#rv-status").textContent = "Copy was refused here; your marks are saved on this page."; }
+  });
+  Object.assign(marks, localLoad());
+  rvBars.forEach((b) => render(b.dataset.review));
+  renderCounts();
+
+  (async () => {
+    try { db = window.claude && window.claude.use ? await window.claude.use("db") : null; } catch { db = null; }
+    if (!db) { $("#rv-status").textContent = "Saved in this browser only. Use Copy my marks and paste them in the chat."; return; }
+    $("#rv-status").textContent = "Your marks save as you go; Claude reads them.";
+    db.collection("review").onSnapshot((snap) => {
+      for (const d of snap.docs) {
+        const v = d.data() || {};
+        const typing = document.activeElement && document.activeElement.id === `note-${d.id}`;
+        marks[d.id] = { choice: v.choice || null, note: typing ? (marks[d.id]?.note ?? "") : (v.note || "") };
+        render(d.id);
+      }
+      renderCounts(); localSave();
+    }, () => { $("#rv-status").textContent = "Live saving stopped; marks are kept in this browser."; db = null; });
+  })();
+})();
+</script>

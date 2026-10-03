@@ -6,13 +6,18 @@
 import { createReadStream, existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join, resolve, sep } from "node:path";
-import { CLIENT_HEADER, type AckMode, type ChangeError, type ChangeResponse, type CheckSuggestions, type CommandError, type ServiceInfo, type StatePayload, type VisionDocUploadOk } from "../src/api";
+import { CLIENT_HEADER, type AckMode, type ChangeError, type ChangeResponse, type CheckSuggestions, type CommandError, type EnvironmentFound, type ServiceInfo, type StatePayload, type VisionDocUploadOk } from "../src/api";
 import { suggestChecks, type RepoFile } from "../src/domain/checks";
+import { PROPOSAL_MARKERS, proposeImage } from "../src/domain/environment";
+import { readDevcontainer } from "./environment/devcontainer";
 import { SERVICE_COMMANDS } from "../src/domain/commands";
 import { exportMarkdown, trustedBaseRef } from "../src/domain/model";
 import type { State } from "../src/domain/types";
+import type { Housekeeping } from "./housekeeping";
 import type { FakeRuntimeConfig } from "./runtimes/fake";
 import type { Scheduler } from "./scheduler";
+import { evidenceFileKnown } from "../src/domain/studio/evidence";
+import { appEvidenceFile } from "./studio/evidence";
 import { APP_FILE_HEADERS, appStudioFile } from "./studio/files";
 import { projectStudioDir } from "./studio/serve";
 import type { VisionDocStore } from "./visiondocs";
@@ -41,6 +46,8 @@ interface HttpOptions {
   prototypePort?: number;
   /** The prototype listener itself: while it is listening, the state and health payloads name its port (`service.prototypePort`). */
   prototypeServer?: Server;
+  /** Housekeeping of what runs leave behind: its status is in the service payload, and POST /api/maintenance/housekeeping sweeps now. */
+  housekeeping?: Pick<Housekeeping, "status" | "sweep">;
   log?: (msg: string) => void;
 }
 
@@ -124,6 +131,7 @@ export function createHttpServer(opts: HttpOptions): Server {
     // From the listener, not the configuration: a port that was busy at start serves nothing, and the app says so.
     const proto = opts.prototypeServer?.listening ? opts.prototypeServer.address() : null;
     if (proto && typeof proto === "object") out.prototypePort = proto.port;
+    if (opts.housekeeping) out.housekeeping = opts.housekeeping.status();
     if (real && opts.workspaces) {
       const project = store.read().state.project;
       if (project.sample) out.repo = { ok: false, reason: "This is the sample project; real runs are disabled for it. Start a new project below." };
@@ -186,6 +194,26 @@ export function createHttpServer(opts: HttpOptions): Server {
     return send(res, 200, { commands, ref, ...(commands.length ? {} : { reason: `No package.json scripts, lockfile, Cargo.toml, go.mod or pyproject.toml with pytest at ${ref}.` }) } satisfies CheckSuggestions);
   };
 
+  /** The repository's dev container and the proposed image (docs/design/project-environment.md), read at the trusted base. Nothing is saved. */
+  const environmentFound = (res: ServerResponse) => {
+    const { state } = store.read();
+    if (!real || !opts.workspaces) return send(res, 200, { ref: "", reason: "The simulated runtime reads no repository." } satisfies EnvironmentFound);
+    if (state.project.sample || !state.project.repoPath) return send(res, 200, { ref: "", reason: "This is the sample project; start a project of your own to read its repository." } satisfies EnvironmentFound);
+    const ref = trustedBaseRef(state);
+    const read = (path: string, maxBytes: number) => {
+      try {
+        return opts.workspaces!.readFileAt({ repoPath: state.project.repoPath, ref, path, maxBytes });
+      } catch {
+        return undefined;
+      }
+    };
+    const found = readDevcontainer(read);
+    const p = found?.parsed;
+    const devcontainer: EnvironmentFound["devcontainer"] = found && p ? { file: found.file, ...("refused" in p ? { refused: p.refused } : "image" in p ? { image: p.image } : { dockerfile: p.build.dockerfile, context: p.build.context }), ...(found.sha256 ? { sha256: found.sha256 } : {}) } : undefined;
+    const proposal = proposeImage(PROPOSAL_MARKERS.filter((m) => read(m, 1)));
+    return send(res, 200, { ref, ...(devcontainer ? { devcontainer } : {}), ...(proposal ? { proposal } : {}) } satisfies EnvironmentFound);
+  };
+
   /** The full (redacted) log of one check of one run, from the service's own directory. Ids are validated; nothing else is served. */
   const checkLog = (res: ServerResponse, run: string, check: string) => {
     const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,60}$/;
@@ -204,7 +232,8 @@ export function createHttpServer(opts: HttpOptions): Server {
   const studioFile = (res: ServerResponse, query: URLSearchParams) => {
     const { state } = store.read();
     const studioDir = opts.dataDir ? projectStudioDir(opts.dataDir, state.project.id) : undefined;
-    const r = appStudioFile(studioDir, query, (id, version) => state.studio.artifacts.some((a) => a.id === id && a.version === version));
+    // A capture of evidence (ORC-029 pass 5) is served the same way: ?evidence=<run>&path=<item>/<file>.
+    const r = query.has("evidence") ? appEvidenceFile(opts.dataDir, state.project.id, query, (run, path) => evidenceFileKnown(state, run, path)) : appStudioFile(studioDir, query, (id, version) => state.studio.artifacts.some((a) => a.id === id && a.version === version));
     if (!r.ok) {
       res.writeHead(r.status, { "Content-Type": "application/json; charset=utf-8", ...APP_FILE_HEADERS });
       return res.end(JSON.stringify({ error: r.error, kind: r.status === 403 ? "forbidden" : "invalid" } satisfies CommandError));
@@ -312,6 +341,7 @@ export function createHttpServer(opts: HttpOptions): Server {
         }
         if (path === "/api/change") return change(res, url.searchParams.get("task") ?? "");
         if (path === "/api/checks/suggest") return suggest(res);
+        if (path === "/api/environment/found") return environmentFound(res);
         if (path === "/api/checks/log") return checkLog(res, url.searchParams.get("run") ?? "", url.searchParams.get("check") ?? "");
         if (path === "/api/studio/file") return studioFile(res, url.searchParams);
         return fail(res, 404, "invalid", "Not found");
@@ -374,6 +404,11 @@ export function createHttpServer(opts: HttpOptions): Server {
       if (path === "/api/maintenance/prune") {
         if (!real) return fail(res, 400, "control", "Workspace cleanup applies to real runs only.");
         return send(res, 200, { removed: scheduler.prune() });
+      }
+      // "Clean up now": answers when the sweep ends (or the running one does: two never run at once).
+      if (path === "/api/maintenance/housekeeping") {
+        if (!opts.housekeeping) return fail(res, 400, "control", "This service runs no housekeeping.");
+        return send(res, 200, { report: await opts.housekeeping.sweep("owner") });
       }
       if (path === "/api/health/refresh") {
         await scheduler.refreshHealth();

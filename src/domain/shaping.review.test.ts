@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import * as M from "./model";
-import { startFactoryAsOwner } from "./testing/factory";
+import { inVision, startFactoryAsOwner } from "./testing/factory";
 import { buildEmptyProject, buildSeed } from "./seed";
 import { SHAPING_AREAS, StaleWriteError, type LeadRun, type State } from "./types";
 
@@ -16,7 +16,7 @@ const at = (sec: number) => new Date(T0 + sec * 1000).toISOString();
 const seed = () => buildSeed(T0, { inFlightRuns: false });
 const task = (s: State, id: string) => s.tasks.find((t) => t.id === id)!;
 const running = (s: State, id?: string) => M.activeAttempts(s, id);
-const shaping = (s: State) => M.startVision(s, at(0));
+const shaping = (s: State) => inVision(s, at(0));
 const roomy = (s: State) => M.setAutonomy(s, { ...s.project.autonomy, maxOpenProposals: 50 }, at(0));
 const autopilot = (s: State) => M.setAutonomy(s, { ...s.project.autonomy, enabled: true, holdLeadProposals: false, maxOpenProposals: 50 }, at(0));
 const checkin = (s: State) => M.setAutonomy(s, { ...s.project.autonomy, enabled: true, holdLeadProposals: true, maxOpenProposals: 50 }, at(0));
@@ -68,7 +68,7 @@ describe("the roadmap hold is its own flag", () => {
     expect(held.events.at(-2)!.message).toMatch(/No longer held by the roadmap/);
     const p = promote(held);
     expect(M.stateLabel(p, task(p, a.id))).toBe("Waiting for your go-ahead");
-    expect(M.stateLabel(p, task(p, b.id))).toBe("Planned; waits until you start building, then starts on Autopilot");
+    expect(M.stateLabel(p, task(p, b.id))).toBe("Planned; waits until you start the factory, then starts on Autopilot");
     const built = startFactoryAsOwner(p, at(5));
     expect(task(built, a.id).holdBeforeStart).toBe(true); // never overridden
     expect(task(built, b.id)).toMatchObject({ holdBeforeStart: false });
@@ -84,11 +84,11 @@ describe("the roadmap hold is its own flag", () => {
     const [t] = M.roadmapTasks(c);
     expect(t).toMatchObject({ heldForShaping: true, holdBeforeStart: true });
     const p = promote(c);
-    expect(M.stateLabel(p, task(p, t.id))).toBe("Planned; waits until you start building, then waits for your go-ahead (your involvement setting)");
+    expect(M.stateLabel(p, task(p, t.id))).toBe("Planned; waits until you start the factory, then waits for your go-ahead (your involvement setting)");
     const started = M.startHeldTask(p, t.id, at(5));
     expect(task(started, t.id).holdBeforeStart).toBe(false);
     expect(task(started, t.id).heldForShaping).toBeUndefined();
-    expect(started.events.at(-1)!.message).toMatch(/once you start building/);
+    expect(started.events.at(-1)!.message).toMatch(/once you start the factory/);
     expect(running(promote(started, 6), t.id)).toHaveLength(0); // the stage still holds it
     const built = startFactoryAsOwner(started, at(7));
     expect(task(built, t.id).holdBeforeStart).toBe(false); // the user's release stands, whatever the involvement setting
@@ -191,18 +191,20 @@ describe("no empty vision while building", () => {
     expect(M.currentVision(empty).text).toBe("");
     expect(M.startFactoryBlocker(empty)).toBe("Write or accept a vision first.");
     expect(seed().project.stage).toBe("building"); // the sample keeps working as before
-    expect(() => M.editVision(seed(), 1, "   ", "f", "clear", at(1))).toThrow("The vision cannot be empty while building. Go back to shaping to clear it.");
+    expect(() => M.editVision(seed(), 1, "   ", "f", "clear", at(1))).toThrow("The vision cannot be empty while the factory runs.");
     expect(M.currentVision(seed()).rev).toBe(1);
     const cleared = M.editVision(shaping(seed()), 1, "", "", "clear", at(1));
     expect(M.currentVision(cleared)).toMatchObject({ rev: 2, text: "" });
     expect(() => startFactoryAsOwner(cleared, at(2))).toThrow(/Write or accept a vision first/);
-    // A real edit while building is unaffected.
-    expect(M.currentVision(M.editVision(seed(), 1, "New", "f", "why", at(1))).text).toBe("New");
+    // A real edit while building goes into the draft (ORC-029 pass 5, r10): in force at the owner's Lock in.
+    const edited = M.editVision(seed(), 1, "New", "f", "why", at(1));
+    expect(M.draftVisionText(edited)).toBe("New");
+    expect(M.currentVision(edited).text).not.toBe("New");
   });
 });
 
 describe("coverage", () => {
-  it("none reported means every area is open; a block with no valid entry keeps the previous coverage; a new shaping session starts from nothing", () => {
+  it("none reported means every area is open; a block with no valid entry keeps the previous coverage", () => {
     const s0 = shaping(seed());
     expect(M.coverageOf(s0)).toBeUndefined();
     expect(M.openAreas(s0)).toEqual(SHAPING_AREAS);
@@ -213,16 +215,6 @@ describe("coverage", () => {
     expect(empty.state.leadRuns.at(-1)!.coverage).toBeUndefined();
     expect(M.coverageOf(empty.state)).toEqual(M.coverageOf(first.state));
     expect(M.openAreas(empty.state)).toEqual(M.openAreas(first.state));
-    // An earlier session's coverage is not reused once the user starts building and comes back to shaping.
-    const built = startFactoryAsOwner(M.editVision(empty.state, 1, "Vision", "f", "w", at(9)), at(10));
-    const again = M.startVision(built, at(11));
-    expect(again.project.shapingSince).toBe(at(11));
-    expect(M.coverageOf(again)).toBeUndefined();
-    expect(M.openAreas(again)).toEqual(SHAPING_AREAS);
-    const fresh = leadReply(again, { coverage: { audience: "clear" } }, 12);
-    expect(M.coverageOf(fresh.state)).toMatchObject({ audience: "clear", intent: "open", scope: "open" });
-    // The order of the notes above matters less than this: nothing from the first session leaked through.
-    expect(M.openAreas(fresh.state)).toEqual(SHAPING_AREAS.filter((a) => a !== "audience"));
   });
 });
 
@@ -237,11 +229,11 @@ describe("a no-op accept, and a dependency wait while shaping", () => {
 
   it("a dependency wait is shown while shaping, with shaping noted, before the stage's own label", () => {
     const s = shaping(seed());
-    expect(M.stateLabel(s, task(s, "EX-007"))).toBe("Waiting on EX-002 (shaping)");
+    expect(M.stateLabel(s, task(s, "EX-007"))).toBe("Waiting on EX-002 (in Vision)");
     const ready = { ...s, tasks: s.tasks.map((t) => (t.id === "EX-007" ? { ...t, lifecycle: "ready" as const } : t)) };
-    expect(M.stateLabel(ready, task(ready, "EX-007"))).toBe("Waiting on EX-002 (shaping)");
+    expect(M.stateLabel(ready, task(ready, "EX-007"))).toBe("Waiting on EX-002 (in Vision)");
     expect(M.stateLabel(seed(), task(seed(), "EX-007"))).toBe("Waiting on EX-002");
     const free = { ...ready, tasks: ready.tasks.map((t) => (t.id === "EX-007" ? { ...t, dependsOn: [] } : t)) };
-    expect(M.stateLabel(free, task(free, "EX-007"))).toBe("Ready (shaping)");
+    expect(M.stateLabel(free, task(free, "EX-007"))).toBe("Ready (in Vision)");
   });
 });

@@ -154,11 +154,12 @@ describe("the lead's studio block", () => {
     expect(notes(s)).toEqual(["Studio: designer run #1 not asked for: Group page sketch (material) is not the designer's work; the designer makes a new artifact from it instead"]);
   });
 
-  it("runs only from a reply to the owner, in Vision; with no round open it asks for nothing", () => {
+  it("runs only from a reply to the owner, in Vision and while the factory runs (pass 5); with no round open it asks for nothing", () => {
     const block = { studio: { openRound: { focus: "experience", summary: "x" }, designerRuns: [SCREEN_RUN] } };
     const building = reply(startFactoryAsOwner(fresh(), at(1)), block);
-    expect(building.studio).toEqual(fresh().studio);
-    expect(notes(building)).toEqual(["Studio: the studio runs in Vision; nothing was changed"]);
+    expect(building.project.stage).toBe("building");
+    expect(building.studio.rounds.map((r) => [r.n, r.focus])).toEqual([[1, "experience"]]);
+    expect(building.studio.runs.map((r) => [r.kind, r.round, r.status])).toEqual([["designer", 1, "queued"]]);
     const decisions = reply(fresh(), block, 10, "decisions");
     expect(decisions.studio.rounds).toEqual([]);
     expect(notes(decisions)).toEqual(["Studio: only a reply to your messages runs the studio; nothing was changed"]);
@@ -203,7 +204,9 @@ describe("the lead can never approve, overrule, lock in, start the factory, or s
         approve: true,
         overruleObjection: { verdictId: objection, why: "The lead disagrees." },
         lockIn: true,
-        startFactory: { agreed: true, blueprintRev: 0, visionRev: 1 },
+        dropBlueprintItem: { itemId: "bi-1" },
+        discardDraft: { draftRev: 0 },
+        startFactory: { agreed: true, draftRev: 0, visionRev: 1 },
         sendFeedback: { entries: [{ artifactId: id, version: 1, mark: "keep", pins: [], note: "" }] },
         feedback: [{ artifactId: id, version: 1, mark: "keep" }],
         stage: "building",
@@ -216,7 +219,7 @@ describe("the lead can never approve, overrule, lock in, start the factory, or s
     };
     const after = reply(s, hostile, 20);
     untouched(s, after);
-    expect(notes(after)[0]).toBe('Studio: ignored "approveArtifact", "approveRound", "approve", "overruleObjection", "lockIn", "startFactory", "sendFeedback", "feedback", "stage", "setDomains", "domains": the studio block only opens and closes rounds, asks for designer runs and asks questions');
+    expect(notes(after)[0]).toBe('Studio: ignored "approveArtifact", "approveRound", "approve", "overruleObjection", "lockIn", "dropBlueprintItem", "discardDraft", "startFactory", "sendFeedback", "feedback", "stage", "setDomains", "domains": the studio block only opens and closes rounds, asks for designer runs and asks questions');
     // What it may do still happened: one designer run, one question.
     expect(after.studio.runs).toHaveLength(1);
     expect(S.currentRound(after)!.lead!.questions).toEqual([{ text: "Shall I start?" }]);

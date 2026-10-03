@@ -11,6 +11,7 @@ export const ROLE_LABEL: Record<RoleId, string> = {
   security_reviewer: "Security reviewer",
   ux_reviewer: "UX reviewer",
   checks: "Checks",
+  evidence: "Evidence",
 };
 
 export const COLUMN_LABEL: Record<M.Column, string> = {
@@ -185,8 +186,6 @@ export function autonomyArgs(a: Autonomy, patch: Partial<Autonomy>): Autonomy {
 
 export const PREF_ONBOARDING_DISMISSED = "orchestration.onboarding.dismissed";
 export const PREF_INVOLVEMENT_CHOSEN = "orchestration.involvement.chosen";
-/** On the sample project, the offer to try the shaping stage was taken once; it is not shown again. */
-export const PREF_STAGE_CHOSEN = "orchestration.stage.chosen";
 export const PREF_NOTIFY = "orchestration.notify";
 /** The `at` of the newest lead reply this browser has shown (the Lead button counts newer ones). */
 export const PREF_LEAD_SEEN = "orchestration.lead.seenAt";

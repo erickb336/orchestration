@@ -24,14 +24,14 @@ export function setBudgets(state: State, budgets: Budgets, now: string): State {
 
 /**
  * The owner's choice at the building budget: new work starts again, without raising it. It holds while the
- * building budget stays at this amount and the project keeps building; changing the building budget (setBudgets)
- * or going back to vision ends it. Refused while the budget is not reached.
+ * building budget stays at this amount; changing the building budget (setBudgets) ends it. Refused while the budget
+ * is not reached.
  */
 export function continuePastBudget(state: State, now: string): State {
   const stop = budgetStop(state);
   if (!stop) throw new ControlError("The building budget is not reached.");
   const s = draft(state);
   s.project.budgetContinued = { at: now, buildingUsd: stop.budgetUsd, spentUsd: stop.spend.usd };
-  event(s, now, "user", "config", `Continued past the building budget (${fmtUsd(stop.spend.usd)} of ${fmtUsd(stop.budgetUsd)}): new work starts until the budget changes or the project goes back to vision`);
+  event(s, now, "user", "config", `Continued past the building budget (${fmtUsd(stop.spend.usd)} of ${fmtUsd(stop.budgetUsd)}): new work starts until the budget changes`);
   return s;
 }

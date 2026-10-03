@@ -2,13 +2,14 @@
 // answers messages and may draft the vision and propose a first roadmap, but no worker step is dispatched and no
 // planning run starts. A draft is a suggestion: the vision changes only when the user accepts it. Only the owner's
 // Start the factory (`startFactory`, called from the command table alone) moves a project to building: it needs a
-// vision, records the owner's agreement (the blueprint and vision revisions they saw, the open items they confirmed)
-// and the settings the factory runs with, and releases the roadmap on Autopilot. Going back to vision stops nothing
-// that is running.
+// vision, locks in the blueprint's draft (the first Lock in), records the owner's agreement (the draft and vision
+// revisions they saw, the open items they confirmed) and the settings the factory runs with, and releases the
+// roadmap on Autopilot. A project never goes back: Vision stays open while the factory runs (ORC-029 r12), and only
+// Pause stops building.
 
 import { deliveryMode, setDeliveryMode, setPrDelivery } from "../delivery";
 import * as F from "../findings";
-import { blueprintRev, openBlueprintItems } from "../studio/blueprint";
+import { assertSummarySeen, blueprintRev, draftChanges, draftRev, lockInSummary, openBlueprintItems, putDraftInForce, summaryDigest } from "../studio/blueprint";
 import { unfinishedProbes } from "../studio/studio";
 import {
   type Device,
@@ -29,21 +30,21 @@ import {
   SHAPING_AREAS,
   StaleWriteError,
 } from "../types";
-import { activeAttempts, currentVision, draft, event, touch } from "./core";
+import { currentVision, draft, event, touch } from "./core";
 import { autonomyMode, autopilotAutonomy, setAutonomy } from "./lead";
 import { CONTROL_RE, oneLine, stripInvisible, visibleOrEmpty } from "./textSafety";
-import { pushVision } from "./vision";
+import { draftVisionText, pushVision, setDraftVisionInto } from "./vision";
 
 const MAX_VISION_TEXT = 8000;
 const MAX_VISION_FOCUS = 300;
 const MAX_VISION_DRAFTS = 50;
 
 /** The one line shown wherever new work would otherwise be expected to start. Never "Paused". */
-export const SHAPING_LABEL = "Shaping: new work waits until you start building";
+export const SHAPING_LABEL = "Vision: new work waits until you start the factory";
 
 /** Why Start the factory is refused, or undefined when it is allowed. */
 export function startFactoryBlocker(s: State): string | undefined {
-  if (s.project.stage === "building") return "Already building.";
+  if (s.project.stage === "building") return "The factory is already running.";
   if (!currentVision(s).text.trim()) return "Write or accept a vision first.";
   return undefined;
 }
@@ -98,8 +99,13 @@ function currentDelivery(s: State): FactoryDelivery {
 /** What the owner sends to start the factory. */
 export interface FactoryRequest {
   agreed: true;
-  /** The blueprint revision the owner saw (compare-and-set); 0 while nothing is approved. */
-  blueprintRev: number;
+  /**
+   * The blueprint draft's revision the owner saw in the pre-flight (compare-and-set). The start locks the draft in, and
+   * nothing else changes what is in force, so this one revision covers both.
+   */
+  draftRev: number;
+  /** The digest of the Lock in summary the pre-flight showed (`summaryDigest`): the start records that summary. */
+  summaryDigest: string;
   /**
    * The vision revision the owner saw (compare-and-set). The blueprint stands on the vision, and the vision changes
    * without a blueprint revision (an edit, an accepted draft, a document), so the agreement checks both.
@@ -110,7 +116,7 @@ export interface FactoryRequest {
   acceptOpen: string[];
 }
 
-/** What is still open for the pre-flight: the vision's open areas, the blueprint's open items, and the probes whose evidence is not in yet. */
+/** What is still open for the pre-flight: the vision's open areas, the draft's open items, and the probes whose evidence is not in yet. */
 function openForPreflight(s: State) {
   return { areas: openAreas(s), items: openBlueprintItems(s).map((o) => o.item), probes: unfinishedProbes(s) };
 }
@@ -123,11 +129,11 @@ export function preflightOpenItems(s: State): string[] {
 
 /**
  * The request as the project stands: agreement on the current revisions, the current settings, and every open
- * item confirmed. Only data: the owner's own action sends it (today the Start building button, after its
- * confirmation lists the open items; the pre-flight screen later).
+ * item confirmed. Only data: the owner's own action sends it (the pre-flight's Start the factory, which builds the
+ * same request from what it showed).
  */
 export function startFactoryRequest(s: State): FactoryRequest {
-  return { agreed: true, blueprintRev: blueprintRev(s), visionRev: currentVision(s).rev, settings: currentFactorySettings(s), acceptOpen: preflightOpenItems(s) };
+  return { agreed: true, draftRev: draftRev(s), summaryDigest: summaryDigest(lockInSummary(s)), visionRev: currentVision(s).rev, settings: currentFactorySettings(s), acceptOpen: preflightOpenItems(s) };
 }
 
 /**
@@ -172,17 +178,19 @@ function applyFactorySettings(state: State, x: FactorySettings, now: string): St
 
 /**
  * Start the factory: the owner's command, and the only way from shaping to building. Refused without the owner's
- * agreement, without a vision, when the blueprint or the vision changed since they looked (compare-and-set), or while
- * an open item was not confirmed. It applies the settings, records the agreement (`factoryStarts`), and moves to
- * building; on Autopilot the roadmap starts, otherwise it waits for the owner as lead proposals do. Called only from
- * the command table: no steering change, lead output, scheduler path or timer reaches it.
+ * agreement, without a vision, when the draft or the vision changed since they looked (compare-and-set), or while an
+ * open item was not confirmed. Its first step is the first Lock in: the draft's changes go into force as a blueprint
+ * revision, with the summary (open items stay in the draft). Then it applies the settings, records the agreement
+ * (`factoryStarts`, naming the revision in force), and moves to building; on Autopilot the roadmap starts, otherwise
+ * it waits for the owner as lead proposals do. Called only from the command table: no steering change, lead output,
+ * scheduler path or timer reaches it.
  */
 export function startFactory(state: State, req: FactoryRequest, now: string): State {
   if (req.agreed !== true) throw new ControlError("Starting the factory needs your agreement.");
   const why = startFactoryBlocker(state);
   if (why) throw new ControlError(why);
-  const bp = blueprintRev(state);
-  if (req.blueprintRev !== bp) throw new StaleWriteError(req.blueprintRev, bp);
+  const seen = draftRev(state);
+  if (req.draftRev !== seen) throw new StaleWriteError(req.draftRev, seen);
   const rev = currentVision(state).rev;
   if (req.visionRev !== rev) throw new StaleWriteError(req.visionRev, rev);
   const { areas, items, probes } = openForPreflight(state);
@@ -191,7 +199,15 @@ export function startFactory(state: State, req: FactoryRequest, now: string): St
   if (unconfirmed.length) throw new ControlError(`Still open and not confirmed: ${unconfirmed.join(", ")}. Confirm them to start, or close them first.`);
   const problem = settingsProblem(req.settings);
   if (problem) throw new ControlError(problem);
-  const s = draft(applyFactorySettings(state, req.settings, now));
+  const c = draftChanges(state);
+  const locks = c.added.length + c.changed.length + c.dropped.length > 0;
+  // The start records the Lock in summary: it must be the one the pre-flight showed.
+  if (locks) assertSummarySeen(state, req);
+  const locked = draft(state);
+  // The first Lock in, while still in Vision: no task is building yet, so it makes no change order.
+  if (locks) putDraftInForce(locked, now);
+  const bp = blueprintRev(locked);
+  const s = draft(applyFactorySettings(locked, req.settings, now));
   s.project.stage = "building";
   s.project.factoryStarts.push({ at: now, by: "user", blueprintRev: bp, visionRev: rev, settings: structuredClone(req.settings), openItems: open });
   const { release } = startFactoryPlan(s);
@@ -206,8 +222,8 @@ export function startFactory(state: State, req: FactoryRequest, now: string): St
     touch(t, now);
     if (release) {
       released.push(t.id);
-      event(s, now, "user", "control", "Released from the roadmap: building started on Autopilot", t.id);
-    } else event(s, now, "user", "control", "Building started; this planned task waits for your go-ahead (your involvement setting)", t.id);
+      event(s, now, "user", "control", "Released from the roadmap: the factory started on Autopilot", t.id);
+    } else event(s, now, "user", "control", "The factory started; this planned task waits for your go-ahead (your involvement setting)", t.id);
   }
   const waiting = roadmapTasks(s).filter((t) => t.holdBeforeStart).length;
   const confirmed = [
@@ -216,21 +232,7 @@ export function startFactory(state: State, req: FactoryRequest, now: string): St
     probes.length ? `${probes.length} unfinished probe${probes.length === 1 ? "" : "s"} confirmed (${probes.map((p) => p.question).join("; ")})` : "",
   ].filter(Boolean);
   const agreed = `you agreed to vision r${rev}${bp ? ` and blueprint r${bp}` : ""}${confirmed.length ? ` with ${confirmed.join(" and ")}` : ""}`;
-  event(s, now, "user", "config", `Building started: ${agreed}${released.length ? `; roadmap released: ${released.join(", ")}` : waiting ? `; ${waiting} planned task${waiting === 1 ? "" : "s"} wait${waiting === 1 ? "s" : ""} for your go-ahead` : ""}`);
-  return s;
-}
-
-/** Back to vision: nothing running is stopped and nothing new starts. Available at any time. */
-export function startVision(state: State, now: string): State {
-  if (state.project.stage === "shaping") throw new ControlError("Already shaping.");
-  const s = draft(state);
-  s.project.stage = "shaping";
-  // A new shaping session; coverage the lead reported in an earlier one is not reused.
-  s.project.shapingSince = now;
-  // Continuing past the building budget lasted while building; the next start meets the budget stop again.
-  delete s.project.budgetContinued;
-  const running = activeAttempts(s).length;
-  event(s, now, "user", "config", `Shaping the vision; new work waits until you start building${running ? ` (${running} running step${running === 1 ? " finishes" : "s finish"} normally)` : ""}`);
+  event(s, now, "user", "config", `The factory started: ${agreed}${released.length ? `; roadmap released: ${released.join(", ")}` : waiting ? `; ${waiting} planned task${waiting === 1 ? "" : "s"} wait${waiting === 1 ? "s" : ""} for your go-ahead` : ""}`);
   return s;
 }
 
@@ -246,9 +248,12 @@ export function setChangeOrders(state: State, who: "lead" | "user", now: string)
   return s;
 }
 
-/** The device scope, chosen in Vision: at least one of desktop, mobile and terminal, each once. */
+/**
+ * The device scope, chosen in Vision: at least one of desktop, mobile and terminal, each once. Vision stays open
+ * while the factory runs, so the owner may change it at any time; it decides what the studio designs next, and the
+ * factory builds the devices each blueprint item names.
+ */
 export function setDevices(state: State, devices: Device[], now: string): State {
-  if (state.project.stage === "building") throw new ControlError("The device scope is chosen in Vision; go back to vision to change it.");
   const chosen = DEVICES.filter((d) => devices.includes(d));
   if (!chosen.length) throw new ControlError("Choose at least one device: desktop, mobile or terminal.");
   const s = draft(state);
@@ -293,7 +298,8 @@ export function validateVisionDraft(s: State, r: LeadRun, vision: unknown): Vali
     if (typeof v.reason !== "string") return { ok: false, why: "the reason must be text" };
     reason = cleanLine(v.reason).slice(0, 500) || reason;
   }
-  if (text === cur.text.trim() && focus === oneLine(cur.focus)) return { ok: false, why: "the draft is the same as the current vision" };
+  // While building, the text to compare with is the draft's (an edit after the start waits there for Lock in).
+  if (text === draftVisionText(s).trim() && focus === oneLine(cur.focus)) return { ok: false, why: "the draft is the same as the current vision" };
   return { ok: true, draft: { text, focus, reason } };
 }
 
@@ -474,13 +480,25 @@ export function acceptVisionDraft(state: State, draftId: string, expectedRev: nu
   if (text.length > MAX_VISION_TEXT) throw new ControlError(`The vision is limited to ${MAX_VISION_TEXT} characters.`);
   if (focus.length > MAX_VISION_FOCUS) throw new ControlError(`The focus is limited to ${MAX_VISION_FOCUS} characters.`);
   // Accepting what already stands would record a revision that changes nothing.
-  if (text === cur.text.trim() && focus === oneLine(cur.focus)) throw new ControlError("Nothing differs from the current vision; change the text or dismiss the draft.");
+  const base = draftVisionText(state);
+  if (text === base.trim() && focus === oneLine(cur.focus)) throw new ControlError("Nothing differs from the current vision; change the text or dismiss the draft.");
   const s = draft(state);
   const draftRec = getVisionDraft(s, draftId);
+  const why = `${edited ? "Accepted the lead's draft with edits" : "Accepted the lead's draft"} (${d.id}): ${d.reason}`;
+  const source = { draftId: d.id, leadRunId: d.leadRunId, messageIds: [...d.messageIds] };
+  if (s.project.stage === "building") {
+    // While building (pass 5, r10), the text joins the blueprint's draft until your Lock in; a new focus applies now.
+    if (text !== base) setDraftVisionInto(s, { text, reason: why, source, ...(d.simulated ? { simulated: true as const } : {}) }, now);
+    const rev = focus !== cur.focus ? pushVision(s, { author: "user", text: cur.text, focus, reason: why, source, ...(d.simulated ? { simulated: true as const } : {}) }, now) : undefined;
+    draftRec.status = "accepted";
+    draftRec.resolvedAt = now;
+    if (rev) draftRec.visionRev = rev.rev;
+    return s;
+  }
   const rev = pushVision(
     s,
     // A draft the simulated lead wrote stays labelled once it is the vision, edited or not.
-    { author: "user", text, focus, reason: `${edited ? "Accepted the lead's draft with edits" : "Accepted the lead's draft"} (${d.id}): ${d.reason}`, source: { draftId: d.id, leadRunId: d.leadRunId, messageIds: [...d.messageIds] }, ...(d.simulated ? { simulated: true as const } : {}) },
+    { author: "user", text, focus, reason: why, source, ...(d.simulated ? { simulated: true as const } : {}) },
     now,
     `Vision r${cur.rev + 1} by you: accepted the lead's draft ${d.id}${edited ? " with edits" : ""}`,
   );

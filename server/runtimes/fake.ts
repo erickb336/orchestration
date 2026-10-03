@@ -12,7 +12,7 @@ import type { AckMode } from "../../src/api";
 import { schemaMismatch, withNulls, type JsonSchema } from "../../src/domain/model/leadReplySchema";
 import { DOCUMENT_KINDS, type StudioArtifactKind } from "../../src/domain/studio/types";
 import { NEUTRAL_FINDING, PLANNING_IDEAS, breakdownItems, neutralSummary, scriptedFinding, scriptedSummary } from "../../src/domain/demoScript";
-import type { CatalogModel, OutputDef, ProviderId, State } from "../../src/domain/types";
+import type { CatalogModel, LeadTrigger, OutputDef, ProviderId, State } from "../../src/domain/types";
 import type { CapabilityMap } from "../../src/runtime/adapter";
 import { TERMINAL_BRIEF, addDictionarySample, addFlowRules, askedKinds, asksForRules, designerAsk, fakePeAnswer, reviseSample, variantsToRevise, writeSamplePrototype, writeTerminalSample } from "../studio/sample";
 import { statusAnswer, statusQuestion } from "./fakeStatus";
@@ -33,7 +33,7 @@ interface Proc {
   title?: string;
   interruptAt?: number;
   /** Lead runs answer with a reply (and, when planning, one proposal) instead of step outputs. */
-  lead?: "planning" | "message" | "decisions";
+  lead?: LeadTrigger;
   /** The lead envelope, kept so a simulated message run can steer from what it was shown. */
   prompt?: string;
   /** The output schema a lead run's answer must match, when the service gave one. */
@@ -221,7 +221,9 @@ const FOCUS_WORDS: Record<string, string> = { "what exists": "material", "the ex
  * says it is simulated.
  */
 export function fakeStudio(prompt: string): Record<string, unknown> | undefined {
-  if (!/^## The studio$/m.test(prompt) || !/^- No round is open\./m.test(prompt)) return undefined;
+  // The simulated lead runs the studio in Vision only: while the factory runs it gets the studio brief too (pass 5), but
+  // it cannot tell a message about the design from one about the work, so it opens no round there.
+  if (!/^Project stage: shaping$/m.test(prompt) || !/^## The studio$/m.test(prompt) || !/^- No round is open\./m.test(prompt)) return undefined;
   const scope = (/^Devices \(the user's scope\): ([^\n]*)\.$/m.exec(prompt)?.[1] ?? "desktop").split(", ");
   const screens = scope.filter((d) => d === "desktop" || d === "mobile");
   const asIs = /^No round yet, and the repository has code\./m.test(prompt);
@@ -292,10 +294,120 @@ export function fakePlanningProposal(prompt: string): Record<string, unknown> {
 }
 
 /**
+ * ORC-029 pass 5: the simulated lead's revisions of the work the PE sent back, read only from the envelope's "Work the
+ * PE sent back" section: for each task, its title as it was and "revises" naming it, with the outcome noting the change.
+ * The simulated lead makes no real change: the stand-in proposal only says it made one.
+ */
+export function fakeRevisions(prompt: string): Record<string, unknown>[] {
+  const at = prompt.indexOf("\n## Work the PE sent back (");
+  if (at < 0) return [];
+  const section = prompt.slice(at + 1).split("\n## ")[0];
+  return [...section.matchAll(/^- (\S+) "([^"\n]*)" \(spec r\d+\), round \d+ of \d+: /gm)].map(([, id, title]) => ({
+    title,
+    area: null,
+    whyNow: "The PE asked for a change before the work starts.",
+    outcome: `${title}, with the change the PE asked for (simulated revision).`,
+    benefit: null,
+    scopeIncluded: ["The change the PE asked for"],
+    scopeExcluded: ["Anything the PE did not ask for"],
+    options: [
+      { id: "A", name: "As revised", approach: "Make the change the PE asked for, and nothing else", benefit: "The PE's concern is met", effort: "Small", risks: "Low", reversibility: "High" },
+      { id: "B", name: "Defer", approach: "Do nothing now", benefit: "No cost", effort: "None", risks: "No improvement", reversibility: "N/A" },
+    ],
+    recommendedOptionId: "A",
+    rationale: "The PE's change, made as asked (simulated: no real evidence).",
+    uncertainty: "Simulated; no real evidence.",
+    acceptance: ["The change completes review"],
+    flowId: null,
+    priority: null,
+    revises: id,
+  }));
+}
+
+/** A simulated proposal for a change order's update: the whole proposal, labelled as simulated. */
+function fakeChangeProposal(title: string, refs: string[], outcome: string): Record<string, unknown> {
+  return {
+    title,
+    area: null,
+    whyNow: "The owner locked in a change to the design.",
+    outcome: `${outcome} (simulated: no agent read the design).`,
+    benefit: null,
+    scopeIncluded: ["What the locked-in design changed"],
+    scopeExcluded: ["Anything the design did not change"],
+    options: [
+      { id: "A", name: "Build the change", approach: "Build what the version in force shows", benefit: "The factory builds the design in force", effort: "Small", risks: "Low", reversibility: "High" },
+      { id: "B", name: "Defer", approach: "Do nothing now", benefit: "No cost", effort: "None", risks: "The factory builds an old design", reversibility: "N/A" },
+    ],
+    recommendedOptionId: "A",
+    rationale: "The owner's Lock in changed what this builds (simulated: no real evidence).",
+    uncertainty: "Simulated; no real evidence.",
+    acceptance: ["It matches the version in force"],
+    flowId: null,
+    priority: null,
+    blueprintRefs: refs,
+    revises: null,
+  };
+}
+
+/**
+ * ORC-029 pass 5 (5b): the simulated lead's answer to the change order its brief lists, read only from the brief. Each
+ * touched task gets the update the brief names: one spec update, one revision task, one retirement (and as many of
+ * each as the change order has); each new item gets one new task. Undefined when the brief lists no change order.
+ */
+export function fakeChangeOrder(prompt: string): { rev: number; updates: Record<string, unknown>[] } | undefined {
+  const head = /^## Change order r(\d+): /m.exec(prompt);
+  if (!head) return undefined;
+  const rev = Number(head[1]);
+  const section = prompt.slice(head.index + 3).split("\n## ")[0];
+  const updates: Record<string, unknown>[] = [];
+  const tasks = section.matchAll(/^- (\S+) "([^"\n]*)" \[[^\]\n]*\]: cites (.*?)\. Planned at the Lock in: [^\n]*\. Your update: "(update-spec|revise|retire)"\.$(?:\n {2}The user chose option ("[^"\n]*") of this task: name ("(?:[^"\\\n]|\\.)*"), approach ("(?:[^"\\\n]|\\.)*")\.)?/gm);
+  for (const [, task, title, cites, action, chosenId, chosenName, chosenApproach] of tasks) {
+    const approved = [...cites.matchAll(/(\S+) \((?:changed|added|unchanged)\)/g)].map((m) => m[1]);
+    if (action === "retire") updates.push({ action, task, why: "Simulated: it builds only parts the owner dropped.", proposal: null });
+    else if (action === "update-spec") {
+      const proposal = fakeChangeProposal(title, approved, `${title}, as the version in force shows`);
+      // The simulated lead keeps the option the owner chose as it is, as its brief asks.
+      if (chosenId) {
+        const kept = { id: JSON.parse(chosenId) as string, name: JSON.parse(chosenName) as string, approach: JSON.parse(chosenApproach) as string };
+        proposal.options = [kept, ...(proposal.options as { id: string }[]).filter((o) => o.id !== kept.id)];
+      }
+      updates.push({ action, task, why: "Simulated: its spec now builds the version in force.", proposal });
+    }
+    else updates.push({ action, task, why: "Simulated: a revision builds the change on top of the work.", proposal: fakeChangeProposal(`Revise ${title} (change order r${rev})`, approved, `${title} changed as the version in force shows`) });
+  }
+  for (const [, item, title] of section.matchAll(/^- (\S+) \S+ "([^"\n]*)" v\d+[^\n]*: no task cites it yet\. Your update: "new-task", citing \S+\.$/gm)) {
+    updates.push({ action: "new-task", task: null, why: "Simulated: the owner added it, and no task builds it yet.", proposal: fakeChangeProposal(`Build ${title} (change order r${rev})`, [item], `${title}, as the version in force shows`) });
+  }
+  return { rev, updates };
+}
+
+/**
+ * ORC-029 pass 5: a simulated PE's verdict on new work in the factory, read only from its envelope. A proposal the lead
+ * has not revised yet gets one change and one open case, so the loop shows the lead revising and a question going to
+ * the owner; a revision gets feasible, with each earlier ask met; a breakdown or a design gets feasible at once.
+ */
+export function fakeNewWorkPeAnswer(prompt: string): string {
+  const reasons = "Simulated: the fake runtime's PE, not an agent. It judged nothing about feasibility, scale, longevity or budget;";
+  const asks = [...prompt.matchAll(/^- `(r\d+)`, round \d+, /gm)].map((m) => m[1]);
+  const proposal = /^# PE review run \S+: new work in the factory, a task the lead proposes/m.test(prompt);
+  const verdict = asks.length
+    ? { earlier: asks.map((ask) => ({ ask, met: true })), verdict: "feasible", reasons: `${reasons} it finds each earlier ask met.` }
+    : proposal
+      ? {
+          verdict: "feasible-if",
+          reasons: `${reasons} it asks for a change on the lead's first take, so the loop shows the lead revising.`,
+          change: "Simulated: a stand-in change, which the simulated lead makes in a revision.",
+          openCases: [{ text: "Simulated: should this work wait for the friends' confirmations, or start at once?", why: "Simulated: a stand-in question, so an open case goes to the owner through the lead." }],
+        }
+      : { verdict: "feasible", reasons: `${reasons} it agrees so the work can go on.` };
+  return `Simulated PE review of new work: no agent read it.\n\n\`\`\`json\n${JSON.stringify({ verdicts: [verdict] }, null, 2)}\n\`\`\`\n`;
+}
+
+/**
  * A simulated lead reply in the required JSON shape, as text: the reply, then the object in a fenced JSON block (what a
  * lead sends when its runtime applies no output schema).
  */
-export function fakeLeadText(attemptId: string, trigger: "planning" | "message" | "decisions", prompt = "", board?: State, nowMs = Date.now()): string {
+export function fakeLeadText(attemptId: string, trigger: LeadTrigger, prompt = "", board?: State, nowMs = Date.now()): string {
   const out = fakeLeadReply(attemptId, trigger, prompt, board, nowMs);
   return `${String(out.reply)}\n\n\`\`\`json\n${JSON.stringify(out, null, 2)}\n\`\`\`\n`;
 }
@@ -306,13 +418,17 @@ export function fakeLeadText(attemptId: string, trigger: "planning" | "message" 
  * offline maps going?") is answered from `board`, the service's state now (fakeStatus.ts); without it (unit tests
  * of the text alone), the reply says what the demo lead can do.
  */
-export function fakeLeadReply(attemptId: string, trigger: "planning" | "message" | "decisions", prompt = "", board?: State, nowMs = Date.now()): Record<string, unknown> {
+export function fakeLeadReply(attemptId: string, trigger: LeadTrigger, prompt = "", board?: State, nowMs = Date.now()): Record<string, unknown> {
   void attemptId; // never part of any title or text
-  const proposals = trigger === "planning" ? [fakePlanningProposal(prompt)] : [];
+  // ORC-029 pass 5: the work the PE sent back, which the run was shown whatever started it, revised as asked.
+  const revisions = fakeRevisions(prompt);
+  const proposals = [...(trigger === "planning" ? [fakePlanningProposal(prompt)] : []), ...revisions];
   const steer = trigger === "message" ? fakeSteer(prompt) : undefined;
   const vision = trigger === "message" ? fakeVision(prompt) : undefined;
   const shaping = trigger === "message" ? fakeShaping(prompt) : undefined;
   const studio = trigger === "message" ? fakeStudio(prompt) : undefined;
+  // ORC-029 pass 5 (5b): a run started for a change order answers it with an update per touched task.
+  const changeOrder = trigger === "change-order" ? fakeChangeOrder(prompt) : undefined;
   // ORC-013: the simulated lead accepts every finding routed to it; a real lead weighs each one.
   // ORC-029 2d: the decisions it takes as the PE state their cost; accepting adds none.
   const decisions = [
@@ -333,8 +449,11 @@ export function fakeLeadReply(attemptId: string, trigger: "planning" | "message"
     ? ` I opened a round on ${round.focus === "material" ? "the product as it is today" : `the ${round.focus}`} and asked the designer for one run, with one question beside it (simulated).`
     : "";
   // The reply carries the simulated chip; the text says only what happened.
-  const replyText =
-    trigger === "planning"
+  const replyText = changeOrder
+    ? `I answered change order r${changeOrder.rev} with ${changeOrder.updates.length} update${changeOrder.updates.length === 1 ? "" : "s"}, one for each task it touches and each new item. The list under this reply shows what the service applied.`
+    : trigger === "pe-review"
+      ? `I revised ${revisions.length === 1 ? "the task" : `the ${revisions.length} tasks`} the PE sent back, making the change it asked for; the PE reviews ${revisions.length === 1 ? "it" : "them"} again.`
+      : trigger === "planning"
       ? "I reviewed the board and proposed one small task."
       : vision
         ? `Here is what I understand: ${newestMessage(prompt) ?? "your message"} (assumption: that is the whole problem). I drafted a vision from your words with the assumptions marked, and three questions with suggested answers. Accept, edit or dismiss the draft, and answer what you can.`
@@ -349,7 +468,7 @@ export function fakeLeadReply(attemptId: string, trigger: "planning" | "message"
               ? statusAnswer(board, question, nowMs)
               : "Noted; I changed nothing. Ask me what is running, what needs you or how a task is going; tell me what to focus on; or ask me to tell the coder on a task something.";
   const reply = `${replyText}${studioLine}`;
-  return { reply, proposals, ...(steer ? { steer } : {}), ...(vision ? { vision } : {}), ...(shaping ?? {}), ...(decisions.length ? { decisions } : {}), ...(studio ? { studio } : {}) };
+  return { reply, proposals, ...(steer ? { steer } : {}), ...(vision ? { vision } : {}), ...(shaping ?? {}), ...(decisions.length ? { decisions } : {}), ...(studio ? { studio } : {}), ...(changeOrder ? { changeOrder } : {}) };
 }
 
 /**
@@ -520,7 +639,16 @@ export class FakeAdapter implements RuntimeAdapter {
   start(a: Assignment) {
     if (a.role === "lead" && a.stepId === "LEAD") {
       if (this.procs.has(a.attemptId)) return;
-      this.procs.set(a.attemptId, { progress: 0, outputs: [], lead: /^# Lead run \S+ \(planning\)/.test(a.prompt) ? "planning" : /^# Lead run \S+ \(decisions on findings\)/.test(a.prompt) ? "decisions" : "message", prompt: a.prompt, ...(a.outputSchema ? { outputSchema: a.outputSchema } : {}) });
+      const lead: LeadTrigger = /^# Lead run \S+ \(planning\)/.test(a.prompt)
+        ? "planning"
+        : /^# Lead run \S+ \(decisions on findings\)/.test(a.prompt)
+          ? "decisions"
+          : /^# Lead run \S+ \(revisions for the PE\)/.test(a.prompt)
+            ? "pe-review"
+            : /^# Lead run \S+ \(change order\)/.test(a.prompt)
+              ? "change-order"
+              : "message";
+      this.procs.set(a.attemptId, { progress: 0, outputs: [], lead, prompt: a.prompt, ...(a.outputSchema ? { outputSchema: a.outputSchema } : {}) });
       this.emit({ type: "started", attemptId: a.attemptId });
       return;
     }
@@ -626,6 +754,11 @@ export class FakeAdapter implements RuntimeAdapter {
       if (p.progress >= 100) {
         this.dropNotes(id, p, "the run ended first");
         this.procs.delete(id);
+        if (p.studioRole === "pe" && /^# PE review run \S+: new work in the factory/.test(p.prompt ?? "")) {
+          // ORC-029 pass 5: a simulated PE on new work in the factory answers from its envelope alone.
+          this.emit({ type: "completed", attemptId: id, finalText: fakeNewWorkPeAnswer(p.prompt ?? "") });
+          continue;
+        }
         if (p.studio !== undefined && p.studioRole === "pe") {
           // A simulated PE reads the version's manifest and its envelope (its earlier asks), and answers as a real one
           // would: a verdict per variant, each with its checks of the earlier asks on a later pass.

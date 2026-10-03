@@ -21,19 +21,22 @@ import { cardHref } from "./settings/sections";
 type Confirm = (o: ConfirmOptions) => Promise<boolean>;
 type Send = (name: Parameters<ReturnType<typeof useStore>["send"]>[0], args?: object) => Promise<SendResult>;
 
-/** The whole configuration to save: the live one with a section's fields on top. */
+/** The whole configuration to save: the live one with a section's fields on top. An empty test report reads none. */
 function configWith(live: ChecksConfig, patch: Partial<Omit<ChecksConfig, "rev">>): Omit<ChecksConfig, "rev"> {
   const { rev: _rev, ...rest } = live;
-  return { ...rest, ...patch, commands: (patch.commands ?? live.commands).map((c) => ({ ...c, argv: [...c.argv] })) };
+  const { testReport, ...out } = { ...rest, ...patch, commands: (patch.commands ?? live.commands).map((c) => ({ ...c, argv: [...c.argv] })) };
+  return testReport?.trim() ? { ...out, testReport: testReport.trim() } : out;
 }
 
 const saveArgs = (config: Omit<ChecksConfig, "rev">) => ({ config, ...(config.sandbox === "none" ? { acknowledgeUnsandboxed: true } : {}) });
 
 // ---------- Quality › Checks ----------
 
-export type ChecksDraft = { enabled: boolean; commands: CheckCommand[] };
+/** `testReport`: the JUnit XML report the test run writes (pass 5); empty reads no report. */
+export type ChecksDraft = { enabled: boolean; commands: CheckCommand[]; testReport: string };
+export const CHECKS_KEYS: readonly (keyof ChecksDraft)[] = ["enabled", "commands", "testReport"];
 
-export const liveChecks = (state: State): ChecksDraft => ({ enabled: state.project.checks.enabled, commands: state.project.checks.commands });
+export const liveChecks = (state: State): ChecksDraft => ({ enabled: state.project.checks.enabled, commands: state.project.checks.commands, testReport: state.project.checks.testReport ?? "" });
 
 /** Why the draft's commands cannot be saved, in the domain's words (validateChecks), or undefined. */
 export function checksProblem(state: State, v: ChecksDraft): string | undefined {
@@ -118,6 +121,18 @@ export function ChecksCard({ v, set }: { v: ChecksDraft; set: (p: Partial<Checks
           {sandboxLine} <a href={cardHref("sandbox")}>Sandbox details in Advanced</a>.
         </p>
       )}
+      <Field
+        label="Test report (JUnit XML)"
+        className="s-gap"
+        hint={
+          <>
+            Where your test run writes its JUnit XML report, inside the repository. The checks read one result per test from it, so each rule of a flow shows passed, failed, skipped or &quot;No test&quot;. For example: vitest{" "}
+            <code className="s-mono">--reporter=junit --outputFile=reports/junit.xml</code>, jest with jest-junit, or pytest <code className="s-mono">--junitxml=reports/junit.xml</code>. Empty: no report is read.
+          </>
+        }
+      >
+        <Input type="text" className="s-mono" value={v.testReport} placeholder="reports/junit.xml" onChange={(e) => set({ testReport: e.target.value })} />
+      </Field>
 
       {suggested && (
         <Banner

@@ -180,7 +180,9 @@ const seconds = (ms: number) => `${Math.max(1, Math.round(ms / 1000))} s`;
 /** One row per command of a check run: status, exit code, duration, the excerpt and the full log; how it ran. */
 export function CheckResults({ run, attemptId }: { run: CheckRunRecord; attemptId: string }) {
   const { service } = useStore();
-  const how = [run.sandbox === "codex" ? "sandboxed" : "no sandbox", ...(run.reusedFrom ? [`same result as ${run.reusedFrom} (not run again)`] : [])];
+  // In the project's environment the container is the boundary, whatever the host sandbox setting is.
+  const inContainer = run.environment?.ran === "container";
+  const how = [inContainer ? "in the project's container, with no network" : run.sandbox === "codex" ? "sandboxed" : "no sandbox", ...(run.reusedFrom ? [`same result as ${run.reusedFrom} (not run again)`] : [])];
   return (
     <div className="check-results">
       <div className="muted small t-list__head">
@@ -188,7 +190,7 @@ export function CheckResults({ run, attemptId }: { run: CheckRunRecord; attemptI
           Commit <span className="mono">{run.sha.slice(0, 12)}</span> · settings r{run.configRev} · {how.join(" · ")}
         </span>
         {run.simulated && <SimulatedChip />}
-        {run.sandbox === "none" && <Chip tone="fail">ran without a sandbox</Chip>}
+        {!inContainer && run.sandbox === "none" && <Chip tone="fail">ran without a sandbox</Chip>}
         {run.touchedInputs.length ? <span>edits protected check inputs: {run.touchedInputs.join(", ")}</span> : null}
       </div>
       <ul className="plain">

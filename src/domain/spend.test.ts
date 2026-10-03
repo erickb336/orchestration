@@ -6,7 +6,6 @@
 import { describe, expect, it } from "vitest";
 import { runCommand } from "./commands";
 import * as M from "./model";
-import { startFactoryAsOwner } from "./testing/factory";
 import { needsYouItems } from "./needsYou";
 import { buildSeed } from "./seed";
 import { budgetStop, buildingSpend, estimateUsd, PRICES, type ModelPrice } from "./spend";
@@ -212,7 +211,7 @@ describe("runs with no recorded cost, while a building budget is set", () => {
       detail:
         "The budget's stop counts each at its run limit, the most it could cost; one with no spend limit (Codex has none) stops new work until you raise the budget or continue past it. Runs: run-a (codex · gpt-x, no price), run-b (codex · gpt-x, no price), run-c (codex · gpt-x, no price).",
       action: "Settings",
-      href: "#/settings/project",
+      href: "#/settings/project/budgets",
     });
     // Once every run has a recorded cost there is nothing to say.
     expect(item(withRuns([codexRun("run-d", "gpt-6.1-sol", { inputTokens: 1000, outputTokens: 100 })]))).toBeUndefined();
@@ -233,6 +232,15 @@ describe("runs with no recorded cost, while a building budget is set", () => {
     });
     const single = item(M.setBudgets(withRuns([], [lead]), { buildingUsd: 100, maintenanceUsdPerMonth: null }, at(1)));
     expect(single).toMatchObject({ what: "1 run has no recorded cost (no usage was recorded)" });
+  });
+
+  it("a task run of the fake runtime is a known $0: it never holds new work, however small the budget", () => {
+    const sim: Attempt = { ...codexRun("run-s", "codex-sample-large"), simulated: true };
+    const s = M.setBudgets(withRuns([sim, { ...sim, id: "run-t" }]), { buildingUsd: 0.01, maintenanceUsdPerMonth: null }, at(1));
+    expect(budgetStop(s)).toBeUndefined();
+    expect(item(s)).toBeUndefined();
+    // The same runs without the mark have no recorded cost: the stop holds new work.
+    expect(budgetStop(M.setBudgets(withRuns([codexRun("run-s", "codex-sample-large")]), { buildingUsd: 0.01, maintenanceUsdPerMonth: null }, at(1)))).toBeDefined();
   });
 
   it("at the stop, both are asked: the stop first, then the runs it cannot count", () => {
@@ -290,7 +298,7 @@ describe("the budget stop", () => {
     const budget = Math.floor(spend.usd * 100) / 100;
     const at2 = M.setBudgets(s, { buildingUsd: budget, maintenanceUsdPerMonth: null }, at(2));
     const [first] = needsYouItems(at2, T0);
-    expect(first).toMatchObject({ kind: "open", key: "budget", what: `The building budget is reached: $${spend.usd.toFixed(2)} of $${budget.toFixed(2)}`, href: "#/settings/project" });
+    expect(first).toMatchObject({ kind: "open", key: "budget", what: `The building budget is reached: $${spend.usd.toFixed(2)} of $${budget.toFixed(2)}`, href: "#/settings/project/budgets" });
     expect(first.kind === "open" && first.detail).toBe("Estimated at the providers' published prices. Nothing new starts; running work finishes. Raise the budget, or continue past it.");
     // Below the budget there is nothing to ask about the stop.
     expect(needsYouItems(M.setBudgets(s, { buildingUsd: spend.usd + 1, maintenanceUsdPerMonth: null }, at(2)), T0).some((i) => i.key === "budget")).toBe(false);
@@ -337,7 +345,7 @@ describe("the budget stop", () => {
     expect(budgetStop(raised)).toBeUndefined();
   });
 
-  it("continuing past the budget is the owner's recorded choice; it starts work again until the budget changes or the project goes back to shaping", () => {
+  it("continuing past the budget is the owner's recorded choice; it starts work again until the budget changes", () => {
     const s = spentProject();
     const spend = buildingSpend(s).usd;
     const stopped = M.setBudgets(s, { buildingUsd: spend, maintenanceUsdPerMonth: null }, at(2));
@@ -350,10 +358,6 @@ describe("the budget stop", () => {
     // A new budget amount the spend has reached stops again.
     const lowered = M.setBudgets(past, { buildingUsd: spend / 2, maintenanceUsdPerMonth: null }, at(5));
     expect(running(M.dispatchEligible(lowered, at(6)), "EX-004")).toHaveLength(0);
-    // Going back to shaping ends it: the next start meets the stop again.
-    const back = startFactoryAsOwner(M.startVision(past, at(5)), at(6));
-    expect(back.project.budgetContinued).toBeUndefined();
-    expect(budgetStop(back)?.budgetUsd).toBe(spend);
   });
 
   it("changing the building budget ends continuing past it: set, continue, raise, then set it back, and the stop applies again", () => {

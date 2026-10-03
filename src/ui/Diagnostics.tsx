@@ -3,10 +3,11 @@
 // where the service runs. Settings renders them as one card, "Usage and service".
 
 import { useState } from "react";
+import type { SweepReport } from "../api";
 import * as M from "../domain/model";
 import { PROVIDERS, isProvider, type Attempt, type ProviderId } from "../domain/types";
 import { fmtTime, involvementOf } from "./common";
-import { Card, SegmentedControl } from "./kit";
+import { Button, Card, Checkbox, SegmentedControl } from "./kit";
 import { INVOLVEMENT_NAME } from "./Overview";
 import { useStore } from "./store";
 
@@ -43,6 +44,7 @@ export function DiagnosticsCard() {
       <div className="k-stack">
         <UsageCard />
         <ServiceCard />
+        <HousekeepingSection />
       </div>
     </Card>
   );
@@ -224,6 +226,82 @@ export function ServiceCard() {
           . Nothing runs while this service is stopped or the computer sleeps.
         </dd>
       </dl>
+    </section>
+  );
+}
+
+const TRIGGER: Record<SweepReport["trigger"], string> = { start: "at start", timer: "on the timer", owner: "by you" };
+const n = (k: number, what: string) => `${k} ${what}${k === 1 ? "" : "s"}`;
+
+/** What a sweep did, in one line. */
+function sweepSummary(r: SweepReport): string {
+  const done = [
+    r.archived ? `archived ${n(r.archived, "Codex thread")}` : "",
+    r.trashed ? `moved ${n(r.trashed, "Claude session folder")} to the Trash` : "",
+    r.containers ? `removed ${n(r.containers, "recorder container")}` : "",
+    r.stages ? `removed ${n(r.stages, "recorder stage folder")}` : "",
+  ].filter(Boolean);
+  const waits = [r.held ? `${n(r.held, "thread")} held open by another app` : "", r.recent ? `${n(r.recent, "item")} changed in the last hour` : ""].filter(Boolean);
+  const head = done.length ? done.join(", ") : "nothing to clean";
+  return waits.length ? `${head}; ${waits.join(" and ")} wait${r.held + r.recent === 1 ? "s" : ""} for the next sweep` : head;
+}
+
+/**
+ * Housekeeping (server/housekeeping.ts): what Orchestrator's runs left on this computer. The last sweep, the owner's
+ * setting for Codex and Claude, "Clean up now", and how to undo. A section of "Usage and service".
+ */
+export function HousekeepingSection() {
+  const { state, service, send, postJson, disabled } = useStore();
+  const [sweeping, setSweeping] = useState(false);
+  const hk = service?.housekeeping;
+  if (!hk) return null;
+  const last = hk.last;
+  const running = sweeping || hk.running;
+  return (
+    <section className="k-stack k-stack--tight" aria-labelledby="hk-h">
+      <h4 id="hk-h" className="no-margin">
+        Housekeeping
+      </h4>
+      <p className="muted small">
+        Runs leave nothing in your own apps, but a crash or a script still can. When the service starts, and every {hk.everyHours} hours, it looks for what Orchestrator's runs left and removes its own
+        recorder containers.{hk.ownerApps ? " With the setting below, it also archives their Codex threads and moves their Claude session folders to the Trash." : ""}
+      </p>
+      <Checkbox
+        label="Clean up what runs leave in Codex and Claude"
+        hint={hk.ownerApps ? "Only the threads and folders that Orchestrator's runs made. Nothing is deleted. Applies at once." : "The simulated service never touches Codex or Claude."}
+        checked={state.project.housekeepOwnerApps}
+        disabled={disabled || !hk.ownerApps}
+        onChange={(e) => void send("setHousekeepOwnerApps", { on: e.currentTarget.checked })}
+      />
+      <dl className="kv">
+        <dt>Last sweep</dt>
+        <dd role="status">{running ? "Running…" : last ? `${fmtTime(last.at)}, ${TRIGGER[last.trigger]}: ${sweepSummary(last)}.` : "None yet."}</dd>
+        {!running && last && last.notes.length > 0 && (
+          <>
+            <dt>Notes</dt>
+            <dd>
+              {last.notes.map((note, i) => (
+                <div key={i}>{note}</div>
+              ))}
+            </dd>
+          </>
+        )}
+      </dl>
+      <div className="s-inline">
+        <Button
+          size="small"
+          disabled={disabled || running}
+          loading={running}
+          onClick={async () => {
+            setSweeping(true);
+            await postJson("/api/maintenance/housekeeping", {});
+            setSweeping(false);
+          }}
+        >
+          {running ? "Cleaning up…" : "Clean up now"}
+        </Button>
+      </div>
+      <p className="muted small">To undo: unarchive the thread in Codex, or put the folder back from the Trash.</p>
     </section>
   );
 }

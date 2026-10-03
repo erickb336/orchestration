@@ -1,0 +1,7 @@
+/* The change order (ORC-029 pass 5, screen 4). The rows are the kit's; this adds the lists and the line's spacing. */
+.co-page { max-width: 64rem; }
+.co-page .k-card__body { display: grid; gap: var(--space-3); }
+.co-row .k-row__main { display: grid; gap: var(--space-1); }
+.co-row .k-row__title .k-chip { margin-right: var(--space-1); vertical-align: 0.05em; }
+.co-left { color: var(--st-you); }
+.co-list { margin: 0; padding-left: 1.1rem; display: grid; gap: var(--space-1); overflow-wrap: anywhere; }

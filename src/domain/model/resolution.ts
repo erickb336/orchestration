@@ -14,6 +14,7 @@ import {
   type StepDef,
   type Task,
   roleDefaultFor,
+  isServiceRole,
   isProvider,
 } from "../types";
 import { consumedInputs } from "./artifacts";
@@ -105,7 +106,7 @@ export function writersOf(s: State, t: Task, st: StepDef): ChangeAuthor[] {
 export function resolveStep(s: State, t: Task, st: Step): Resolution {
   const p = s.project;
   // A Checks step is run by the service, never by a provider; dispatch never asks for it.
-  if (st.role === "checks") return { ok: false, reason: "run by the service" };
+  if (isServiceRole(st.role)) return { ok: false, reason: "run by the service" };
   let selection: ModelSelection;
   let source: SelectionSource;
   let independence: string | undefined;

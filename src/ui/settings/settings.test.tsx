@@ -125,8 +125,10 @@ describe("the Settings page", () => {
 
   it("Project holds the repository, the stage and delivery basics; the rest of the pull-request options are in Advanced", () => {
     const t = text(render(s, <ProjectSection current onDirty={noop} />));
-    for (const x of ["Repository path", "Stage", "Back to shaping", "Delivery", "Off", "Local branch", "GitHub pull requests", "Remote", "Base branch", "You merge", "Merges automatically"]) expect(t).toContain(x);
+    for (const x of ["Repository path", "Stage", "Open Vision", "Delivery", "Off", "Local branch", "GitHub pull requests", "Remote", "Base branch", "You merge", "Merges automatically"]) expect(t).toContain(x);
     for (const x of ["Review bots", "This repository has no CI", "Protected files", "Re-run a check GitHub cancelled", "Open pull requests at most"]) expect(t).not.toContain(x);
+    // No way back from the factory (pass 5): Vision stays open, and only Pause stops building.
+    expect(t).not.toMatch(/Back to (shaping|vision)/i);
   });
 
   it("Project › Kind of product: the three kinds as checkboxes, with who uses each and what the designer makes; any combination, never none once chosen", () => {

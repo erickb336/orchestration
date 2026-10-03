@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import * as M from "./model";
 import { buildSeed } from "./seed";
+import { inVision } from "./testing/factory";
 import { ControlError, type State } from "./types";
 
 const T0 = Date.parse("2026-09-30T12:00:00Z");
@@ -161,7 +162,8 @@ describe("V4 removal and history", () => {
   });
 
   it("every other revision carries the set forward: a hand edit, the lead's focus change, an accepted draft, an undo", () => {
-    let s = add(seed(), doc("a.md", { hash: hash(1) }), 1);
+    // In Vision, where a hand edit of the text goes into force at once (while building it waits in the draft).
+    let s = add(inVision(seed(), at(0)), doc("a.md", { hash: hash(1) }), 1);
     const ids = M.currentVision(s).docIds;
     s = M.editVision(s, 2, "New text", "New focus", "edited", at(2));
     expect(M.currentVision(s)).toMatchObject({ rev: 3, text: "New text", docIds: ids });
@@ -171,7 +173,7 @@ describe("V4 removal and history", () => {
     expect(M.currentVision(s)).toMatchObject({ rev: 4, author: "lead", focus: "Speed", docIds: ids });
     s = M.undoSteering(s, s.steering[0].id, undefined, at(6)).state;
     expect(M.currentVision(s)).toMatchObject({ rev: 5, focus: "New focus", docIds: ids });
-    s = M.startVision(s, at(7));
+    s = inVision(s, at(7));
     s = M.postMessage(s, "draft it", at(8));
     const r2 = M.startLeadRun(s, { provider: "claude", model: "m", trigger: "message" }, at(9));
     s = M.completeLeadRun(r2.state, r2.runId, { reply: "ok", proposals: [], vision: { text: "Drafted", focus: "Drafted focus" } }, at(10));

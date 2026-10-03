@@ -6,11 +6,13 @@ import * as C from "./checks";
 import * as D from "./delivery";
 import * as F from "./findings";
 import { buildDemo } from "./demo";
+import { setEnvironment } from "./environment";
 import * as M from "./model";
 import * as P from "./peReview";
 import type { PeReviewTarget } from "./peReview";
 import * as B from "./studio/blueprint";
 import { setDomains } from "./studio/domains";
+import { setPreview } from "./studio/evidence";
 import * as R from "./studio/runs";
 import * as S from "./studio/studio";
 import { type Mark, type StudioMaker, type VariantRules, ROUND_FOCUSES, STUDIO_AGENT_ROLES, STUDIO_ARTIFACT_KINDS, STUDIO_RUN_KINDS, VERDICTS } from "./studio/types";
@@ -185,10 +187,13 @@ function verdictInput(v: unknown): S.VerdictInput {
   };
 }
 
-/** The work a PE review verdict or an overrule is about: `taskId` (a lead proposal or a breakdown item), or `changeOrder` (a blueprint revision). */
+/**
+ * The work a PE review verdict or an overrule is about: `taskId` (a lead proposal, or a spec a change order updated),
+ * or `taskId` with `stepId` (the breakdown or the design that step made).
+ */
 function peReviewTarget(a: Args): PeReviewTarget {
-  if ((a.taskId === undefined) === (a.changeOrder === undefined)) throw new InvalidCommandError("name the work: taskId, or changeOrder");
-  return a.taskId !== undefined ? { taskId: str(a, "taskId") } : { changeOrder: int(a, "changeOrder") };
+  if (a.taskId === undefined) throw new InvalidCommandError("name the work: taskId");
+  return { taskId: str(a, "taskId"), ...(a.stepId === undefined ? {} : { stepId: str(a, "stepId") }) };
 }
 
 /**
@@ -223,17 +228,16 @@ export const COMMANDS = {
   // shaping the vision with the lead first (Vision), and the factory
   /**
    * Start the factory: the owner's agreement, and the only way from shaping to building. `agreed` must be true;
-   * `blueprintRev` and `visionRev` are the revisions the owner saw (compare-and-set); `acceptOpen` names the open
-   * items they confirm.
-   * Needs a vision; applies the settings and records the start; releases the roadmap on Autopilot.
+   * `draftRev` and `visionRev` are the revisions the owner saw in the pre-flight (compare-and-set); `acceptOpen` names
+   * the open items they confirm.
+   * Needs a vision; locks in the draft (the first Lock in), applies the settings and records the start; releases the
+   * roadmap on Autopilot.
    */
   startFactory: same((s, now, a) => {
     if (a.agreed !== true) throw new InvalidCommandError("agreed must be true: the factory starts only on your agreement");
-    return M.startFactory(s, { agreed: true, blueprintRev: num(a, "blueprintRev"), visionRev: num(a, "visionRev"), settings: factorySettings(a.settings), acceptOpen: strings(a.acceptOpen, "acceptOpen") }, now);
+    return M.startFactory(s, { agreed: true, draftRev: int(a, "draftRev"), summaryDigest: str(a, "summaryDigest"), visionRev: num(a, "visionRev"), settings: factorySettings(a.settings), acceptOpen: strings(a.acceptOpen, "acceptOpen") }, now);
   }),
-  /** Back to vision: nothing running is stopped; nothing new starts. */
-  startVision: same((s, now) => M.startVision(s, now)),
-  /** The device scope: at least one of desktop, mobile and terminal. Chosen in Vision. */
+  /** The device scope: at least one of desktop, mobile and terminal. Chosen in Vision, which stays open while the factory runs. */
   setDevices: same((s, now, a) =>
     M.setDevices(
       s,
@@ -268,10 +272,25 @@ export const COMMANDS = {
   sendFeedback: same((s, now, a) => S.sendFeedback(s, array<unknown>(a.entries, "entries").map(feedbackEntry), now)),
   /** Overrule one of the PE's objections, with your reason (recorded). */
   overruleObjection: same((s, now, a) => S.overruleObjection(s, str(a, "verdictId"), str(a, "why"), now)),
-  /** Approve one artifact version (the one you saw) into the blueprint, with a variant when it has several. Never the lead's. */
+  /** Approve one artifact version (the one you saw) into the blueprint's draft, with a variant when it has several. Never the lead's. */
   approveArtifact: same((s, now, a) => B.approveArtifact(s, { artifactId: str(a, "artifactId"), version: int(a, "version"), ...(a.variant === undefined ? {} : { variant: str(a, "variant") }) }, now)),
-  /** Approve a whole round into the blueprint; what cannot be approved as it stands is listed as open. Never the lead's. */
+  /** Approve a whole round into the draft; what cannot be approved as it stands is listed as open. Never the lead's. */
   approveRound: same((s, now, a) => B.approveRound(s, int(a, "round"), now)),
+  /** Drop an item from the draft: its part leaves the design. The item keeps its id, with the status "dropped". Never the lead's. */
+  dropBlueprintItem: same((s, now, a) => B.dropBlueprintItem(s, str(a, "itemId"), now)),
+  /** Discard the draft: it becomes the version in force again. `draftRev` is the draft revision you saw. Never the lead's. */
+  discardDraft: same((s, now, a) => B.discardDraft(s, int(a, "draftRev"), now)),
+  /**
+   * Lock in: put the whole draft into force as a new blueprint revision, with the summary you saw recorded as your
+   * agreement. `draftRev` is the draft revision the summary showed (compare-and-set). While building only: in Vision,
+   * Start the factory is the first Lock in. Never the lead's, a setting's or Autopilot's.
+   */
+  lockIn: same((s, now, a) => B.lockIn(s, { draftRev: int(a, "draftRev"), summaryDigest: str(a, "summaryDigest") }, now)),
+  /**
+   * Close a change order as it stands (pass 5): what the lead's updates left is recorded as not handled. Refused while
+   * the lead is answering it. Each line keeps its own Undo, Apply and Dismiss (the steering commands). Never the lead's.
+   */
+  closeChangeOrder: same((s, now, a) => M.closeChangeOrder(s, int(a, "rev"), now)),
 
   // the studio: the service's (SERVICE_COMMANDS), from the lead's, the designer's, the PE's and the probes' runs
   /** Returns { n }. */
@@ -340,11 +359,17 @@ export const COMMANDS = {
     return { state: r.state, result: { runId: r.runId } };
   },
 
-  // PE review of new work in the factory (ORC-029 2e)
-  /** The service's (SERVICE_COMMANDS), from the PE's review run: one verdict on pending work; on a task, with the spec revision the PE read. */
-  recordPeReview: same((s, now, a) =>
-    P.recordPeReview(s, { target: peReviewTarget(a), verdict: oneOf(a, "verdict", ["agree", "object"] as const), reasons: str(a, "reasons"), ...(a.specRev === undefined ? {} : { specRev: int(a, "specRev") }) }, now),
-  ),
+  // PE review of new work in the factory (ORC-029 2e, pass 5)
+  /**
+   * The service's (SERVICE_COMMANDS), from the PE's review run: one verdict (pass 4e's shape) on pending work, with what
+   * the PE read: a proposal's spec revision (`specRev`), or a step's output version (`version`).
+   */
+  recordPeReview: same((s, now, a) => {
+    const { variant: _variant, ...v } = verdictInput(a);
+    return P.recordPeReview(s, { ...v, target: peReviewTarget(a), ...(a.specRev === undefined ? {} : { specRev: int(a, "specRev") }), ...(a.version === undefined ? {} : { version: int(a, "version") }) }, now);
+  }),
+  /** The owner's: PE review of new work on or off. Off releases the work the PE is still reviewing; an objection already with you stays. */
+  setPeReviewsNewWork: same((s, now, a) => P.setPeReviewsNewWork(s, bool(a, "on"), now)),
   /** The owner's: overrule the PE's objection after three rounds, with your reason (recorded). */
   overrulePeReview: same((s, now, a) => P.overrulePeReview(s, peReviewTarget(a), str(a, "why"), now)),
 
@@ -464,6 +489,8 @@ export const COMMANDS = {
         maxConcurrent: num(c, "maxConcurrent"),
         protectedInputs: array<unknown>(c.protectedInputs, "config.protectedInputs").map((x) => String(x)),
         passEnv: array<unknown>(c.passEnv, "config.passEnv").map((x) => String(x)),
+        // Optional: absent, null or "" reads no test report.
+        ...(c.testReport === undefined || c.testReport === null || c.testReport === "" ? {} : { testReport: str(c, "testReport") }),
       },
       a.acknowledgeUnsandboxed === undefined ? false : bool(a, "acknowledgeUnsandboxed"),
       now,
@@ -471,6 +498,49 @@ export const COMMANDS = {
   }),
   /** Probe the checks sandbox now. */
   recheckChecks: same((s, now) => C.recheckChecks(s, now)),
+  /**
+   * How the service runs the built product to capture evidence (ORC-029 pass 5): the install, the preview and its
+   * port, the CLI's entry; `preview: null` clears it. The owner's only: the lead may propose one in its message.
+   */
+  setPreview: same((s, now, a) => {
+    if (a.preview === null) return setPreview(s, null, now);
+    const p = obj(a.preview, "preview");
+    const opt = (k: string) => (p[k] === undefined || p[k] === null ? undefined : p[k]);
+    return setPreview(
+      s,
+      {
+        ...(opt("install") !== undefined ? { install: strings(p.install, "preview.install") } : {}),
+        ...(opt("preview") !== undefined ? { preview: strings(p.preview, "preview.preview") } : {}),
+        ...(opt("port") !== undefined ? { port: num(p, "port") } : {}),
+        ...(opt("cliEntry") !== undefined && p.cliEntry !== "" ? { cliEntry: str(p, "cliEntry") } : {}),
+      },
+      now,
+    );
+  }),
+
+  /**
+   * The project's environment (docs/design/project-environment.md): the base image the owner confirmed (pinned by
+   * digest), the prepare commands and the hosts added to the registries; `environment: null` clears it. The owner's
+   * only: the lead may propose an image in its message.
+   */
+  setEnvironment: same((s, now, a) => {
+    if (a.environment === null) return setEnvironment(s, null, now);
+    const e = obj(a.environment, "environment");
+    const prepare = e.prepare === undefined || e.prepare === null ? [] : array<unknown>(e.prepare, "environment.prepare").map((c, i) => strings(c, `environment.prepare[${i}]`));
+    return setEnvironment(
+      s,
+      {
+        ...(e.image === undefined || e.image === null || e.image === "" ? {} : { image: str(e, "image") }),
+        prepare,
+        hosts: e.hosts === undefined || e.hosts === null ? [] : strings(e.hosts, "environment.hosts"),
+        ...(e.devcontainer === undefined || e.devcontainer === null ? {} : (() => {
+          const d = obj(e.devcontainer, "environment.devcontainer");
+          return { devcontainer: { file: str(d, "file"), sha256: str(d, "sha256") } };
+        })()),
+      },
+      now,
+    );
+  }),
 
   // the lead
   /** A message stops a planning run in progress so it is answered next; `taskId` names the task page it was sent from. */
@@ -612,11 +682,13 @@ export const COMMANDS = {
     return M.setWorkerEnvironment(s, provider(a.provider), env, now);
   }),
   setRunLimits: same((s, now, a) => M.setRunLimits(s, { maxTurns: num(a, "maxTurns"), timeoutMinutes: num(a, "timeoutMinutes"), maxBudgetUsd: num(a, "maxBudgetUsd") }, now)),
+  /** Whether housekeeping also archives Orchestrator's Codex threads and trashes its Claude session folders. */
+  setHousekeepOwnerApps: same((s, now, a) => M.setHousekeepOwnerApps(s, bool(a, "on"), now)),
 
   // the owner's budgets
   /** Both budgets in dollars, each a positive number or null (not set). */
   setBudgets: same((s, now, a) => M.setBudgets(s, { buildingUsd: numOrNull(a, "buildingUsd"), maintenanceUsdPerMonth: numOrNull(a, "maintenanceUsdPerMonth") }, now)),
-  /** At the building budget: new work starts again without raising it, until the budget changes or the project goes back to vision. */
+  /** At the building budget: new work starts again without raising it, until the budget changes. */
   continuePastBudget: same((s, now) => M.continuePastBudget(s, now)),
   /** A new project, shaping its vision (which may be empty) until you start the factory. */
   initProject: same((s, now, a) => M.initProject(s, { name: str(a, "name"), repoPath: str(a, "repoPath"), vision: str(a, "vision"), focus: str(a, "focus") }, now)),

@@ -3,7 +3,7 @@
 
 import * as C from "../checks";
 import * as F from "../findings";
-import { PE_REVIEW_HOLD, peReviewHold } from "../peReview";
+import { PE_OBJECTS_HOLD, PE_REVIEW_HOLD, peReviewHold, reviewedWhat, taskReviewHold } from "../peReview";
 import { type Deferral, type State, type Step, type Task, REVIEW_ROLES } from "../types";
 import { activeAttempts, findStep, getStep, isOpen, isSettled } from "./core";
 import { childrenSettled, currentChildren } from "./fanout";
@@ -128,6 +128,13 @@ export function stateLabel(s: State, t: Task): string {
   if ((col === "running" || col === "reviewing") && deferredBy(s, t)) return `${col === "running" ? "Running" : "In review"} · deferred after this step`;
   if (col === "reviewing") return "In review";
   if (col === "deferred") return deferredLabel(s, t)!;
+  // What a step made (a breakdown, a design) waits for PE review, or the PE objects to it (ORC-029 pass 5).
+  const stepReview = t.lifecycle === "active" && active.length === 0 ? taskReviewHold(t) : undefined;
+  if (stepReview?.step) {
+    const what = `${stepReview.step.id}'s ${reviewedWhat(t, stepReview.step)}`;
+    if (stepReview.hold === PE_REVIEW_HOLD) return stepReview.step.state === "done" ? `Waiting for PE review of ${what}` : `${stepReview.step.id} revises its ${reviewedWhat(t, stepReview.step)} for the PE`;
+    return stepReview.hold === PE_OBJECTS_HOLD ? `The PE objects to ${what}: needs you` : `PE review of ${what} could not finish: needs you`;
+  }
   if (t.lifecycle === "active" && active.length === 0 && waitingForChildren(s, t)) {
     const open = currentChildren(s, t).filter(isOpen).length;
     if (open === 0) return "Waiting for child pull requests to merge";
@@ -139,23 +146,23 @@ export function stateLabel(s: State, t: Task): string {
   // A Checks step that would start next waits while the sandbox is not ready; nothing runs unsandboxed by itself.
   if (t.lifecycle === "active" && active.length === 0 && C.checksHeld(s) && t.steps.some((st) => st.state === "pending" && st.role === "checks" && st.dependsOn.every((d) => isSettled(getStep(t, d))))) return C.HELD_LABEL;
   // While shaping, a step that would start next waits for Start building; nothing is paused.
-  if (t.lifecycle === "active" && active.length === 0) return s.project.stage === "shaping" ? "Next step waits (shaping)" : "Queued for next step";
+  if (t.lifecycle === "active" && active.length === 0) return s.project.stage === "shaping" ? "Next step waits (in Vision)" : "Queued for next step";
   if (col === "proposed" && waitingOn(s, t)) return waitingLabel(s, t);
   // The roadmap's own hold is named as such; the user's hold before start keeps its own label. What follows
   // Start building is decided by the involvement setting at that moment, so the label reads it now; a
   // dependency wait is shown under the shaping hold too.
   if (col === "ready" && t.heldForShaping) {
     const dep = waitingOn(s, t);
-    return `Planned; waits until you start building${dep ? ` and on ${dep}` : ""}, then ${startFactoryPlan(s).release ? "starts on Autopilot" : "waits for your go-ahead (your involvement setting)"}`;
+    return `Planned; waits until you start the factory${dep ? ` and on ${dep}` : ""}, then ${startFactoryPlan(s).release ? "starts on Autopilot" : "waits for your go-ahead (your involvement setting)"}`;
   }
   // PE review comes first: the involvement setting applies once the PE agreed (ORC-029 2e).
   const review = peReviewHold(t.peReview);
-  if ((col === "ready" || col === "proposed") && review) return review === PE_REVIEW_HOLD ? "Waiting for PE review" : "The PE objects: needs you";
+  if ((col === "ready" || col === "proposed") && review) return review === PE_REVIEW_HOLD ? "Waiting for PE review" : review === PE_OBJECTS_HOLD ? "The PE objects: needs you" : "PE review could not finish: needs you";
   // "Wait for my go-ahead" is the setting; the state names what it waits for. A project pause shows in the header, not here.
   if (col === "ready" && t.holdBeforeStart) return "Waiting for your go-ahead";
   // A dependency wait is shown before the stage, with shaping noted.
   if (col === "ready" && waitingOn(s, t)) return waitingLabel(s, t);
-  if (col === "ready" && s.project.stage === "shaping") return "Ready (shaping)";
+  if (col === "ready" && s.project.stage === "shaping") return "Ready (in Vision)";
   return col[0].toUpperCase() + col.slice(1);
 }
 
@@ -163,7 +170,7 @@ export function stateLabel(s: State, t: Task): string {
 function waitingLabel(s: State, t: Task): string {
   const dep = waitingOn(s, t)!;
   const d = s.tasks.find((x) => x.id === dep);
-  return `Waiting on ${dep}${d && deferredBy(s, d) ? " (deferred)" : ""}${s.project.stage === "shaping" ? " (shaping)" : ""}`;
+  return `Waiting on ${dep}${d && deferredBy(s, d) ? " (deferred)" : ""}${s.project.stage === "shaping" ? " (in Vision)" : ""}`;
 }
 
 /** Why runs on this task are stopping, derived from the stop requests and current desired state. */

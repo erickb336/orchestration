@@ -19,10 +19,6 @@
 /* The state stays on the area's line at every width (the onboarding list moves its action under the text). */
 .checklist.v-coverage li { padding: var(--space-1) 0; grid-template-columns: 1.4rem minmax(0, 1fr) auto; }
 
-/* Start building, with what it will do or why it cannot start yet. */
-.v-start { display: grid; gap: var(--space-1); justify-items: start; }
-.v-start p { margin: 0; }
-
 /* ---------- the lead's draft ---------- */
 .v-draft { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--warn-border); border-radius: var(--radius); background: var(--surface); min-width: 0; }
 .k-card__body > .v-draft { margin-bottom: var(--space-3); }

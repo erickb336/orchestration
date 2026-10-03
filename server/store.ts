@@ -134,7 +134,7 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
       project.stage = "shaping";
       project.shapingSince = now;
       doc.seq = (typeof doc.seq === "number" ? doc.seq : 0) + 1;
-      events.push({ id: `ev-${doc.seq}`, at: now, actor: "system", kind: "config", message: "Moved from building to shaping when the state format was upgraded: the project has no vision yet. Write or accept one, then start building." });
+      events.push({ id: `ev-${doc.seq}`, at: now, actor: "system", kind: "config", message: "Moved from the factory back to Vision when the state format was upgraded: the project has no vision yet. Write or accept one, then start the factory." });
     }
     if (project.stage === "shaping") {
       project.shapingSince ??= now;
@@ -337,10 +337,12 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
 };
 
 /**
- * Format 19's fields, added where a document lacks them. Format 19 is unreleased, and early builds of ORC-029 pass 2
- * wrote it before all of its fields existed, so this runs on every load of a format-19 database as well as in the
- * 18 → 19 upgrade. Idempotent. A change order without a handler takes the project's setting. Start records are
- * history and are never rewritten: an early start's settings carry `merge` where later ones carry `delivery`.
+ * Format 19's fields, added where a document lacks them. Format 19 is unreleased, and early builds of ORC-029 passes
+ * 2 to 4 wrote it before all of its fields existed, so this runs on every load of a format-19 database as well as in
+ * the 18 → 19 upgrade. Idempotent. A change order without a handler takes the project's setting. The blueprint's draft
+ * (pass 5) starts as a copy of the version in force, so the revisions stay in force and the draft holds no change.
+ * Start records are history and are never rewritten: an early start's settings carry `merge` where later ones carry
+ * `delivery`.
  */
 function normalize19(doc: Record<string, unknown>): Record<string, unknown> {
   const project = doc.project as Record<string, unknown>;
@@ -349,15 +351,67 @@ function normalize19(doc: Record<string, unknown>): Record<string, unknown> {
   project.domains ??= [];
   project.factoryStarts ??= [];
   project.changeOrders ??= "lead";
+  // PE review of new work (pass 5) came after the first format-19 builds. A project stored before it is off until the
+  // owner turns it on, so loading a database never starts a paid PE run by itself. A new project starts with it on.
+  project.peReviewsNewWork ??= false;
   project.budgets ??= { ...NO_BUDGETS };
+  // Housekeeping of the owner's apps (2026-10-03) came after the first format-19 builds: on, as the owner asked.
+  project.housekeepOwnerApps ??= true;
   doc.studio ??= emptyStudio();
   // Studio runs (pass 3a) came after the first format-19 builds: none were recorded before them.
   (doc.studio as { runs?: unknown[] }).runs ??= [];
   doc.blueprint ??= emptyBlueprint();
-  const blueprint = doc.blueprint as { changeOrders?: Record<string, unknown>[] };
-  for (const co of (blueprint.changeOrders ??= [])) co.handler ??= project.changeOrders;
+  const blueprint = doc.blueprint as { revisions?: { items: unknown[] }[]; draft?: unknown; changeOrders?: Record<string, unknown>[] };
+  // The draft (pass 5): the revisions stay in force, and the draft starts as a copy of the version in force, so it
+  // holds no change. Its revision starts at 0.
+  blueprint.draft ??= { rev: 0, items: structuredClone(blueprint.revisions?.at(-1)?.items ?? []) };
+  for (const co of (blueprint.changeOrders ??= [])) {
+    co.handler ??= project.changeOrders;
+    // Change orders from before pass 5 listed the tasks it touched, which the lead was to update, and dropped nothing.
+    if (co.tasks === undefined) co.tasks = ((co.affectedTasks ?? []) as string[]).map((taskId) => ({ taskId, handling: "update-spec" }));
+    delete co.affectedTasks;
+    co.droppedItems ??= [];
+    co.newWork ??= [];
+    // Early pass 5 builds put one PE review on a change order's updates; the PE now reviews the work each update makes.
+    delete co.peReview;
+    for (const line of (co.lines ?? []) as Record<string, unknown>[]) normalizeLine(doc, co, line);
+  }
   endPass3Reviews(doc.studio as { artifacts: Record<string, unknown>[]; verdicts: Record<string, unknown>[] });
   return doc;
+}
+
+const LINE_STATUSES = ["applied", "suggested", "dismissed", "undone"];
+
+/**
+ * A change order's line keeps where it stands (pass 5 review, finding 7). A line an early pass 5 build stored has no
+ * status: it takes its steering row's while the row's set is in the log (a status a line cannot have reads "refused"),
+ * and with the set gone, a line that still carries the lead's proposal never applied, one without it did. An applied
+ * spec update gains the spec revisions the lead wrote for it (finding 6): the update, from its row or the spec record,
+ * then each revision for the PE right after it. Idempotent: a line with a status is left as it is.
+ */
+function normalizeLine(doc: Record<string, unknown>, co: Record<string, unknown>, line: Record<string, unknown>) {
+  if (line.status !== undefined) return;
+  const changeId = line.changeId as string;
+  const set = ((doc.steering ?? []) as { id: string; at: string; changes: Record<string, unknown>[] }[]).find((x) => x.id === changeId.slice(0, changeId.lastIndexOf(".")));
+  const row = set?.changes.find((c) => c.id === changeId);
+  if (row) {
+    line.status = LINE_STATUSES.includes(row.status as string) ? row.status : "refused";
+    if (row.appliedBy) line.appliedBy = row.appliedBy;
+    const at = row.resolvedAt ?? (row.status === "applied" || row.status === "undone" ? set!.at : undefined);
+    if (at) line.resolvedAt = at;
+  } else line.status = line.proposal ? "suggested" : "applied";
+  const before = line.before as { specRev: number } | undefined;
+  if (line.kind !== "update-spec" || !before) return;
+  const specs = ((doc.tasks ?? []) as { id: string; specs: { rev: number; author: string; reason: string }[] }[]).find((t) => t.id === line.taskId)?.specs ?? [];
+  const first = typeof row?.after === "number" ? row.after : specs.find((x) => x.rev > before.specRev && x.author === "lead" && x.reason.startsWith(`Change order r${co.rev as number}`))?.rev;
+  if (first === undefined) return;
+  const revs = [first];
+  for (const x of [...specs].sort((a, b) => a.rev - b.rev)) {
+    if (x.rev <= first) continue;
+    if (x.rev !== revs.at(-1)! + 1 || x.author !== "lead" || !x.reason.startsWith("Revised for the PE")) break;
+    revs.push(x.rev);
+  }
+  line.specRevs = revs;
 }
 
 /**
@@ -414,6 +468,28 @@ function stageRefusal(prev: State, next: State, command: string | undefined): st
   if (command === "resetSampleData" && next.project.sample) return undefined;
   const by = command === "startFactory" ? `the startFactory command recorded ${recorded} starts, not 1` : `${command ? `the ${command} command` : "an internal update"} tried to`;
   return `Refused: only the owner's Start the factory moves the project from Vision to the factory; ${by}. Nothing was written.`;
+}
+
+/**
+ * The owner-only Lock in, enforced where state is written (ORC-029 pass 5): what is in force (the blueprint's
+ * revisions) changes only by the owner's `lockIn` command, which adds exactly one revision, or by `startFactory` (the
+ * first Lock in), which adds at most one. No write may change or remove a revision in force. Any other write that
+ * would (another command, the scheduler, a runtime report, a lead run's result) is refused before anything is stored.
+ * Replacing everything with the sample project (`resetSampleData`) or with a new project (`initProject`) starts a new
+ * blueprint, not a Lock in. Returns why a write is refused, or undefined.
+ */
+function blueprintRefusal(prev: State, next: State, command: string | undefined): string | undefined {
+  const before = prev.blueprint.revisions;
+  const after = next.blueprint.revisions;
+  if (command === "resetSampleData" && next.project.sample) return undefined;
+  if (command === "initProject" && after.length === 0) return undefined;
+  const kept = after.length >= before.length && before.every((r, i) => JSON.stringify(r) === JSON.stringify(after[i]));
+  const added = after.length - before.length;
+  if (kept && added === 0) return undefined;
+  if (kept && command === "lockIn" && added === 1) return undefined;
+  if (kept && command === "startFactory" && added <= 1) return undefined;
+  const what = !kept ? "changed or removed a revision in force" : `${command === "lockIn" || command === "startFactory" ? `made ${added} revisions` : "made a revision"}`;
+  return `Refused: only the owner's Lock in puts the blueprint into force; ${command ? `the ${command} command` : "an internal update"} ${what}. Nothing was written.`;
 }
 
 export class LeaseLostError extends Error {
@@ -540,9 +616,20 @@ export class Store {
     return { version: row.version, state: JSON.parse(row.json) as State, json: row.json };
   }
 
-  /** Refuse, and log, a write that would start the factory other than by the owner's command (`stageRefusal`). */
+  /**
+   * The state as stored before this write, parsed again from its JSON. A command or an update may change the state it
+   * was given in place, so the guards and the event mirror compare against this, never against that object.
+   */
+  private stored(cur: { json: string }): State {
+    return JSON.parse(cur.json) as State;
+  }
+
+  /**
+   * Refuse, and log, a write that would start the factory other than by the owner's command (`stageRefusal`), or
+   * change what is in force other than by the owner's Lock in (`blueprintRefusal`).
+   */
   private guardStage(prev: State, next: State, command: string | undefined) {
-    const refusal = stageRefusal(prev, next, command);
+    const refusal = stageRefusal(prev, next, command) ?? blueprintRefusal(prev, next, command);
     if (!refusal) return;
     console.error(`[orchestrator] ${refusal}`);
     throw new ControlError(refusal);
@@ -595,9 +682,11 @@ export class Store {
       const cur = this.load();
       const record = this.db.prepare("INSERT INTO commands (idempotency_key, name, args, at, version, result, error_kind, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
       let outcome: ReturnType<typeof runCommand>;
+      let prev: State;
       try {
         outcome = runCommand(cur.state, name, args, now);
-        this.guardStage(cur.state, outcome.state, name);
+        prev = this.stored(cur);
+        this.guardStage(prev, outcome.state, name);
       } catch (e) {
         failure = classify(e);
         // Record the rejection so a retry with the same key reports the same outcome.
@@ -605,7 +694,7 @@ export class Store {
         return { version: cur.version, replayed: false };
       }
       // Errors from here on are storage failures: they roll the whole transaction back.
-      const version = this.persist(cur.version, cur.state, outcome.state, now);
+      const version = this.persist(cur.version, prev, outcome.state, now);
       record.run(idempotencyKey, name, JSON.stringify(args ?? {}), now, version, outcome.result === undefined ? null : JSON.stringify(outcome.result), null, null);
       return { version, result: outcome.result, replayed: false };
     });
@@ -627,10 +716,10 @@ export class Store {
       }
       const cur = this.load();
       const next = fn(cur.state);
-      this.guardStage(cur.state, next, undefined);
-      const json = JSON.stringify(next);
-      if (json === cur.json) return { version: cur.version, changed: false };
-      return { version: this.persist(cur.version, cur.state, next, now), changed: true };
+      if (JSON.stringify(next) === cur.json) return { version: cur.version, changed: false };
+      const prev = this.stored(cur);
+      this.guardStage(prev, next, undefined);
+      return { version: this.persist(cur.version, prev, next, now), changed: true };
     });
     if (out.changed) this.emit();
     return out;
