@@ -52,7 +52,10 @@ describe("as it is today: round 0 of an import (ORC-032)", () => {
     // A correction in round 0 is still as is, with its provenance; a later round's revision is a proposal and has none.
     const v2 = addScreen(a.state, 0, at(4), asIs({ artifactId: a.id, provenance: { files: ["src/TripList.tsx"] } }));
     expect(art(v2.state, a.id, 2).provenance).toEqual({ asIs: true, files: ["src/TripList.tsx"], commit: TALLY_COMMIT });
-    const later = openRound(run(v2.state, "closeRound", { round: 0 }, at(5)).state, "experience", at(6));
+    // Round 0 closes with the baseline (CR-3): here, as if the import were locked in.
+    const locked = structuredClone(v2.state);
+    locked.studio.import!.lockedInAt = at(5);
+    const later = openRound(run(locked, "closeRound", { round: 0 }, at(5)).state, "experience", at(6));
     const v3 = addScreen(later.state, later.n, at(7), { artifactId: a.id, devices: ["terminal"] });
     expect(art(v3.state, a.id, 3).provenance).toBeUndefined();
   });
