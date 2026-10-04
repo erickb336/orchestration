@@ -154,6 +154,10 @@ export interface ImportRunner {
 
 const notRun = (reason: string): I.ImportChecksResult => ({ status: "not-run", reason });
 
+const NO_REPORT_PATH = "No JUnit report path is set, so the import cannot read the tests' results. Set it in Settings › Checks.";
+/** Why the baseline run has nothing to run or to read (Q3): no report path, or no test command. */
+const noTests = (job: Pick<ImportChecksJob, "testReport" | "commands">): string | undefined => (!job.testReport ? NO_REPORT_PATH : !job.commands.length ? "No test command is set. Set it in Settings › Checks." : undefined);
+
 /** Read the whole baseline report: the import keeps every case in its file (C14, CR-4). */
 const readWholeReport = (rel: string, ctx: Parameters<typeof readTestReport>[1]) => readTestReport(rel, ctx, Number.POSITIVE_INFINITY);
 
@@ -190,8 +194,8 @@ export class EnvironmentImport implements ImportRunner {
 
   async checks(job: ImportChecksJob): Promise<I.ImportChecksResult> {
     if (!job.environment) return notRun(job.noEnvironment ?? NO_ENVIRONMENT);
-    if (!job.testReport) return notRun("No JUnit report path is set, so the import cannot read the tests' results. Set it in Settings › Checks.");
-    if (!job.commands.length) return notRun("No test command is set. Set it in Settings › Checks.");
+    const missing = noTests(job);
+    if (missing || !job.testReport) return notRun(missing ?? NO_REPORT_PATH);
     if (!job.source) return notRun("No copy of the commit could be made.");
     const testReport = job.testReport;
     const lender = this.o.lender ?? sharedEnvironments(this.o.log);
@@ -270,12 +274,17 @@ export class SimulatedImport implements ImportRunner {
   readonly simulated = true;
 
   async checks(job: ImportChecksJob): Promise<I.ImportChecksResult> {
+    // What the service's runner needs, it needs here too (Q3, QA-F5): an environment, the report's path, a test command.
+    const why = job.noEnvironment ?? noTests(job);
+    if (why) return notRun(why);
     const report = readWholeReport("junit.xml", { workspace: TALLY_FIXTURE, scratch: [], env: {} });
     if (report.status !== "read") return notRun(`The simulated report could not be read: ${report.reason}`);
     return keepReport(job.outDir, report, true);
   }
 
   async capture(job: ImportCaptureJob): Promise<I.ImportCaptureInput> {
+    const noEnvironment = job.noEnvironment;
+    if (noEnvironment !== undefined) return { parts: job.parts.map((p) => ({ artifactId: p.artifactId, version: p.version, status: "none", reason: "not-set-up", detail: noEnvironment })) };
     const keep = (p: CapturePart, name: string, type: "cast" | "txt" | "png", body: Buffer, device?: CaptureDevice) => {
       mkdirSync(join(job.outDir, p.artifactId), { recursive: true, mode: 0o700 });
       writeFileSync(join(job.outDir, p.artifactId, name), body, { mode: 0o600 });
@@ -510,7 +519,8 @@ export class ImportDriver {
     const abort = new AbortController();
     const job = { importId: imp.id, abort };
     this.job = job;
-    const env = this.runner.simulated ? {} : environmentAt(s, imp.commit);
+    // The simulated runner runs nothing, but has an environment only where the project sets one, as the service's (Q3).
+    const env: { environment?: EnvironmentAssignment; reason?: string } = this.runner.simulated ? (s.project.environment ? {} : { reason: NO_ENVIRONMENT }) : environmentAt(s, imp.commit);
     const log = this.o.log;
     const cfg = s.project.checks;
     const parts = kind === "capture" ? captureParts(s, this.o.studioDir?.(s)) : [];
@@ -522,7 +532,7 @@ export class ImportDriver {
         // The commit's files from git's object store: no checkout of the repository runs (SR-2).
         if (needsCopy && this.o.workspaces) checkout = this.o.workspaces.snapshot({ repoPath: s.project.repoPath, projectId: s.project.id, attemptId: `${imp.id}-${kind}-${randomBytes(3).toString("hex")}`, commit: imp.commit }).path;
         mkdirSync(outDir, { recursive: true, mode: 0o700 });
-        const common = { source: checkout, commit: imp.commit, ...(env.environment ? { environment: env.environment } : { noEnvironment: env.reason ?? NO_ENVIRONMENT }), outDir, signal: abort.signal, ...(log ? { log } : {}) };
+        const common = { source: checkout, commit: imp.commit, ...(env.environment ? { environment: env.environment } : {}), ...(env.reason !== undefined ? { noEnvironment: env.reason } : {}), outDir, signal: abort.signal, ...(log ? { log } : {}) };
         const done: Done =
           kind === "checks"
             ? { importId: imp.id, kind, result: await this.runner.checks({ ...common, commands: cfg.commands.filter((c) => c.kind === "check").map((c) => ({ id: c.id, label: c.label, argv: [...c.argv], timeoutMs: cfg.commandTimeoutMinutes * 60_000 })), ...(cfg.testReport ? { testReport: cfg.testReport } : {}) }) }

@@ -99,9 +99,12 @@ function service(runner: ImportRunner = new SimulatedImport()) {
 }
 
 /** A new project on tally, a screen and code product on the terminal, and the import started at HEAD. */
-function startImport(o: { helpers?: number | null; budgetUsd?: number; setup?: (s: State) => State } = {}) {
+/** How tally runs, as the Start screen prefills it for the sample: an image, its test command and its JUnit report. */
+const RUNS = { environment: { image: `python:3.13-slim@sha256:${"b".repeat(64)}`, prepare: [], hosts: [] }, tests: { argv: ["python3", "tests/run.py"], report: "reports/junit.xml" } };
+
+function startImport(o: { helpers?: number | null; budgetUsd?: number; setup?: (s: State) => State; runs?: Partial<typeof RUNS> } = {}) {
   if (o.setup) store.update(o.setup, iso());
-  cmd("startImport", { name: "tally", repoPath: repo, commit: git("rev-parse", "HEAD"), branch: "main", domains: ["screen", "code"], devices: ["terminal"], budgetUsd: o.budgetUsd ?? 3, helpers: o.helpers ?? null, size: { sourceFiles: 7, testFiles: 7, kb: 12 } });
+  cmd("startImport", { name: "tally", repoPath: repo, commit: git("rev-parse", "HEAD"), branch: "main", domains: ["screen", "code"], devices: ["terminal"], ...(o.runs ?? RUNS), budgetUsd: o.budgetUsd ?? 3, helpers: o.helpers ?? null, size: { sourceFiles: 7, testFiles: 7, kb: 12 } });
 }
 
 beforeEach(() => {
@@ -329,7 +332,7 @@ describe("with no Docker or no environment (Q3)", () => {
   it("records the checks as not run and the parts as not recorded, each with the reason; nothing runs on this computer", async () => {
     // The project has no environment: the service's own runner runs nothing, and never falls back to the host.
     service(new EnvironmentImport({ lender: { withPrepared: () => Promise.reject(new Error("the environment must not be used without one")) }, recorderRoot: join(dir, "recorder") }));
-    startImport();
+    startImport({ runs: {} });
     await until((s) => I.importStatus(s) === "review", "the import in review");
     const imp = state().studio.import!;
     expect(imp.checks).toMatchObject({ status: "not-run" });
@@ -339,12 +342,30 @@ describe("with no Docker or no environment (Q3)", () => {
     expect(imp.capture!.parts.map((p) => p.status === "none" && p.reason)).toEqual(["not-set-up", "not-set-up", "not-set-up"]);
   });
 
+  it("the simulated import says the same as the service's (QA-F5): no environment, not run and not recorded; no test command, not run", async () => {
+    service();
+    startImport({ runs: {} });
+    await until((s) => I.importStatus(s) === "review", "the import in review");
+    let imp = state().studio.import!;
+    expect(imp.checks.status === "not-run" && imp.checks.reason).toMatch(/^The project has no environment, so nothing of the repository runs/);
+    expect(imp.reading!.rules.every((r) => r.tests.length === 0)).toBe(true);
+    expect(imp.capture!.parts.map((p) => p.status === "none" && [p.reason, p.detail.slice(0, 32)])).toEqual(Array(3).fill(["not-set-up", "The project has no environment, "]));
+    await scheduler.stop();
+    store.close();
+    rmSync(join(dataDir, "db.sqlite"), { force: true });
+    service();
+    startImport({ runs: { environment: RUNS.environment } });
+    await until((s) => I.importStatus(s) === "review", "the second import in review");
+    imp = state().studio.import!;
+    expect(imp.checks).toMatchObject({ status: "not-run", reason: "No JUnit report path is set, so the import cannot read the tests' results. Set it in Settings › Checks." });
+    expect(imp.capture!.simulated).toBe(true);
+    expect(imp.capture!.parts.map((p) => p.status)).toEqual(["captured", "captured", "captured"]);
+  });
+
   it("records the reason when Docker is not running: the environment is set, the container cannot start", async () => {
     const lender = { withPrepared: async () => ({ ok: false as const, reason: "unavailable" as const, detail: "Docker is not running", prepare: [] }) };
     service(new EnvironmentImport({ lender, recorderRoot: join(dir, "recorder") }));
     startImport();
-    cmd("setEnvironment", { environment: { image: "python:3.13-slim-trixie@sha256:bb2988715db2cf7ace7b53f38f3cffbef7c7046a656bee66245eb0ed386e2e81", prepare: [], hosts: [] } });
-    cmd("setChecks", { config: { ...state().project.checks, commands: [{ id: "test", label: "tests", kind: "check", argv: ["python3", "tests/run.py"] }], testReport: "reports/junit.xml" } });
     await until((s) => I.importStatus(s) === "review", "the import in review");
     const imp = state().studio.import!;
     expect(imp.checks).toMatchObject({ status: "not-run", reason: "The project's environment could not run: Docker is not running" });
