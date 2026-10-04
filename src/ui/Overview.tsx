@@ -19,7 +19,7 @@ import { landedVerdict, latestLeadReply, liveText, needsYouItems, optionsLine, p
 import { VisionLine } from "./studio/VisionCard";
 import { Button, ButtonLink, Card, Chip, EmptyState, Field, Input, NeedsYouItem, Row, Rows, SimulatedChip, StatePill, useConfirm } from "./kit";
 import { importQuestions, importStatus, itemAnswerEffect } from "../domain/studio/import";
-import { importHalt, nothingToBuild, readingSteps, roundRequest } from "./import/importView";
+import { budgetStopLine, importPill, nothingToBuild, readingSteps, roundRequest } from "./import/importView";
 import type { FindingDecision, PrDelivery, SpecOption, State, Task, VisionRevision } from "../domain/types";
 
 /** The one name for each involvement setting, wherever it is shown. */
@@ -98,6 +98,7 @@ export function ImportHome() {
   const [asked, setAsked] = useState(false);
   const status = importStatus(state);
   if (!status) return null;
+  const stopLine = budgetStopLine(state);
   const vision = (
     <ButtonLink size="small" href="#/vision" variant={status === "review" ? "primary" : "secondary"}>
       {status === "review" ? "Answer in Vision" : "Open Vision"}
@@ -106,10 +107,10 @@ export function ImportHome() {
   if (status === "reading" || status === "stopped") {
     const steps = readingSteps(state);
     const done = steps.filter((s) => s.mark === "done" || s.mark === "skipped");
-    const halt = importHalt(state);
+    const pill = importPill(state, "importing");
     return (
-      <Card title="The import" actions={<StatePill tone={halt?.kind === "stopped" ? "fail" : halt?.kind === "budget" ? "you" : halt ? "neutral" : "work"} pulse={!halt} paused={halt?.kind === "paused" || halt?.kind === "pausing"}>{halt ? halt.pill : "importing"}</StatePill>}>
-        <p className="no-margin">{status === "stopped" ? `It stopped: ${state.studio.import!.stopped!.reason}` : `${done.length} of ${steps.length} steps done${done.length ? `: ${done.map((s) => s.name).join(", ")}` : ""}.`}</p>
+      <Card title="The import" actions={<StatePill tone={pill.tone} pulse={pill.pulse} paused={pill.paused}>{pill.text}</StatePill>}>
+        <p className="no-margin">{status === "stopped" ? `It stopped: ${state.studio.import!.stopped!.reason}` : [stopLine, `${done.length} of ${steps.length} steps done${done.length ? `: ${done.map((s) => s.name).join(", ")}` : ""}.`].filter(Boolean).join(" ")}</p>
         <div className="k-actions">{vision}</div>
       </Card>
     );
@@ -119,7 +120,7 @@ export function ImportHome() {
     const open = importQuestions(imp).asked.filter((q) => itemAnswerEffect(imp, { rule: q.ruleId }) === "open").length;
     return (
       <Card title="The import" actions={<StatePill tone="you">needs you</StatePill>}>
-        <p className="no-margin">{open ? `Round 0, As it is today, asks you ${open} question${open === 1 ? "" : "s"}. Answer in Vision, then lock in the baseline.` : "Every question is answered. Lock in the baseline in Vision."}</p>
+        <p className="no-margin">{[open ? `Round 0, As it is today, asks you ${open} question${open === 1 ? "" : "s"}. Answer in Vision, then lock in the baseline.` : "Every question is answered. Lock in the baseline in Vision.", stopLine].filter(Boolean).join(" ")}</p>
         <div className="k-actions">{vision}</div>
       </Card>
     );

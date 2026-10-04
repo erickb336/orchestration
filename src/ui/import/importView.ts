@@ -248,6 +248,18 @@ export function readingSteps(s: State): StepItem[] {
 type PillTone = "done" | "work" | "neutral" | "fail" | "you";
 const HALT_TONE: Record<ImportHalt["kind"], PillTone> = { stopped: "fail", budget: "you", paused: "neutral", pausing: "work" };
 
+/** The import's state pill on the reading and on Home: why it waits, else `busy` while it reads. */
+export function importPill(s: State, busy: string): { text: string; tone: PillTone; pulse: boolean; paused: boolean } {
+  const halt = importHalt(s);
+  return halt ? { text: halt.pill, tone: HALT_TONE[halt.kind], pulse: false, paused: halt.kind === "paused" || halt.kind === "pausing" } : { text: busy, tone: "work", pulse: true, paused: false };
+}
+
+/** Home's sentence while the import waits at its budget: "The import budget is reached: $3.20 of $3.00. Raise it in Vision to go on." */
+export function budgetStopLine(s: State): string | undefined {
+  const stop = importHalt(s)?.kind === "budget" ? spendWords(s).stop : undefined;
+  return stop ? `${stop}. Raise it in Vision to go on.` : undefined;
+}
+
 /**
  * The state of the three cards under the steps, from the same steps: done; reading, designing or recording while its
  * step runs; else why it waits (paused, stopped, at the budget), or "waiting" before it starts.

@@ -7,7 +7,7 @@ import { fmtUsd } from "../../domain/spend";
 import { importParts } from "../../domain/studio/import";
 import { Banner, Button, Card, Field, Input, SimulatedChip, StatePill, StepList } from "../kit";
 import { useStore } from "../store";
-import { importHalt, productName, readingCards, readingSteps, roundZeroLine, spendWords } from "./importView";
+import { importHalt, importPill, productName, readingCards, readingSteps, roundZeroLine, spendWords } from "./importView";
 import "./import.css";
 
 /** The spend as a bar: what is spent, over the estimate's band, against the budget. */
@@ -29,6 +29,7 @@ export function ImportPanel() {
   const steps = readingSteps(state);
   const done = steps.filter((s) => s.mark === "done" || s.mark === "skipped").length;
   const halt = importHalt(state);
+  const pill = importPill(state, `reading · ${done} of ${steps.length} steps done`);
   const cards = readingCards(state);
   const zero = roundZeroLine(state);
   const name = productName(state);
@@ -54,7 +55,7 @@ export function ImportPanel() {
       )}
       <ImportBudgetStop />
 
-      <Card title="The import" actions={<StatePill tone={imp.stopped ? "fail" : halt?.kind === "budget" ? "you" : halt ? "neutral" : "work"} pulse={!halt} paused={halt?.kind === "paused" || halt?.kind === "pausing"}>{halt ? halt.pill : `reading · ${done} of ${steps.length} steps done`}</StatePill>}>
+      <Card title="The import" actions={<StatePill tone={pill.tone} pulse={pill.pulse} paused={pill.paused}>{pill.text}</StatePill>}>
         <p className="no-margin">
           <b className="num">{fmtUsd(sw.spent)}</b> spent of the <b>{fmtUsd(sw.budget)}</b> import budget. The estimate: {fmtUsd(sw.estimate[0])}–{fmtUsd(sw.estimate[1])}.
         </p>

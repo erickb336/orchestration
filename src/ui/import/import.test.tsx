@@ -318,6 +318,31 @@ describe("5 · After (Design and reality, Home)", () => {
   });
 });
 
+describe("the import's budget stop (QA-F1)", () => {
+  /** The stage with the rules reader's run at a reported $3.20: over the $3 import budget. */
+  const overBudget = (st: Parameters<typeof tallyImport>[0]) => {
+    const s = structuredClone(stage(st));
+    s.studio.runs.find((r) => r.importStep === "rules")!.usage = { costUsd: 3.2 };
+    return s;
+  };
+  const STOP = "The import waits at its budget. The import budget is reached: $3.20 of $3.00. Nothing new starts for it until you raise the import budget.";
+
+  it("the review and the baseline show the stop with Raise the budget, as the reading does", () => {
+    for (const node of [<ImportPanel />, <ImportReview />, <BaselineLockIn />]) {
+      const t = text(node, overBudget(node.type === ImportPanel ? "read" : "answered"));
+      expect(t).toContain(STOP);
+      expect(t).toContain("New import budget (dollars) Raise the budget");
+    }
+    expect(text(<ImportReview />, stage("answered"))).not.toContain("waits at its budget");
+  });
+
+  it("Home and the header say the import waits at its budget, while it reads and in the review", () => {
+    expect(text(<ImportHome />, overBudget("read"))).toContain("The import waits at its budget The import budget is reached: $3.20 of $3.00. Raise it in Vision to go on.");
+    expect(importPlaces(overBudget("read"))?.home?.text).toBe("import waits at its budget");
+    expect(text(<ImportHome />, overBudget("review"))).toContain("The import budget is reached: $3.20 of $3.00. Raise it in Vision to go on.");
+  });
+});
+
 describe("the header while importing", () => {
   const words = (s: State) => {
     const p = importPlaces(s);

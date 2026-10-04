@@ -11,6 +11,7 @@ import { baselineBlocker, baselineSummary, importStatus } from "../../domain/stu
 import { fmtUsd, importSpend } from "../../domain/spend";
 import { Banner, Button, ButtonLink, Card, Checkbox, Chip, EmptyState, SimulatedChip } from "../kit";
 import { useStore } from "../store";
+import { ImportBudgetStop } from "./ImportPanel";
 import { baselineFacts, baselineRows, changeLine, keptRules, openChanges, openQuestions, productName } from "./importView";
 import "./import.css";
 
@@ -109,6 +110,7 @@ function BaselineSummary({ header, stale, agreed, onAgree, busy, blocker, onLock
           This is the new summary. Read it again, and agree again to lock it in.
         </Banner>
       )}
+      <ImportBudgetStop />
       <div className="imp-cols">
         <Card title={`${rows.length} parts become the baseline: in force and built`} className="imp-bcard">
           <ul className="imp-facts">

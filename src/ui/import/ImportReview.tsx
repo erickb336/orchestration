@@ -11,6 +11,7 @@ import { Banner, Button, ButtonLink, Card, Chip, Disclosure, Field, Meter, Simul
 import { cx } from "../kit/cx";
 import { useStore } from "../store";
 import { roundLead } from "../studio/studioView";
+import { ImportBudgetStop } from "./ImportPanel";
 import {
   BASELINE_HASH,
   CONFIDENCE_WORDS,
@@ -87,6 +88,7 @@ export function ImportReview() {
           Round 0 · <b>As it is today</b> · from the import of {name} at commit {imp.commit.slice(0, 7)} {simulated && <SimulatedChip />}
         </p>
       </header>
+      <ImportBudgetStop />
       <div className="imp-cols">
         <div className="k-stack">
           <Card className="imp-sum">
