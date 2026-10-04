@@ -7,7 +7,8 @@ import { describe, expect, it } from "vitest";
 import * as M from "../../domain/model";
 import * as B from "../../domain/studio/blueprint";
 import { itemFactoryStatus } from "../../domain/studio/itemStatus";
-import { PROTOTYPE_ANSWERS, at, baselineArgs, tallyImport, type ImportOptions } from "../../domain/testing/import";
+import { PROTOTYPE_ANSWERS, T0, at, baselineArgs, tallyImport, type ImportOptions } from "../../domain/testing/import";
+import { buildSeed } from "../../domain/seed";
 import * as R from "../../domain/studio/runs";
 import { run } from "../../domain/testing/studio";
 import type { State } from "../../domain/types";
@@ -21,8 +22,8 @@ import { BaselineLockIn } from "./BaselineLockIn";
 import { ImportPanel } from "./ImportPanel";
 import { ImportReview } from "./ImportReview";
 import { TALLY_START_INFO } from "./importScene";
-import { UNANSWERED_TEXT, effectSentence, previewLines, previewSetting, startBlocker, startDraft, summaryChanged, type FoundRepository } from "./importView";
-import { StartForm, WhoReads } from "./StartImport";
+import { UNANSWERED_TEXT, effectSentence, previewLines, previewSetting, startArgs, startBlocker, startDraft, summaryChanged, type FoundRepository } from "./importView";
+import { StartForm, StartWaits, WhoReads } from "./StartImport";
 
 const svc = testService({ prototypePort: 5320 });
 const text = (node: React.ReactElement, s: State) => visible(renderScreen(node, s, svc));
@@ -101,6 +102,41 @@ describe("1 · Start (C1, C7)", () => {
     expect(t).not.toContain("not confined to the repository: a text in the repository");
     const codex = visible(renderScreen(<WhoReads value="codex" onChange={() => {}} />, stage("started"), svc));
     expect(codex).toContain("Codex's reads are not confined to the repository: a text in the repository can steer it to read other files on this computer. Pick Codex only for a repository you trust.");
+  });
+
+  it("sends everything it set as one command, with who reads it; the service refuses it whole, and the project stays (QA-F3, CR-5)", () => {
+    const d = startDraft(TALLY_START_INFO);
+    const args = startArgs(TALLY_START_INFO, { ...d, readsOn: "codex" });
+    expect(args).toEqual({
+      name: "tally",
+      repoPath: "/tmp/orchestrator-data/import-demo/tally",
+      commit: TALLY_START_INFO.commit,
+      branch: "main",
+      size: TALLY_START_INFO.size,
+      domains: ["screen", "code"],
+      devices: ["terminal"],
+      environment: { image: TALLY_START_INFO.proposal!.image, prepare: [["pip", "install", "-e", ".[test]"]], hosts: [] },
+      tests: { argv: ["python3", "-m", "pytest", "--junitxml=reports/junit.xml"], report: "reports/junit.xml" },
+      readsOn: "codex",
+      budgetUsd: 3,
+      helpers: null,
+    });
+    // A test report the service refuses: the command fails whole, and the sample stays as it was.
+    const sample = buildSeed(T0, { inFlightRuns: false });
+    expect(() => run(sample, "startImport", { ...startArgs(TALLY_START_INFO, d), tests: { argv: ["python3", "tests/run.py"], report: "/tmp/junit.xml" } }, at(1))).toThrow(/not a path inside the repository/);
+    expect(run(sample, "startImport", startArgs(TALLY_START_INFO, { ...d, testCommand: "" }), at(1)).state.studio.import!.readsOn).toBe("claude");
+  });
+
+  it("in the demo, while the sample's agents run, says it pauses them first, then why a start did not happen (QA-F2)", () => {
+    const busy = buildSeed(T0, { inFlightRuns: true });
+    const waiting = run(busy, "startImport", startArgs(TALLY_START_INFO, startDraft(TALLY_START_INFO)), at(1)).state;
+    expect(text(<StartWaits />, waiting)).toBe('Pausing the sample\'s agents… 2 runs still stop. The import of "tally" starts when they have stopped. To keep the sample instead, resume it from the project menu.');
+    const html = renderScreen(<StartForm info={TALLY_START_INFO} />, waiting, svc);
+    expect(visible(html)).toContain("Start the import The import is starting: it waits for the sample's agents to stop.");
+    const refused = structuredClone(waiting);
+    refused.project.importPending!.refused = "Claude reads the repository, and it is not enabled.";
+    expect(text(<StartWaits />, refused)).toBe('The import of "tally" did not start. Claude reads the repository, and it is not enabled. The sample stays, paused.');
+    expect(text(<StartWaits />, busy)).toBe("");
   });
 
   it("does not start without a name, a kind, a device or a positive budget", () => {

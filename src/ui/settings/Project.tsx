@@ -7,7 +7,7 @@ import { useState } from "react";
 import * as M from "../../domain/model";
 import type { Device, ProjectDomain } from "../../domain/types";
 import { Button, Checkbox, Disclosure, Field, Input, SegmentedControl, Textarea, useConfirm } from "../kit";
-import { StartImport } from "../import/StartImport";
+import { StartImport, StartWaits } from "../import/StartImport";
 import { DeliveryCard, deliveryErrors, deliverySteps, liveDelivery, type DeliveryDraft } from "../DeliverySettings";
 import { confirmNewProject } from "../settingsText";
 import { DOMAIN_CHOICES, toggleDomain } from "../studio/studioView";
@@ -121,6 +121,7 @@ function TryImportCard() {
   const [open, setOpen] = useState(false);
   return (
     <SettingsCard id="new-project" title="Import an existing repository" help="In the demo, the import reads tally, an invented command-line tool, and every run is simulated. It replaces the sample project.">
+      <StartWaits />
       {open ? (
         <StartImport sample onCancel={() => setOpen(false)} />
       ) : (

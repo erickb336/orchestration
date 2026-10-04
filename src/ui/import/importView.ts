@@ -23,8 +23,8 @@ import {
   type ImportOption,
   type ImportTarget,
 } from "../../domain/studio/import";
-import type { ImportRule, ImportSource, ImportStep, StudioArtifact } from "../../domain/studio/types";
-import { DEVICES, PROJECT_DOMAINS, type CheckCommand, type Device, type ProjectDomain, type State, type TestCaseResult } from "../../domain/types";
+import type { ImportProjectStart, ImportRule, ImportSource, ImportStep, StudioArtifact } from "../../domain/studio/types";
+import { DEVICES, PROJECT_DOMAINS, type Device, type ProjectDomain, type State, type TestCaseResult } from "../../domain/types";
 import type { StepItem, StepMark } from "../kit";
 import { kindWord } from "../studio/studioView";
 
@@ -146,8 +146,30 @@ export function startBlocker(d: StartDraft): string | undefined {
   return undefined;
 }
 
-/** The check command the test command makes: one "check", as Settings › Quality › Checks keeps it. */
-export const testCheck = (line: string): CheckCommand => ({ id: "tests", label: "Tests", kind: "check", argv: splitLine(line) });
+/**
+ * Everything Start sends, as one command (`startImport`, CR-5 and QA-F3): the new project on the repository it read,
+ * the kinds and devices, how it runs, who reads it, the budget and the helpers. The service checks it all before any
+ * change, so a refusal leaves the project you have as it was.
+ */
+export function startArgs(info: FoundRepository, d: StartDraft): ImportProjectStart {
+  const env = d.environment && ("devcontainer" in d.environment ? { prepare: [], hosts: [], devcontainer: d.environment.devcontainer } : { image: d.environment.image, prepare: d.environment.prepare, hosts: [] });
+  const preview = previewSetting(d);
+  return {
+    name: d.name.trim(),
+    repoPath: info.path,
+    commit: info.commit,
+    ...(info.branch ? { branch: info.branch } : {}),
+    size: info.size,
+    domains: d.domains,
+    devices: d.devices,
+    ...(env ? { environment: env } : {}),
+    ...(preview ? { preview } : {}),
+    ...(d.testCommand.trim() ? { tests: { argv: splitLine(d.testCommand), ...(d.testReport.trim() ? { report: d.testReport.trim() } : {}) } } : {}),
+    readsOn: d.readsOn,
+    budgetUsd: Number(d.budget),
+    helpers: d.helpers ? d.helperCap : null,
+  };
+}
 
 // ---------- 2 · Reading ----------
 

@@ -1,25 +1,26 @@
 // Start (ORC-032, screen 1): the import of an existing repository, from Settings › Project › Start a new project, or,
 // in the demo, on the invented sample repository (tally). Nothing runs until Start the import: the screen reads the
-// repository once (the commit, the files, what it proposes and why), then sends initProject, the kind of product, the
-// devices, how it runs and startImport, in that order. Words: importView.ts.
+// repository once (the commit, the files, what it proposes and why), then sends everything it set as one command,
+// startImport, which changes nothing on a refusal (QA-F3). In the demo, while the sample's agents run, the service
+// pauses them and starts the import once they stopped; the screen says so (QA-F2). Words: importView.ts.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CLIENT_HEADER } from "../../api";
 import * as M from "../../domain/model";
 import { fmtUsd } from "../../domain/spend";
 import { canAllowSubagents } from "../../domain/subagents";
-import { DEFAULT_CHECKS, MAX_SUBAGENT_CAP, type Device, type ProjectDomain } from "../../domain/types";
+import { importStartStatus } from "../../domain/studio/importStart";
+import { MAX_SUBAGENT_CAP, type Device, type ProjectDomain } from "../../domain/types";
 import { Banner, Button, Card, Checkbox, Chip, Field, Input, SimulatedChip, useConfirm } from "../kit";
 import { DEVICE_CHOICES, toggleDevice } from "../settings/budgets";
 import { shortImage } from "../settings/environment";
-import { sendInOrder } from "../settings/draft";
 import { confirmNewProject } from "../settingsText";
 import { initProjectConfirm } from "../stageChoice";
 import { useStore } from "../store";
 import { DOMAIN_CHOICES, toggleDomain } from "../studio/studioView";
 import { SpendBar } from "./ImportPanel";
 import type { ImportStartInfo } from "../../api";
-import { READS_ON, argvLine, foundBecause, foundLine, hasPages, howItRuns, previewSetting, startBlocker, startDraft, startInfoRequest, testCheck, type FoundRepository, type StartDraft } from "./importView";
+import { READS_ON, argvLine, foundBecause, foundLine, hasPages, howItRuns, startArgs, startBlocker, startDraft, startInfoRequest, type FoundRepository, type StartDraft } from "./importView";
 import "./import.css";
 
 type Loaded = { status: "idle" } | { status: "loading" } | { status: "failed"; message: string } | { status: "ok"; info: ImportStartInfo };
@@ -74,38 +75,45 @@ export function StartImport({ sample, onCancel }: { sample: boolean; onCancel?: 
   );
 }
 
+/** The import's id and start, to tell a new import from the one there was. */
+const importKey = (s: ReturnType<typeof useStore>["state"]) => (s.studio.import ? `${s.studio.import.id}@${s.studio.import.startedAt}` : "");
+
 export function StartForm({ info, onCancel }: { info: FoundRepository; onCancel?: () => void }) {
   const { state, send, disabled, setNotice } = useStore();
   const confirm = useConfirm();
   const [d, setD] = useState<StartDraft>(() => startDraft(info));
   const [busy, setBusy] = useState(false);
+  /** Why the service refused the start; the project you have stays as it was. */
+  const [refusal, setRefusal] = useState<string | undefined>(undefined);
+  /** The import there was when you sent the start: undefined until you send. */
+  const before = useRef<string | undefined>(undefined);
   const set = (p: Partial<StartDraft>) => setD((x) => ({ ...x, ...p }));
   const runs = howItRuns(d);
-  const blocker = disabled ? "The service is offline." : startBlocker(d);
+  const waiting = importStartStatus(state)?.status === "pausing";
+  const blocker = disabled ? "The service is offline." : waiting ? "The import is starting: it waits for the sample's agents to stop." : startBlocker(d);
   const estimate = info.estimate;
   const budget = Number(d.budget) > 0 ? Number(d.budget) : 0;
+
+  // The service started the import, at once or once the sample's agents stopped: Vision shows the reading.
+  const started = before.current !== undefined && !state.project.importPending && !!state.studio.import && importKey(state) !== before.current;
+  useEffect(() => {
+    if (!started) return;
+    before.current = undefined;
+    setNotice({ kind: "info", message: `The import of "${state.project.name}" started. Vision shows the reading.` });
+    location.hash = "#/vision";
+  }, [started]);
 
   const start = async () => {
     if (blocker || busy) return;
     const name = d.name.trim();
     if (!(await confirm(confirmNewProject(name, initProjectConfirm(name, M.currentVisionDocs(state).length))))) return;
     setBusy(true);
-    const env = d.environment && ("devcontainer" in d.environment ? { prepare: [], hosts: [], devcontainer: d.environment.devcontainer } : { image: d.environment.image, prepare: d.environment.prepare, hosts: [] });
-    const { rev: _rev, ...checks } = DEFAULT_CHECKS;
-    const preview = previewSetting(d);
-    const ok = await sendInOrder([
-      () => send("initProject", { name, repoPath: info.path, vision: "", focus: "" }),
-      () => send("setDomains", { domains: d.domains }),
-      () => send("setDevices", { devices: d.devices }),
-      () => (env ? send("setEnvironment", { environment: env }) : null),
-      () => (preview ? send("setPreview", { preview }) : null),
-      () => (d.testCommand.trim() ? send("setChecks", { config: { ...checks, enabled: true, commands: [testCheck(d.testCommand)], ...(d.testReport.trim() ? { testReport: d.testReport.trim() } : {}) } }) : null),
-      () => send("startImport", { commit: info.commit, ...(info.branch ? { branch: info.branch } : {}), budgetUsd: Number(d.budget), helpers: d.helpers ? d.helperCap : null, size: info.size }),
-    ]);
+    setRefusal(undefined);
+    const key = importKey(state);
+    const r = await send("startImport", startArgs(info, d));
     setBusy(false);
-    if (!ok) return;
-    setNotice({ kind: "info", message: `The import of "${name}" started. Vision shows the reading.` });
-    location.hash = "#/vision";
+    if (r.ok) before.current = key;
+    else setRefusal(r.error ?? "The service did not answer.");
   };
 
   return (
@@ -229,6 +237,11 @@ export function StartForm({ info, onCancel }: { info: FoundRepository; onCancel?
           <p className="imp-safe small no-margin">
             <b>It only reads.</b> The readers use a read-only copy. The tests and the CLI run in the project's container with no network. No file in your repository changes, and the vision stays on this computer.
           </p>
+          {refusal && (
+            <Banner tone="fail" title="The import did not start.">
+              {refusal} Nothing changed: "{state.project.name}" stays as it was.
+            </Banner>
+          )}
           <div className="k-actions">
             <Button variant="primary" disabled={!!blocker} disabledReason={blocker} showReason={!!blocker} loading={busy} onClick={() => void start()}>
               {busy ? "Starting…" : "Start the import"}
@@ -242,6 +255,29 @@ export function StartForm({ info, onCancel }: { info: FoundRepository; onCancel?
         </Card>
       </div>
     </div>
+  );
+}
+
+/**
+ * In the demo, a start that waits for the sample's agents to stop (QA-F2): pausing them, with how many still stop, or
+ * why it did not start. Nothing otherwise.
+ */
+export function StartWaits() {
+  const { state } = useStore();
+  const st = importStartStatus(state);
+  const name = state.project.importPending?.input.name;
+  if (!st || !name) return null;
+  if (st.status === "refused") {
+    return (
+      <Banner tone="fail" title={`The import of "${name}" did not start.`}>
+        {st.reason} The sample stays, paused.
+      </Banner>
+    );
+  }
+  return (
+    <Banner tone="info" title="Pausing the sample's agents…">
+      {st.runs ? `${st.runs} ${st.runs === 1 ? "run still stops" : "runs still stop"}.` : "They have stopped."} The import of "{name}" starts when they have stopped. To keep the sample instead, resume it from the project menu.
+    </Banner>
   );
 }
 

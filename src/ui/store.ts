@@ -10,7 +10,8 @@ import type { State } from "../domain/types";
 
 export type Notice = { kind: "error" | "stale" | "info"; message: string };
 export type ConnectionStatus = "connecting" | "online" | "offline";
-export type SendResult = { ok: true; result?: unknown } | { ok: false };
+/** A command's outcome; a refusal carries the service's words, which the toast shows too. */
+export type SendResult = { ok: true; result?: unknown } | { ok: false; error?: string };
 
 const POST_HEADERS = { "Content-Type": "application/json", [CLIENT_HEADER]: "1" };
 const UNREACHABLE = "The Orchestrator service is unreachable, so this change was not confirmed. Check the state again once it reconnects.";
@@ -204,7 +205,7 @@ export function useServiceStore() {
       setNotice({ kind: stale ? "stale" : "error", message: err.error });
       // A stale reply means the state moved; fetch it now rather than waiting for the stream.
       if (stale) await fetchState();
-      return { ok: false };
+      return { ok: false, error: err.error };
     },
     [fetchState, goOffline],
   );
