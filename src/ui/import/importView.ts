@@ -73,9 +73,18 @@ export interface StartDraft {
   preview: string;
   port: string;
   budget: string;
+  /** Who reads the repository (Q5): Claude by default; Codex only if you pick it. */
+  readsOn: "claude" | "codex";
   helpers: boolean;
   helperCap: number;
 }
+
+/** Who reads the repository, in words (Q5, CR-5): each choice, and the warning that comes with Codex. */
+export const READS_ON = {
+  claude: { label: "Claude", hint: "Recommended. Its reads stay in a read-only copy of the repository." },
+  codex: { label: "Codex", hint: "Its reads are not confined to the repository." },
+  warning: "Codex's reads are not confined to the repository: a text in the repository can steer it to read other files on this computer. Pick Codex only for a repository you trust.",
+} as const;
 
 /** Whether the product has screens the capture opens in a browser: a screen product on a desktop or a phone. */
 export const hasPages = (d: Pick<StartDraft, "domains" | "devices">) => d.domains.includes("screen") && d.devices.some((x) => x !== "terminal");
@@ -100,6 +109,7 @@ export function startDraft(info: FoundRepository): StartDraft {
     preview: "",
     port: "",
     budget: "3",
+    readsOn: "claude",
     helpers: false,
     helperCap: 2,
   };

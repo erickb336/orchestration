@@ -176,7 +176,7 @@ export function ImportReview() {
             <span className="small">
               <b>{left.bold}</b> {left.rest && <span className="muted">{left.rest}</span>}
             </span>
-            <Button variant="primary" disabled={!!blocker} disabledReason={blocker} loading={sending} onClick={() => void sendAll()}>
+            <Button variant="primary" disabled={!!blocker} disabledReason={blocker} showReason loading={sending} onClick={() => void sendAll()}>
               {sending ? "Sending…" : "Send to the lead"}
             </Button>
           </div>

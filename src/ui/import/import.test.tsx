@@ -22,7 +22,7 @@ import { ImportPanel } from "./ImportPanel";
 import { ImportReview } from "./ImportReview";
 import { TALLY_START_INFO } from "./importScene";
 import { UNANSWERED_TEXT, effectSentence, previewLines, previewSetting, startBlocker, startDraft, summaryChanged, type FoundRepository } from "./importView";
-import { StartForm } from "./StartImport";
+import { StartForm, WhoReads } from "./StartImport";
 
 const svc = testService({ prototypePort: 5320 });
 const text = (node: React.ReactElement, s: State) => visible(renderScreen(node, s, svc));
@@ -91,6 +91,16 @@ describe("1 · Start (C1, C7)", () => {
     expect(previewSetting({ ...d, preview: " " })).toBeUndefined();
     expect(startBlocker({ ...d, port: "80" })).toBe("The preview's port is a number from 1024 to 65535.");
     expect(startBlocker({ ...d, port: "" })).toBe("The preview's port is a number from 1024 to 65535.");
+  });
+
+  it("asks who reads it: Claude by default; Codex only if you pick it, with its warning (CR-5, Q5)", () => {
+    const t = start(TALLY_START_INFO);
+    expect(t).toContain("Who reads it The readers (the words, the rules, the parts) run on one provider. Claude Recommended. Its reads stay in a read-only copy of the repository. Codex Its reads are not confined to the repository.");
+    expect(startDraft(TALLY_START_INFO).readsOn).toBe("claude");
+    expect(renderScreen(<StartForm info={TALLY_START_INFO} />, stage("started"), svc)).toMatch(/<input type="radio"[^>]*name="imp-reads-on"[^>]*checked=""[^>]*value="claude"|<input type="radio"[^>]*value="claude"[^>]*checked=""/);
+    expect(t).not.toContain("not confined to the repository: a text in the repository");
+    const codex = visible(renderScreen(<WhoReads value="codex" onChange={() => {}} />, stage("started"), svc));
+    expect(codex).toContain("Codex's reads are not confined to the repository: a text in the repository can steer it to read other files on this computer. Pick Codex only for a repository you trust.");
   });
 
   it("does not start without a name, a kind, a device or a positive budget", () => {
@@ -280,6 +290,8 @@ describe("4 · Baseline (C4, C5, C10)", () => {
     const html = renderScreen(<BaselineLockIn />, stage("answered", { answers: CHANGE }), svc);
     expect(html).toMatch(/<button[^>]*aria-disabled="true"[^>]*title="Tick the box first: your agreement is recorded with this summary\."[^>]*>Lock in the baseline<\/button>/);
     expect(visible(html)).toContain("I have reviewed the baseline. It is what tally does today, with my answers.");
+    // The reason shows as text on the screen, not only as a tooltip (UX-3).
+    expect(visible(html)).toContain("Lock in the baseline Tick the box first: your agreement is recorded with this summary.");
   });
 
   it("a stale summary is refused: the Lock in names the summary the screen showed, and a change since then fails it", () => {

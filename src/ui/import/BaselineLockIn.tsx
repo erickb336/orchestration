@@ -228,7 +228,7 @@ function BaselineSummary({ header, note, agreed, onAgree, busy, blocker, onLockI
         )}
         <Checkbox label={`I have reviewed the baseline. It is what ${name} does today, with my answers.`} checked={agreed} onChange={(e) => onAgree(e.target.checked)} disabled={!!blocker} />
         <div className="k-actions">
-          <Button variant="primary" disabled={!agreed || !!blocker} disabledReason={blocker ?? (!agreed ? "Tick the box first: your agreement is recorded with this summary." : undefined)} showReason={!!blocker} loading={busy} onClick={onLockIn}>
+          <Button variant="primary" disabled={!agreed || !!blocker} disabledReason={blocker ?? (!agreed ? "Tick the box first: your agreement is recorded with this summary." : undefined)} showReason loading={busy} onClick={onLockIn}>
             {busy ? "Locking in…" : "Lock in the baseline"}
           </Button>
           <ButtonLink variant="quiet" href="#/vision">

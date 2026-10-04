@@ -19,7 +19,7 @@ import { useStore } from "../store";
 import { DOMAIN_CHOICES, toggleDomain } from "../studio/studioView";
 import { SpendBar } from "./ImportPanel";
 import type { ImportStartInfo } from "../../api";
-import { argvLine, foundBecause, foundLine, hasPages, howItRuns, previewSetting, startBlocker, startDraft, startInfoRequest, testCheck, type FoundRepository, type StartDraft } from "./importView";
+import { READS_ON, argvLine, foundBecause, foundLine, hasPages, howItRuns, previewSetting, startBlocker, startDraft, startInfoRequest, testCheck, type FoundRepository, type StartDraft } from "./importView";
 import "./import.css";
 
 type Loaded = { status: "idle" } | { status: "loading" } | { status: "failed"; message: string } | { status: "ok"; info: ImportStartInfo };
@@ -175,6 +175,20 @@ export function StartForm({ info, onCancel }: { info: FoundRepository; onCancel?
             </p>
           )}
         </Card>
+
+        <Card title="Who reads it" as="h3">
+          <WhoReads value={d.readsOn} onChange={(readsOn) => set({ readsOn })} />
+          {canAllowSubagents(state) && (
+            <div className="k-stack k-stack--tight">
+              <Checkbox label="Let the rules reader start helpers" hint="Read-only helpers, each counted in the import budget. Off until you turn it on." checked={d.helpers} onChange={(e) => set({ helpers: e.target.checked })} />
+              {d.helpers && (
+                <Field label="Helpers at most" width="short">
+                  <Input type="number" min={1} max={MAX_SUBAGENT_CAP} value={d.helperCap} onChange={(e) => set({ helperCap: Math.max(1, Math.min(MAX_SUBAGENT_CAP, Number(e.target.value) || 1)) })} />
+                </Field>
+              )}
+            </div>
+          )}
+        </Card>
       </div>
 
       <div className="k-stack">
@@ -198,16 +212,6 @@ export function StartForm({ info, onCancel }: { info: FoundRepository; onCancel?
           </p>
           <p className="micro muted no-margin">{estimate.basis}</p>
           <p className="micro muted no-margin">At the budget, the import stops and asks you. The building budget is separate: the import spends nothing from it.</p>
-          {canAllowSubagents(state) && (
-            <div className="k-stack k-stack--tight">
-              <Checkbox label="Let the rules reader start helpers" hint="Read-only helpers, each counted in the import budget. Off until you turn it on." checked={d.helpers} onChange={(e) => set({ helpers: e.target.checked })} />
-              {d.helpers && (
-                <Field label="Helpers at most" width="short">
-                  <Input type="number" min={1} max={MAX_SUBAGENT_CAP} value={d.helperCap} onChange={(e) => set({ helperCap: Math.max(1, Math.min(MAX_SUBAGENT_CAP, Number(e.target.value) || 1)) })} />
-                </Field>
-              )}
-            </div>
-          )}
         </Card>
 
         <Card title="What happens" as="h3">
@@ -238,6 +242,29 @@ export function StartForm({ info, onCancel }: { info: FoundRepository; onCancel?
         </Card>
       </div>
     </div>
+  );
+}
+
+/** Who reads the repository (Q5): Claude by default; Codex with its warning. */
+export function WhoReads({ value, onChange }: { value: StartDraft["readsOn"]; onChange: (v: StartDraft["readsOn"]) => void }) {
+  return (
+    <fieldset className="s-choices">
+      <legend className="small no-margin">The readers (the words, the rules, the parts) run on one provider.</legend>
+      {(["claude", "codex"] as const).map((p) => (
+        <label key={p} className="k-check">
+          <input type="radio" className="k-check__box" name="imp-reads-on" value={p} checked={value === p} onChange={() => onChange(p)} />
+          <span className="k-check__text">
+            {READS_ON[p].label}
+            <span className="k-check__hint">{READS_ON[p].hint}</span>
+          </span>
+        </label>
+      ))}
+      {value === "codex" && (
+        <p className="small imp-why imp-why--you no-margin" role="note">
+          {READS_ON.warning}
+        </p>
+      )}
+    </fieldset>
   );
 }
 
