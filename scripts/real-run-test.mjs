@@ -42,15 +42,19 @@ const domain = await Promise.all([
   import("../src/domain/studio/blueprint.ts"),
   import("../src/domain/studio/types.ts"),
   import("../src/ui/preflight/preflightView.ts"),
+  import("../src/domain/studio/import.ts"),
 ]).catch((e) => {
   console.error(`Run this with \`npm run test:real\` or \`npm run test:integration\` (node --import tsx): ${e instanceof Error ? e.message : e}`);
   process.exit(2);
 });
-const [F, M, S, B, ST, PF] = domain;
+const [F, M, S, B, ST, PF, IM] = domain;
 
 const FAKE = process.argv.includes("--fake");
-/** PASSED needs exactly this many checks, all passing: a check that silently stopped running fails the test. */
-const EXPECTED_CHECKS = 17;
+/**
+ * PASSED needs exactly this many checks, all passing: a check that silently stopped running fails the test. The
+ * simulated runtime also imports the bundled sample, tally (ORC-032): one more check.
+ */
+const EXPECTED_CHECKS = FAKE ? 18 : 17;
 const ROOT = resolve(import.meta.dirname, "..");
 const PORT = Number(process.env.ORCHESTRATION_TEST_PORT ?? 5399);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -400,12 +404,45 @@ async function main() {
     check(`${label}: task completed with a recorded report and brief`, task(final, id).lifecycle === "done" && !!report && !!brief);
   }
   check("managed repository main branch untouched, and nothing committed by the investigation", git("rev-list", "--count", "main") === "1" && git("status", "--porcelain") === "");
+  if (FAKE) await importSample();
   evidence.ok = Object.values(evidence.checks).length === EXPECTED_CHECKS && Object.values(evidence.checks).every((c) => c.ok);
   if (Object.values(evidence.checks).length !== EXPECTED_CHECKS) log(`✗ ${Object.values(evidence.checks).length} checks ran; PASSED needs exactly ${EXPECTED_CHECKS}`);
 }
 
 /** What the owner asks the lead for in Vision: one small round, so the real run stays short and cheap. */
-const STUDIO_ASK = "Start the studio with one small round on greeting.js as it is today: one designer run, one artifact, one take. Keep it short.";
+const STUDIO_ASK = "Start the studio with one small round on greeting.js: one designer run, one artifact, one take. Keep it short.";
+
+/**
+ * The import of an existing repository (ORC-032), simulated: a new project on the bundled sample, tally, started as the
+ * Start screen starts it, runs its steps in order (the checks, the words and the rules, the parts, the capture) to the
+ * review, and the lead writes its message. One check: the steps, the review, and tally's repository unchanged (HEAD,
+ * its tree and every ref, read from git's records: never git status).
+ */
+async function importSample() {
+  const info = await api("/api/import/demo", {});
+  const tally = (...args) => execFileSync("git", ["-C", info.path, ...args], { encoding: "utf8" }).trim();
+  const before = [tally("rev-parse", "HEAD"), tally("rev-parse", "HEAD^{tree}"), tally("for-each-ref", "--format=%(refname) %(objectname)")].join("\n");
+  await cmd("initProject", { name: "tally (sample)", repoPath: info.path, vision: "", focus: "" });
+  await cmd("setDomains", { domains: info.domains.map((d) => d.domain) });
+  await cmd("setDevices", { devices: info.domains.flatMap((d) => (d.device ? [d.device] : [])) });
+  await cmd("startImport", { commit: info.commit, ...(info.branch ? { branch: info.branch } : {}), budgetUsd: 3, helpers: null, size: info.size });
+  const { s } = await until("the import in review, and the lead's message", (x) => IM.importStatus(x.state) === "review" && x.state.conversation.some((m) => m.author === "lead") && !M.activeLeadRun(x.state), 5 * 60000);
+  const imp = s.state.studio.import;
+  const steps = (step) => s.state.studio.runs.filter((r) => r.importStep === step).map((r) => r.status);
+  const after = [tally("rev-parse", "HEAD"), tally("rev-parse", "HEAD^{tree}"), tally("for-each-ref", "--format=%(refname) %(objectname)")].join("\n");
+  const parts = IM.importParts(s.state);
+  check(
+    "Import (simulated): tally's checks, words, rules, parts and capture ran in order to the review, the lead wrote its message, and the repository did not change",
+    imp?.checks.status === "read" &&
+      imp.reading?.rules.length === 17 &&
+      parts.length === 6 &&
+      parts.every((a) => a.provenance?.commit === info.commit) &&
+      imp.capture?.parts.every((p) => p.status === "captured") &&
+      ["words", "rules", "parts"].every((step) => steps(step).join() === "completed") &&
+      after === before,
+    { commit: info.commit.slice(0, 7), checks: imp?.checks.status, rules: imp?.reading?.rules.length, parts: parts.map((a) => `${a.kind} ${a.title}`), capture: imp?.capture?.parts.map((p) => p.status), lead: s.state.conversation.filter((m) => m.author === "lead").at(-1)?.text.slice(0, 160), unchanged: after === before },
+  );
+}
 
 /**
  * Vision before the start: the owner's kind of product and message, the lead's round, the designer's artifact and the
@@ -413,6 +450,9 @@ const STUDIO_ASK = "Start the studio with one small round on greeting.js as it i
  */
 async function studioRound() {
   await cmd("setDomains", { domains: ["code"] });
+  // One take: a code product shown on the terminal, so the round makes one artifact with one variant to approve (the
+  // import, not the lead, reproduces existing code: ORC-032 C12).
+  await cmd("setDevices", { devices: ["terminal"] });
   await cmd("postMessage", { text: STUDIO_ASK });
   // Settled: the lead's message run is over, no studio run is under way, and what the round made is ready for the
   // owner (its PE review is over). A round that made nothing settles too, so the check can say so.
