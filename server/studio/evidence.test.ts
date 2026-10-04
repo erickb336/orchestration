@@ -2,7 +2,7 @@
 // manifests and tapes. A whole plan of the wrong shape is refused; a refused entry costs only its item; an entry for
 // an item the task does not cite is noted and skipped; nothing is read through a link.
 
-import { linkSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -10,7 +10,7 @@ import type { CaptureItem } from "../../src/domain/studio/evidence";
 import type { EnvironmentAssignment } from "../checks";
 import type { PreparedOutcome } from "../environment/prepared";
 import { RECORDER_IMAGE, RECORDER_USER, containerArgs, dockerSocket } from "./container";
-import { CAPTURE_PLAN, CAPTURE_SCRIPT, MAX_PLANNED_SCREENS, NO_ENVIRONMENT, captureArgs, captureEvidence, checkCapturePlan, collectCapture, parseCaptureOutput, readCapturePlan, readPlainFile, type CaptureJob, type EnvironmentLender } from "./evidence";
+import { CAPTURE_PLAN, CAPTURE_SCRIPT, MAX_PLANNED_SCREENS, NO_ENVIRONMENT, captureArgs, captureEvidence, checkCapturePlan, collectCapture, copyChange, parseCaptureOutput, readCapturePlan, readPlainFile, type CaptureJob, type EnvironmentLender } from "./evidence";
 
 const SCREEN: CaptureItem = { itemId: "bi-1", kind: "screen", title: "Trip board", artifactId: "sa-1", version: 2, variant: "B" };
 const CLI: CaptureItem = { itemId: "bi-3", kind: "terminal-demo", title: "trips CLI", artifactId: "sa-3", version: 1 };
@@ -233,6 +233,21 @@ describe("reading the plan from the copy of the change", () => {
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+});
+
+describe("the copy of the change", () => {
+  it("copies a file with 64 folders above it, and refuses 65, as the snapshot does (N1)", () => {
+    const deep = (n: number, root: string) => {
+      const folder = join(root, ...Array.from({ length: n }, () => "d"));
+      mkdirSync(folder, { recursive: true });
+      writeFileSync(join(folder, "f.txt"), "deep\n");
+    };
+    deep(64, join(dir, "ok"));
+    expect(copyChange(join(dir, "ok"), join(dir, "ok-copy"))).toBeUndefined();
+    expect(readFileSync(join(dir, "ok-copy", ...Array.from({ length: 64 }, () => "d"), "f.txt"), "utf8")).toBe("deep\n");
+    deep(65, join(dir, "too-deep"));
+    expect(copyChange(join(dir, "too-deep"), join(dir, "too-deep-copy"))).toBe("folders nest deeper than 64");
   });
 });
 

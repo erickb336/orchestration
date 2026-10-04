@@ -25,6 +25,7 @@ import { sharedEnvironments, type PreparedCopy, type PreparedEnvironments } from
 import { OUT, WORK, attachTty, containerArgs, containerName, defaultRecorderRoot, dockerEnv, dockerSocket, makeStage, probeRecorder, removeStage, resizeTty, runDocker, startRecording, type RunningContainer } from "./container";
 import type { AdapterEvent } from "../runtimes/types";
 import { MAGIC, projectStudioDir, versionDir as serveVersionDir } from "./serve";
+import { MAX_FOLDER_DEPTH } from "../workspaces";
 import { TAPE_CAP, recordSession, tapeSession, transcriptError, validateCast, validateTape, type TapeSession } from "./terminal";
 
 // ---------- the capture plan ----------
@@ -238,8 +239,8 @@ export function readCapturePlan(root: string, items: readonly CaptureItem[], o: 
 
 // ---------- the copy of the change ----------
 
-/** The change's files that are copied for a capture: files, bytes, depth. */
-export const COPY_CAPS = { files: 20_000, bytes: 512 * 1024 * 1024, depth: 32 };
+/** The change's files that are copied for a capture: files, bytes, and folders above a file (the snapshot's limit). */
+export const COPY_CAPS = { files: 20_000, bytes: 512 * 1024 * 1024, depth: MAX_FOLDER_DEPTH };
 
 /**
  * Copy the change's worktree into `dst`: folders and regular files, and symbolic links as links (never followed here;

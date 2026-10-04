@@ -111,11 +111,14 @@ export interface RepoSnapshot {
   base: string;
 }
 
+/** The most folders above a file that the snapshot and the capture's copy (COPY_CAPS in studio/evidence.ts) take: 64 pass, 65 are refused. */
+export const MAX_FOLDER_DEPTH = 64;
+
 /**
- * What one snapshot may hold: paths (files, links and submodules), bytes, and folders above a file (64 pass, 65 are
- * refused; the capture's copy has its own caps, COPY_CAPS in studio/evidence.ts); and the most bytes one read of git's object store holds (SR-4).
+ * What one snapshot may hold: paths (files, links and submodules), bytes, and folders above a file (MAX_FOLDER_DEPTH);
+ * and the most bytes one read of git's object store holds (SR-4).
  */
-export const SNAPSHOT_CAPS = { files: 20_000, bytes: 512 * 1024 * 1024, depth: 64, batch: 16 * 1024 * 1024 };
+export const SNAPSHOT_CAPS = { files: 20_000, bytes: 512 * 1024 * 1024, depth: MAX_FOLDER_DEPTH, batch: 16 * 1024 * 1024 };
 
 interface CommitResult {
   sha: string;
