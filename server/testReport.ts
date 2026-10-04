@@ -89,8 +89,11 @@ export function clearReport(workspace: string, rel: string): string | undefined 
   }
 }
 
-/** Read and parse the report after the commands ran. Never throws. */
-export function readTestReport(rel: string, ctx: ReportContext): TestReport {
+/**
+ * Read and parse the report after the commands ran. Never throws. `maxCases`: the cases kept (`keepCases`): MAX_CASES
+ * for a check run's state; the import keeps its whole report as its file (ORC-032, C14).
+ */
+export function readTestReport(rel: string, ctx: ReportContext, maxCases = MAX_CASES): TestReport {
   const refused = (reason: string): TestReport => ({ status: "refused", path: rel, reason });
   const at = locate(ctx.workspace, rel);
   if ("refused" in at) return refused(at.refused);
@@ -126,7 +129,7 @@ export function readTestReport(rel: string, ctx: ReportContext): TestReport {
   }
   const parsed = parseJUnit(data.toString("utf8"), cleaner(ctx));
   if (!parsed.ok) return refused(`${rel} ${parsed.reason}`);
-  return { status: "read", path: rel, ...keep(parsed.cases) };
+  return { status: "read", path: rel, ...keepCases(parsed.cases, maxCases) };
 }
 
 // ---------- the XML ----------
@@ -252,26 +255,26 @@ export function parseJUnit(xml: string, clean: Clean): { ok: true; cases: TestCa
 }
 
 /**
- * The cases kept in the state: every case when they fit; else the failing tagged ones (a rule's failure is never the
+ * The cases kept, at most `max`: every case when they fit; else the failing tagged ones (a rule's failure is never the
  * one left out), then the other tagged ones (the rules' evidence), then the failing ones, then the rest, kept in the
  * report's order. The tags of the cases left out are listed (rule results never read a tag that lost a test as a pass),
- * or "unlisted" past 400 tags.
+ * or "unlisted" past `max` tags.
  */
-function keep(all: TestCaseResult[]): Pick<Extract<TestReport, { status: "read" }>, "cases" | "counts" | "truncated" | "droppedTags"> {
+export function keepCases(all: TestCaseResult[], max = MAX_CASES): Pick<Extract<TestReport, { status: "read" }>, "cases" | "counts" | "truncated" | "droppedTags"> {
   const counts: Record<TestCaseResult["status"], number> = { passed: 0, failed: 0, skipped: 0, error: 0 };
   for (const c of all) counts[c.status]++;
-  if (all.length <= MAX_CASES) return { cases: all, counts, truncated: false };
+  if (all.length <= max) return { cases: all, counts, truncated: false };
   const tags = (c: TestCaseResult) => [...tagsIn(c.name), ...tagsIn(c.suite)];
   const failing = (c: TestCaseResult) => c.status === "failed" || c.status === "error";
   const rank = (c: TestCaseResult) => (tags(c).length ? 0 : 2) + (failing(c) ? 0 : 1);
   const order = all.map((c, i) => ({ c, i, r: rank(c) })).sort((a, b) => a.r - b.r || a.i - b.i);
-  const dropped = new Set(order.slice(MAX_CASES).flatMap((x) => tags(x.c)));
+  const dropped = new Set(order.slice(max).flatMap((x) => tags(x.c)));
   const cases = order
-    .slice(0, MAX_CASES)
+    .slice(0, max)
     .sort((a, b) => a.i - b.i)
     .map((x) => x.c);
   if (!dropped.size) return { cases, counts, truncated: true };
-  return { cases, counts, truncated: true, droppedTags: dropped.size > MAX_CASES ? "unlisted" : [...dropped] };
+  return { cases, counts, truncated: true, droppedTags: dropped.size > max ? "unlisted" : [...dropped] };
 }
 
 // ---------- cleaning ----------

@@ -58,6 +58,21 @@ function getImport(s: State, importId?: string): ProjectImport {
 /** A test's id, as rules name it: "suite::name", as the JUnit report gives them. */
 export const testId = (c: Pick<TestCaseResult, "suite" | "name">) => `${c.suite}::${c.name}`;
 
+const WORSE: Record<TestCaseResult["status"], number> = { error: 2, failed: 2, skipped: 1, passed: 0 };
+
+/**
+ * A report's cases by id, each id once. Two cases may share an id (a parametrized test named alike): the one with the
+ * worse result counts, so a pass never hides a failure (CR-6).
+ */
+export function casesById(cases: readonly TestCaseResult[]): Map<string, TestCaseResult> {
+  const out = new Map<string, TestCaseResult>();
+  for (const c of cases) {
+    const prev = out.get(testId(c));
+    if (!prev || WORSE[c.status] > WORSE[prev.status]) out.set(testId(c), c);
+  }
+  return out;
+}
+
 /** The studio runs of the import, oldest first; with `step`, only that step's. */
 export const importRuns = (s: State, step?: StudioRun["importStep"]): StudioRun[] => s.studio.runs.filter((r) => r.importStep !== undefined && (step === undefined || r.importStep === step));
 

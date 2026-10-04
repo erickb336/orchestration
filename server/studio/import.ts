@@ -35,7 +35,7 @@ import { ControlError, type Device, type ProjectDomain, type State, type TestCas
 import type { EnvironmentAssignment } from "../checks";
 import { lastJsonObject } from "../envelope";
 import type { Store } from "../store";
-import { clearReport, readTestReport } from "../testReport";
+import { clearReport, keepCases, readTestReport } from "../testReport";
 import type { WorkspaceManager } from "../workspaces";
 import type { StagedArtifact } from "./artifacts";
 import { captureEvidence, evidenceDir, type EnvironmentLender } from "./evidence";
@@ -154,19 +154,25 @@ export interface ImportRunner {
 
 const notRun = (reason: string): I.ImportChecksResult => ({ status: "not-run", reason });
 
-/** Keep the report's counts and cases as the import's file; the state keeps only the cases its rules name (C14). */
+/** Read the whole baseline report: the import keeps every case in its file (C14, CR-4). */
+const readWholeReport = (rel: string, ctx: Parameters<typeof readTestReport>[1]) => readTestReport(rel, ctx, Number.POSITIVE_INFINITY);
+
+/** Keep the report's counts and every case as the import's file; the state keeps only the cases its rules name (C14). */
 function keepReport(outDir: string, report: Extract<TestReport, { status: "read" }>, simulated?: true): I.ImportChecksResult {
   const file = join(outDir, REPORT_FILE);
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-  writeFileSync(file, `${JSON.stringify({ counts: report.counts, cases: report.cases, truncated: report.truncated })}\n`, { mode: 0o600 });
+  writeFileSync(file, `${JSON.stringify({ counts: report.counts, cases: report.cases })}\n`, { mode: 0o600 });
   return { status: "read", counts: report.counts, reportFile: REPORT_FILE, ...(simulated ? { simulated } : {}) };
 }
 
-/** The cases of the baseline report the import kept, or none (no report, not run). */
+/**
+ * The cases of the baseline report the rules reader sees and may name: every case of the import's file, up to
+ * MAX_IMPORT_CASES, the failing ones first (C14, CR-4). None without a report.
+ */
 export function reportCases(outDir: string): TestCaseResult[] {
   try {
     const raw = JSON.parse(readFileSync(join(outDir, REPORT_FILE), "utf8")) as { cases?: TestCaseResult[] };
-    return Array.isArray(raw.cases) ? raw.cases : [];
+    return Array.isArray(raw.cases) ? keepCases(raw.cases, I.MAX_IMPORT_CASES).cases : [];
   } catch {
     return [];
   }
@@ -199,7 +205,7 @@ export class EnvironmentImport implements ImportRunner {
           job.log?.(`import: running ${c.label} in the project's environment, with no network`);
           await p.run(c.argv, c.timeoutMs);
         }
-        return readTestReport(testReport, { workspace: p.work, scratch: [], env: this.o.env ?? process.env });
+        return readWholeReport(testReport, { workspace: p.work, scratch: [], env: this.o.env ?? process.env });
       },
     );
     if (!out.ok) {
@@ -264,7 +270,7 @@ export class SimulatedImport implements ImportRunner {
   readonly simulated = true;
 
   async checks(job: ImportChecksJob): Promise<I.ImportChecksResult> {
-    const report = readTestReport("junit.xml", { workspace: TALLY_FIXTURE, scratch: [], env: {} });
+    const report = readWholeReport("junit.xml", { workspace: TALLY_FIXTURE, scratch: [], env: {} });
     if (report.status !== "read") return notRun(`The simulated report could not be read: ${report.reason}`);
     return keepReport(job.outDir, report, true);
   }
@@ -316,7 +322,7 @@ export function readImportReading(finalText: string, cases: readonly TestCaseRes
   if (!obj) return { refused: 'its answer has no JSON block with the rules: { "rules": [...] }' };
   const parsed = I.parseImportReading({ rules: obj.rules, cases: [] });
   if (!parsed.ok) return { refused: parsed.errors.join("; ") };
-  const byId = new Map(cases.map((c) => [I.testId(c), c]));
+  const byId = I.casesById(cases);
   const unknown: string[] = [];
   for (const r of parsed.value.rules) for (const t of r.tests) if (!byId.has(t)) unknown.push(`rule ${r.id} names ${JSON.stringify(t.length > 80 ? `${t.slice(0, 79)}…` : t)}`);
   if (unknown.length) return { refused: `${unknown.slice(0, 3).join("; ")}${unknown.length > 3 ? `; and ${unknown.length - 3} more` : ""}: not in the baseline report` };
@@ -646,9 +652,10 @@ export function readerEnvelope(state: State, run: StudioRun, where: { folder: st
   const imp = state.studio.import!;
   const confined = run.provider === "claude" ? "The service lets you read only that checkout." : "On Codex the service cannot confine what you read, so read only that checkout.";
   const checks = imp.checks;
+  const ids = [...I.casesById(where.cases).keys()];
   const tests =
     checks.status === "read"
-      ? [`The project's tests ran once at this commit, in the project's container: ${where.cases.length} test${where.cases.length === 1 ? "" : "s"}. Their ids, as a rule names them ("suite::name"):`, ...where.cases.map((c) => `- ${I.testId(c)}`)]
+      ? [`The project's tests ran once at this commit, in the project's container: ${ids.length} test${ids.length === 1 ? "" : "s"}. Their ids, as a rule names them ("suite::name"):`, ...ids.map((id) => `- ${id}`)]
       : [`The project's tests did not run (${checks.status === "not-run" ? checks.reason : "not yet"}). Name no test: give every rule "tests": [].`];
   return [
     `# Import reader run ${run.id}: the rules of ${state.project.name} at commit ${short(imp.commit)}`,
