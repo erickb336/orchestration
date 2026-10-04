@@ -21,6 +21,12 @@
 //    algorithm or a topology has no check yet, so it is never verified.
 // 6. "designed": in force, and nothing has built this version yet (no task, or only tasks not started).
 //
+// A baseline item (ORC-032, 2.4): the version in force reproduces the code as it is today, and the import's baseline
+// Lock in put it there. The repository at the import's commit built it, so after the draft (3) it is built: verified
+// when every rule has a passing test (the import's baseline run, or later landed checks) and, for a screen, a
+// terminal demo or a TUI, the import's capture recorded it with no failure. Once a newer version is in force, the
+// rules above apply to it.
+//
 // Which version a task builds: the spec it builds from (the current spec, or for landed work the spec in force when it
 // landed) was written at or after this version of the item came into force, or before it, for an earlier version.
 //
@@ -44,7 +50,8 @@ import type { Artifact, Finding, FindingDecision, State, Task } from "../types";
 import { blueprintItems, citedArtifact, draftChanges, itemIdsIn } from "./blueprint";
 import { CAPTURE_DEVICES, isCapturedKind, itemEvidence, type CaptureDevice, type ItemEvidence, type NoEvidence, type NoRunYet } from "./evidence";
 import { landedChangeSha, ruleResults, TESTED_KINDS, type ItemRuleResults } from "./ruleResults";
-import type { BlueprintItem } from "./types";
+import { isAsIs } from "./studio";
+import type { BlueprintItem, ImportPartCapture } from "./types";
 
 export type ItemFactoryStatus = "designed" | "in-the-draft" | "being-built" | "built-not-verified" | "built-and-verified" | "fails-a-check" | "in-force";
 
@@ -128,6 +135,8 @@ export interface ItemFactoryView {
   notVerified?: NotVerified;
   /** The owner's draft changes the item (to the draft's version) or drops it. */
   draft?: { change: "changed"; item: BlueprintItem } | { change: "dropped" };
+  /** A baseline item (ORC-032): the import that built it, at its commit, and what its capture recorded of the part. */
+  baseline?: { importId: string; commit: string; capture?: ImportPartCapture };
 }
 
 const sameVersion = (a: BlueprintItem, b: BlueprintItem) => a.artifactId === b.artifactId && a.version === b.version && a.variant === b.variant;
@@ -275,17 +284,49 @@ function landedWork(s: State, ev: ItemEvidence, last: CitingTask): NotVerified |
   return undefined;
 }
 
+/**
+ * The gap the rules leave: some have no passing test; or a flow or a contract has none (its rules are its only check).
+ * Undefined when every rule passes, or when the item has no rules and other checks prove it.
+ */
+function rulesGap(item: BlueprintItem, rules: ItemRuleResults | undefined): NotVerified | undefined {
+  if (rules) return rules.allPass ? undefined : { why: "rules-unproved", noTest: rules.counts["no-test"], skipped: rules.counts.skipped };
+  return TESTED_KINDS.includes(item.kind) ? { why: "no-rules" } : undefined;
+}
+
 /** The first gap the checks leave in landed work on this version; undefined when they prove it. */
 function notVerified(s: State, item: BlueprintItem, last: CitingTask, rules: ItemRuleResults | undefined, ev: ItemEvidence | NoRunYet | undefined, ux: UxReviewOfItem | undefined): NotVerified | undefined {
-  if (TESTED_KINDS.includes(item.kind)) {
-    if (!rules) return { why: "no-rules" };
-    return rules.allPass ? undefined : { why: "rules-unproved", noTest: rules.counts["no-test"], skipped: rules.counts.skipped };
-  }
-  if (!isCapturedKind(item.kind) || !ev) return { why: "kind-not-checked" };
+  const r = rulesGap(item, rules);
+  if (r || TESTED_KINDS.includes(item.kind)) return r;
+  if (!isCapturedKind(item.kind) || !ev) return rules ? undefined : { why: "kind-not-checked" };
   const gap = evidenceGap(s, item, ev, last);
   if (gap) return gap;
   if (item.kind === "screen" && !ux) return { why: "no-ux-review" };
   return undefined;
+}
+
+/**
+ * The first gap the checks leave in a baseline item (ORC-032, 2.4); undefined when they prove it: its rules, then for
+ * a screen, a terminal demo or a TUI the import's capture of it (recorded, on each device for a screen, no warning).
+ */
+function baselineGap(s: State, item: BlueprintItem, rules: ItemRuleResults | undefined, cap: ImportPartCapture | undefined): NotVerified | undefined {
+  const r = rulesGap(item, rules);
+  if (r || TESTED_KINDS.includes(item.kind)) return r;
+  if (!isCapturedKind(item.kind)) return rules ? undefined : { why: "kind-not-checked" };
+  if (!cap) return { why: "no-evidence", reason: "no-run" };
+  if (cap.status === "none") return { why: "no-evidence", reason: cap.reason, detail: cap.detail, ...(cap.log ? { log: cap.log } : {}) };
+  if (item.kind === "screen") {
+    const missing = screenDevices(s, item).filter((d) => !cap.files.some((f) => f.type === "png" && f.device === d));
+    if (missing.length) return { why: "evidence-missing-device", devices: missing };
+  }
+  return cap.warnings?.length ? { why: "evidence-warning", warning: cap.warnings[0] } : undefined;
+}
+
+/** The import that put this item's version into force as the baseline, with its capture of the part; else undefined. */
+function baselineOf(s: State, item: BlueprintItem): ItemFactoryView["baseline"] {
+  const imp = s.studio.import;
+  if (!imp?.lockedInAt || !isAsIs(s, item)) return undefined;
+  const capture = imp.capture?.parts.find((p) => p.artifactId === item.artifactId);
+  return { importId: imp.id, commit: imp.commit, ...(capture ? { capture } : {}) };
 }
 
 /** Where one item in force stands in the factory; undefined when the version in force has no item with this id. */
@@ -306,7 +347,9 @@ export function itemFactoryStatus(s: State, itemId: string): ItemFactoryView | u
   const ofLandedWork = !!last && !!evidence && evidence.status !== "no-run" && !landedWork(s, evidence, last);
   const uxReview = evidence && evidence.status !== "no-run" ? uxReviewOf(s, evidence, ofLandedWork) : undefined;
   const openDifference = !!uxReview?.ofLandedWork && uxReview.differences.some((d) => d.state === "open");
-  const gap = last ? notVerified(s, item, last, rules, evidence, uxReview) : undefined;
+  // A baseline item was built by the repository at the import's commit (ORC-032); other items, by landed work.
+  const baseline = baselineOf(s, item);
+  const gap = baseline ? baselineGap(s, item, rules, baseline.capture) : last ? notVerified(s, item, last, rules, evidence, uxReview) : undefined;
 
   const status: ItemFactoryStatus =
     item.kind === "dictionary"
@@ -315,13 +358,17 @@ export function itemFactoryStatus(s: State, itemId: string): ItemFactoryView | u
         ? "fails-a-check"
         : draft
           ? "in-the-draft"
-          : tasks.some((t) => t.thisVersion && (t.state === "running" || t.state === "finished"))
-            ? "being-built"
-            : last
-              ? gap
-                ? "built-not-verified"
-                : "built-and-verified"
-              : "designed";
+          : baseline
+            ? gap
+              ? "built-not-verified"
+              : "built-and-verified"
+            : tasks.some((t) => t.thisVersion && (t.state === "running" || t.state === "finished"))
+              ? "being-built"
+              : last
+                ? gap
+                  ? "built-not-verified"
+                  : "built-and-verified"
+                : "designed";
   return {
     item,
     status,
@@ -332,6 +379,7 @@ export function itemFactoryStatus(s: State, itemId: string): ItemFactoryView | u
     ...(uxReview ? { uxReview } : {}),
     ...(status === "built-not-verified" && gap ? { notVerified: gap } : {}),
     ...(draft ? { draft } : {}),
+    ...(baseline ? { baseline } : {}),
   };
 }
 
