@@ -931,6 +931,7 @@ class DemoBuilder {
     this.screenSpecs(); // WT-014 and WT-015: the trip page and the packing list screen, as Feature tasks
     this.tripPageBuilt(); // WT-014: captured, matches its design: built and verified
     this.packingScreenBuilt(); // WT-015: captured, one difference the lead accepted: fails a check
+    this.joinFlowChangeOrder(); // Vision again: round 3 (Join flow), your Lock in, the change order the lead answers
     const fix = this.bugReproduced(); // WT-009: reproduced; the fix starts
     this.voiceOver(); // WT-007: UX review raised a finding that needs you; the code review runs at start
     this.pauseFix(fix); // WT-009: paused by you, acknowledged by the runtime
@@ -1487,6 +1488,55 @@ class DemoBuilder {
     this.mergePr(id, 1850, 1849, ["findings-accepted"]); // the landing records that a finding was accepted
   }
 
+  /**
+   * Vision stays open while the factory runs: a third round, on a flow (joining by link, with its rules), kept, and
+   * your Lock in. It brings new work, so it is a change order; the lead answers it with one new task, a line you can undo.
+   */
+  private joinFlowChangeOrder() {
+    this.studioExchange(1500, "Add how a friend joins a trip by link, with what happens when the link has expired.", "I opened a round on the flows and asked the designer for the join flow, with its rules.", {
+      openRound: { focus: "flows", summary: "How a friend joins a trip by link, and its rules." },
+      designerRuns: [{ brief: "The join flow: a friend opens the invite link, joins, or meets an expired link. Give its rules and one example.", kinds: ["flow"], variants: 1 }],
+    });
+    const [designer] = this.startStudioRuns(1498);
+    this.designerHandsIn(designer, 1488, [{ title: "Join flow", version: 1 }], "Join flow, with 4 rules and 1 example");
+    const pe = this.askPe(1487);
+    this.peAnswers(pe[0], 1484, "Join flow", [{ verdict: "feasible", reasons: "The guest link of Trip data v2 carries the trip and an expiry; each rule is testable.", budget: { buildUsd: [3, 6], maintenanceUsdPerMonth: [0, 0.5], basis: "One page and the link check; no new storage" } }], "Join flow v1: feasible");
+    this.ownerAnswers(1480, [{ title: "Join flow", mark: "keep" }], "Keep the join flow.", "Round 3 is closed. Your draft adds Join flow; Lock in shows what it changes.", { closeRound: { summary: "Kept: Join flow." } });
+    // Your Lock in: the summary you saw, by its draft revision and digest, as the Lock in screen sends them.
+    const summary = B.lockInSummary(this.s);
+    this.owner("lockIn", { draftRev: summary.draftRev, summaryDigest: B.summaryDigest(summary) }, 1470);
+    const co = this.s.blueprint.changeOrders.at(-1);
+    if (!co || co.status !== "open" || co.handler !== "lead") throw new Error("demo: the Lock in made no change order for the lead");
+    // The lead answers it: one new task for the new work (a line with its own Undo).
+    const r = M.startLeadRun(this.s, { provider: CLAUDE.provider, model: CLAUDE.model, trigger: "change-order" }, this.at(1469));
+    const block = {
+      rev: co.rev,
+      updates: [
+        {
+          action: "new-task",
+          task: null,
+          why: "Join flow is new: nothing builds it yet.",
+          proposal: {
+            title: "Join a trip by link",
+            area: "Trip sharing",
+            outcome: "A friend opens the invite link and joins the trip, or is told to ask the organiser for a new link, as Join flow's rules say.",
+            options: [
+              { id: "A", name: "As the flow says", approach: "Build the join page and the link check, with a test for each rule of Join flow." },
+              { id: "B", name: "Defer", approach: "Wait until the attendee list has landed." },
+            ],
+            recommendedOptionId: "A",
+            rationale: "You locked in Join flow; its rules need tests.",
+            acceptance: ["Each rule and the example of Join flow has a passing test"],
+            blueprintRefs: [this.item("Join flow")],
+          },
+        },
+      ],
+    };
+    this.s = M.completeLeadRun(r.state, r.runId, { reply: "I planned one task for the join flow. Undo it on the change order if you would rather wait.", proposals: [], changeOrder: block }, this.at(1467), { simulated: true });
+    const answered = this.s.blueprint.changeOrders.find((x) => x.rev === co.rev)!;
+    if (!answered.lines?.length) throw new Error(`demo: the lead's answer to change order ${co.rev} made no line (${JSON.stringify(this.s.leadRuns.find((x) => x.id === r.runId)?.notes ?? [])})`);
+  }
+
   /** WT-007: designed and implemented; the UX review asks you about units; the code review is next (it starts when the service does). */
   private voiceOver() {
     const id = "WT-007";
@@ -1543,7 +1593,7 @@ class DemoBuilder {
       tasks: [{ id: "WT-010", defer: true, why: "It needs a connection anyway, and offline maps comes first." }],
       notes: [{ task: id, step: "S1", text: "Put a first-aid kit on every packing list, whatever the trail's length or forecast." }],
     });
-    const set = this.s.steering[0];
+    const set = this.s.steering.at(-1);
     if (!set || !set.changes.some((c) => c.kind === "focus" && c.status === "applied") || !set.changes.some((c) => c.kind === "defer" && c.taskId === "WT-010" && c.status === "applied")) throw new Error("demo: the steering exchange was not applied");
     const noteRow = set.changes.find((c) => c.kind === "note");
     const note = noteRow?.noteId ? this.s.notes.find((n) => n.id === noteRow.noteId) : undefined;

@@ -193,8 +193,9 @@ describe("the demo state", () => {
     expect(talk[1].text).toMatch(/^Done\. Offline maps is now the focus/);
     expect(talk[2].text).toMatch(/Keep the VoiceOver work going/);
     expect(talk[3].text).toMatch(/Claude is reviewing/);
-    expect(s.steering).toHaveLength(1);
-    const set = s.steering[0];
+    // Two change sets: the lead's answer to change order 2 (see its own test), then this exchange.
+    expect(s.steering.map((x) => x.changes.map((c) => c.kind).join())).toEqual(["new-task", "focus,defer,note"]);
+    const set = s.steering[1];
     expect(set.simulated).toBe(true);
     expect(talk[1].changeSetId).toBe(set.id);
     expect(set.changes.map((c) => [c.kind, c.status, c.taskId])).toEqual([
@@ -211,7 +212,7 @@ describe("the demo state", () => {
     expect(undone.result).toEqual({ undone: [set.changes[1].id, set.changes[0].id], left: [] });
     expect(M.currentVision(undone.state).focus).toBe("Trip sharing first.");
     expect(task(undone.state, "WT-010").deferral).toBeUndefined();
-    expect(undone.state.steering[0].changes[2].status).toBe("applied");
+    expect(undone.state.steering[1].changes[2].status).toBe("applied");
     expect(M.pendingMessages(s)).toEqual([]);
   });
 
@@ -259,6 +260,27 @@ describe("the demo state", () => {
     for (const t of s.tasks) expect(t.createdAt > start.at, t.id).toBe(true);
   });
 
+  it("tells one change order: round 3 in Vision while the factory runs, your Lock in, and the lead's answer, a line with its own Undo", () => {
+    const s = demo();
+    expect(s.studio.rounds.map((r) => `${r.n} ${r.focus}`)).toEqual(["1 experience", "2 data", "3 flows"]);
+    expect(s.blueprint.revisions.map((r) => r.rev)).toEqual([1, 2]);
+    expect(s.blueprint.revisions[1].lockIn?.summary.changes.added.map((i) => i.title)).toEqual(["Join flow"]);
+    const join = s.blueprint.revisions[1].items.find((i) => i.title === "Join flow")!;
+    expect(s.blueprint.changeOrders).toHaveLength(1);
+    const co = s.blueprint.changeOrders[0];
+    expect(co).toMatchObject({ rev: 2, handler: "lead", status: "done" });
+    expect(co.lines).toEqual([expect.objectContaining({ kind: "new-task", status: "applied", appliedBy: "lead", items: [join.id] })]);
+    const made = task(s, co.lines![0].madeTaskId!);
+    expect(M.currentSpec(made).content).toMatchObject({ title: "Join a trip by link", blueprintRefs: [join.id] });
+    expect(made).toMatchObject({ lifecycle: "proposed", holdBeforeStart: true });
+    expect(s.leadRuns.find((r) => r.id === co.leadRunId)).toMatchObject({ trigger: "change-order", outcome: "completed", simulated: true });
+    // Undo on the line cancels the new task, which has not started.
+    const set = s.steering[0];
+    expect(set.changes.map((c) => c.id)).toEqual([co.lines![0].changeId]);
+    const undone = M.undoSteering(s, set.id, set.changes[0].id, iso(T0));
+    expect(task(undone.state, made.id).lifecycle).toBe("cancelled");
+  });
+
   it("shows Design and reality with evidence: built and verified, built not verified, fails a check, in force; the captures are simulated", () => {
     const s = demo();
     const where = Object.fromEntries(blueprintFactoryStatus(s).map((v) => [v.item.title, v]));
@@ -268,6 +290,7 @@ describe("the demo state", () => {
       "Packing list": "fails-a-check",
       "Trip data": "built-not-verified",
       Words: "in-force",
+      "Join flow": "designed",
     });
     // Trail map: WT-001 landed with no capture (a Change); Trip data: a contract with no rules to test.
     expect(where["Trail map"].notVerified).toEqual({ why: "no-evidence", reason: "no-run" });
@@ -289,10 +312,10 @@ describe("the demo state", () => {
     const talk = s.conversation.slice(-4);
     expect(s.notes).toHaveLength(1);
     const n = s.notes[0];
-    const row = s.steering[0].changes[2];
+    const row = s.steering[1].changes[2];
     const run = s.attempts.find((a) => a.id === n.attemptId)!;
     expect(n).toMatchObject({ taskId: "WT-005", stepId: "S1", status: "delivered", via: "live", simulated: true, text: "Put a first-aid kit on every packing list, whatever the trail's length or forecast." });
-    expect(n.from).toEqual({ by: "lead", leadRunId: s.steering[0].leadRunId, changeSetId: s.steering[0].id, changeId: row.id, messageIds: [talk[0].id] });
+    expect(n.from).toEqual({ by: "lead", leadRunId: s.steering[1].leadRunId, changeSetId: s.steering[1].id, changeId: row.id, messageIds: [talk[0].id] });
     expect(row).toMatchObject({ kind: "note", status: "applied", appliedBy: "lead", noteId: n.id, stepId: "S1", after: n.text });
     expect(talk[0].text).toMatch(/tell the coder on the packing list to put a first-aid kit on every list/);
     expect(talk[1].text).toMatch(/I also passed your note to the coder working on the packing list\.$/);
@@ -314,7 +337,7 @@ describe("the demo state", () => {
 
   it("shows each capability once: the tasks and their states at the start of the demo", () => {
     const s = demo();
-    expect(s.tasks.map((t) => t.id)).toEqual(["WT-001", "WT-002", "WT-003", "WT-004", "WT-005", "WT-006", "WT-007", "WT-008", "WT-009", "WT-010", "WT-011", "WT-012", "WT-013", "WT-004.1", "WT-004.2", "WT-004.3", "WT-014", "WT-015"]);
+    expect(s.tasks.map((t) => t.id)).toEqual(["WT-001", "WT-002", "WT-003", "WT-004", "WT-005", "WT-006", "WT-007", "WT-008", "WT-009", "WT-010", "WT-011", "WT-012", "WT-013", "WT-004.1", "WT-004.2", "WT-004.3", "WT-014", "WT-015", "T-019"]);
     const col = (id: string) => M.column(s, task(s, id));
 
     // WT-001: a failing check became a finding, the repair ran, the loop ran once more clean; merged, in Review.
