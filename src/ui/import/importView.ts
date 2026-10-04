@@ -265,7 +265,8 @@ export function readingSteps(s: State): StepItem[] {
       ...(c.status === "pending" ? held({ mark: "running" as const, state: "running your test command in the environment" }) : c.status === "not-run" ? { mark: "skipped" as const, state: `not run: ${c.reason}` } : { mark: "done" as const, state: testsLine(c.counts) }),
     },
     { id: "rules", name: "The rules", who: who("rules"), ...runState("rules", reading ? `${count(reading.rules.length, "rule")}: ${withTest} from the tests, ${reading.rules.length - withTest} from the code and the docs` : undefined) },
-    { id: "parts", name: "The parts", who: who("parts"), ...runState("parts", parts.length && latest("parts")?.status === "completed" ? `${count(parts.length, "part")}: ${parts.map((p) => p.title).join(", ")}` : undefined) },
+    // The Words is a part too, as the baseline and the lead count it (UX-R2-3): one count everywhere.
+    { id: "parts", name: "The parts", who: who("parts"), ...runState("parts", parts.length && latest("parts")?.status === "completed" ? `${count(parts.length + (words ? 1 : 0), "part")}: ${[...parts, ...(words ? [words] : [])].map((p) => p.title).join(", ")}` : undefined) },
     {
       id: "capture",
       name: "The recording",

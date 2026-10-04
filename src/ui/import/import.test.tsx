@@ -160,7 +160,7 @@ describe("2 · Reading (C2)", () => {
   it("each step says what it found once done: the tests, the rules, the parts, then the recording", () => {
     expect(text(<ImportPanel />, stage("read"))).toContain("✓ done: The tests the service · 22 read, all pass ✓ done: The rules Reader · Claude · 17 rules: 13 from the tests, 4 from the code and the docs ○ waiting: The parts not started");
     const parts = text(<ImportPanel />, stage("parts"));
-    expect(parts).toContain("✓ done: The parts Designer · Claude · 5 parts: tally add, tally split, tally report, Splitting, The ledger ○ waiting: The recording the service · recording the parts in the environment");
+    expect(parts).toContain("✓ done: The parts Designer · Claude · 6 parts: tally add, tally split, tally report, Splitting, The ledger, Words ○ waiting: The recording the service · recording the parts in the environment");
     expect(parts).toContain("reading · 4 of 5 steps done");
   });
 
