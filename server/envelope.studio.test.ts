@@ -112,6 +112,11 @@ describe("the lead's studio brief", () => {
     expect(chat).toContain(`is in review: the tests ran: 22, 22 pass;`);
     expect(chat).not.toContain(write);
     expect(chat).toContain(`The import asks the user its own questions in round 0, and the review run of the import writes the vision draft. Answer the user in "reply" only: leave "vision" out, open no round and ask for no designer run while round 0 is open.`);
+    // The whole envelope of that chat reply has no line that asks it to write the vision (R28-1); the review run's has it.
+    const living = 'propose the whole vision in "vision"';
+    expect(envelope(tallyImport("review").s, CODE)).not.toContain(living);
+    expect(buildLeadEnvelope(reviewRun.state, reviewRun.state.leadRuns.find((x) => x.id === reviewRun.runId)!, "read", undefined, undefined, CODE)).toContain(living);
+    expect(envelope(fresh(), CODE)).toContain(living);
     expect(section(envelope(tallyImport("review", { checks: "not-run" }).s, CODE))).toContain("the tests did not run (Docker is not available on this computer, so the tests did not run); 17 rules, 0 named by tests;");
     expect(section(envelope(fresh(), CODE))).not.toContain("The import of the repository");
   });
