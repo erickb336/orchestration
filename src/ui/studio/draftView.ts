@@ -92,6 +92,8 @@ export function draftHeading(s: State): { title: string; since: string } {
  */
 export function emptyDraftWords(s: State): { title: string; text: string } {
   const keep = "A part you mark Keep goes into the draft when you send it.";
+  // After an import's baseline (ORC-032): the baseline is in force, and a round changes it.
+  if (s.project.stage === "shaping" && s.studio.import?.lockedInAt) return { title: "Nothing is in the draft yet.", text: "The baseline is in force. To change it, ask the lead for a round. Your first change starts the factory, through Start the factory." };
   if (s.project.stage === "shaping") return { title: "Nothing is in the draft yet.", text: `${keep} Start the factory is your first Lock in.` };
   const rev = B.blueprintRev(s);
   return { title: "Nothing is in the draft.", text: `The factory builds from ${rev ? `Lock in ${rev}` : "the vision text"}. ${keep}` };

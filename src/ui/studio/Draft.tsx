@@ -8,6 +8,8 @@ import { itemFactoryStatus } from "../../domain/studio/itemStatus";
 import type { BlueprintItem, StudioArtifact } from "../../domain/studio/types";
 import { Banner, Button, ButtonLink, Chip, useConfirm } from "../kit";
 import { cx } from "../kit/cx";
+import { ChangesToDesign } from "../import/AfterBaseline";
+import { openChanges } from "../import/importView";
 import { useLeadContext } from "../LeadDrawer";
 import { StartFactoryLink } from "../preflight/StartFactoryLink";
 import { PREFLIGHT_HASH } from "../preflight/preflightView";
@@ -53,6 +55,8 @@ export function DraftBar() {
   const shaping = state.project.stage === "shaping";
   if (!B.hasDraft(state)) {
     const w = emptyDraftWords(state);
+    // After an import's baseline, the changes to design you asked for wait beside Ask the lead for a round (UX-5).
+    const changes = openChanges(state).length > 0;
     return (
       <Banner
         tone="info"
@@ -61,14 +65,17 @@ export function DraftBar() {
         title={w.title}
         actions={
           <>
-            <Button size="small" variant="primary" onClick={() => lead.openLead({ placeholder: ASK_FOR_A_ROUND })}>
-              Ask the lead for a round
-            </Button>
+            {!changes && (
+              <Button size="small" variant="primary" onClick={() => lead.openLead({ placeholder: ASK_FOR_A_ROUND })}>
+                Ask the lead for a round
+              </Button>
+            )}
             <StartFactoryLink variant="quiet" size="small" />
           </>
         }
       >
         {w.text}
+        {changes && <ChangesToDesign />}
       </Banner>
     );
   }

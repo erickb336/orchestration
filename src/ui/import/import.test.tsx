@@ -21,7 +21,7 @@ import { BaselineLockIn } from "./BaselineLockIn";
 import { ImportPanel } from "./ImportPanel";
 import { ImportReview } from "./ImportReview";
 import { TALLY_START_INFO } from "./importScene";
-import { UNANSWERED_TEXT, previewLines, previewSetting, startBlocker, startDraft, summaryChanged, type FoundRepository } from "./importView";
+import { UNANSWERED_TEXT, effectSentence, previewLines, previewSetting, startBlocker, startDraft, summaryChanged, type FoundRepository } from "./importView";
 import { StartForm } from "./StartImport";
 
 const svc = testService({ prototypePort: 5320 });
@@ -377,6 +377,39 @@ describe("5 · After (Design and reality, Home)", () => {
     expect(text(<ImportHome />, stage("baseline", { answers: KEEP_ALL }))).toBe("The factory All tasks Nothing to build: change the design in Vision to start work. Open Vision");
     expect(text(<ImportHome />, stage("baseline"))).toBe("The factory All tasks Nothing to build yet: 1 change to design waits. Ask the lead for a round in Vision, then start the factory. Open Vision Ask the lead for a round");
     expect(text(<ImportHome />, stage("review"))).toBe("The import needs you Round 0, As it is today, asks you 5 questions. Answer in Vision, then lock in the baseline. Answer in Vision");
+  });
+});
+
+describe("Vision after the baseline (UX-5, CR-9)", () => {
+  it("names round 0 Lock in 1 · the baseline, and its parts carry no Keep, Change or Drop", () => {
+    const html = renderScreen(<Studio />, stage("baseline"), svc);
+    const t = visible(html);
+    expect(t).toContain("0 · Lock in 1 · the baseline");
+    expect(t).not.toContain("0 · As it is today");
+    expect(html).not.toMatch(/>(Keep|Change|Drop)<\/button>/);
+    expect(t).not.toMatch(/unmarked|Your mark|Correct what it gets wrong/);
+    expect(t).toContain("The baseline What tally does today, at commit c0ffee0: in force and built since Lock in 1.");
+  });
+
+  it("lists the changes to design beside Ask the lead for a round", () => {
+    const t = text(<Studio />, stage("baseline"));
+    expect(t).toMatch(/1 change to design waits for a round: tally add: The docs: a currency on each expense\.? .*Ask the lead for a round/);
+  });
+
+  it("shows the import's open questions, to answer there (CR-9)", () => {
+    const t = text(<Studio />, stage("baseline"));
+    expect(t).toContain("The import's open questions 1");
+    expect(t).toContain("The ledger shall live in .tally.json in the folder where you run tally.");
+    expect(t).toContain("Confirm Correct");
+    expect(t).toContain("Send your answers");
+    // Answered every question: no card.
+    expect(text(<Studio />, stage("baseline", { answers: KEEP_ALL }))).not.toContain("The import's open questions");
+  });
+
+  it("after the baseline, Correct as a misreading is a change to design, whose task adds the missing test (Q6)", () => {
+    const s = stage("baseline");
+    expect(effectSentence(s, [], { option: "correct", correction: "misread", text: "x" })).toBe("Your answer: tally does something else today. After the baseline, it becomes a change to design, and its task adds the missing test.");
+    expect(effectSentence(stage("answered"), [], { option: "correct", correction: "misread", text: "x" })).toContain("A designer fixes the part from your words");
   });
 });
 

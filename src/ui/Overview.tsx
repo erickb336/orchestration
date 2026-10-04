@@ -19,7 +19,8 @@ import { landedVerdict, latestLeadReply, liveText, needsYouItems, optionsLine, p
 import { VisionLine } from "./studio/VisionCard";
 import { Button, ButtonLink, Card, Chip, EmptyState, Field, Input, NeedsYouItem, Row, Rows, SimulatedChip, StatePill, useConfirm } from "./kit";
 import { importQuestions, importStatus, itemAnswerEffect } from "../domain/studio/import";
-import { budgetStopLine, importPill, nothingToBuild, readingSteps, roundRequest } from "./import/importView";
+import { AskForRound } from "./import/AfterBaseline";
+import { budgetStopLine, importPill, nothingToBuild, readingSteps } from "./import/importView";
 import type { FindingDecision, PrDelivery, SpecOption, State, Task, VisionRevision } from "../domain/types";
 
 /** The one name for each involvement setting, wherever it is shown. */
@@ -94,8 +95,7 @@ function FactoryHome({ state }: { state: State }) {
  * the lead for a round).
  */
 export function ImportHome() {
-  const { state, send, disabled } = useStore();
-  const [asked, setAsked] = useState(false);
+  const { state } = useStore();
   const status = importStatus(state);
   if (!status) return null;
   const stopLine = budgetStopLine(state);
@@ -142,19 +142,7 @@ export function ImportHome() {
       </p>
       <div className="k-actions">
         {vision}
-        {n.changes > 0 && (
-          <Button
-            size="small"
-            variant="primary"
-            disabled={disabled || asked}
-            onClick={async () => {
-              if ((await send("postMessage", { text: roundRequest(state) })).ok) setAsked(true);
-            }}
-          >
-            Ask the lead for a round
-          </Button>
-        )}
-        {asked && <span className="small muted">Sent. The lead answers in the conversation.</span>}
+        {n.changes > 0 && <AskForRound />}
       </div>
     </Card>
   );

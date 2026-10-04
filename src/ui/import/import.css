@@ -123,3 +123,7 @@
   .imp-lockrows li { grid-template-columns: minmax(0, 1fr); }
   .imp-sum__line { font-size: var(--fs-body); }
 }
+
+/* After the baseline: the changes to design, beside Ask the lead for a round */
+.imp-changes { margin-top: 6px; }
+.imp-changes__list { margin: 0; padding-left: 1.2em; display: grid; gap: 2px; overflow-wrap: anywhere; }

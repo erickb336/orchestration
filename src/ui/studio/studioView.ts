@@ -35,11 +35,14 @@ import { acceptPinMessage, prototypeOrigin, type PinMessage } from "../../runtim
 export const FOCUS_LABEL: Record<RoundFocus, string> = { material: "What you brought", experience: "The experience", data: "Inputs and outputs", flows: "Flows" };
 
 /** Round 0 of an existing repository: the designer's reproductions of what the code does now (pass 4, "as is"). */
-export const AS_IS_LABEL = "As it is today";
+const AS_IS_LABEL = "As it is today";
+/** Round 0 of an import once its baseline Lock in put it into force (UX-5). */
+const BASELINE_LABEL = "Lock in 1 · the baseline";
 
-/** A round's name: its focus, or "As it is today" for a round 0 that holds the designer's "as is" reproductions. */
+/** A round's name: its focus, or for an import's round 0 "As it is today", and once locked in, "Lock in 1 · the baseline". */
 export function roundLabel(s: State, r: Round): string {
-  return r.focus === "material" && s.studio.artifacts.some((a) => a.round === r.n && a.provenance?.asIs) ? AS_IS_LABEL : FOCUS_LABEL[r.focus];
+  if (r.focus !== "material" || !s.studio.artifacts.some((a) => a.round === r.n && a.provenance?.asIs)) return FOCUS_LABEL[r.focus];
+  return r.n === 0 && s.studio.import?.lockedInAt ? BASELINE_LABEL : AS_IS_LABEL;
 }
 
 /** How many of an "as is" artifact's files show before "Show all". */

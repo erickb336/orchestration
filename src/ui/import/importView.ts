@@ -351,10 +351,10 @@ export function optionWords(s: State, options: readonly ImportOption[]): OptionW
 }
 
 /** The two choices of "Correct" (C15), on a guess or on a confirmed rule or part. */
-export const CORRECTIONS = (name: string) =>
+export const CORRECTIONS = (name: string, lockedIn = false) =>
   [
     { value: "change", label: `${name} should do something else`, hint: "A change to design. The baseline keeps what it does today." },
-    { value: "misread", label: `${name} does something else today`, hint: "The reader misread the code. A designer fixes the part before the baseline." },
+    { value: "misread", label: `${name} does something else today`, hint: lockedIn ? "The reader misread the code. After the baseline, it becomes a change to design, and its task adds the missing test." : "The reader misread the code. A designer fixes the part before the baseline." },
   ] as const;
 
 /** One answer before it is sent: the option, and for "correct" and "neither" the owner's words. */
@@ -379,7 +379,8 @@ export function shownAnswer(s: State, draft: ReviewDraft, key: string): DraftAns
 /** What the shown answer does: open while none, else its effect (a correction with no kind yet is a change). */
 export function shownEffect(s: State, a: DraftAnswer | undefined): AnswerEffect | "open" {
   if (!a?.option || !s.studio.import) return "open";
-  return answerEffect(s.studio.import, { on: { rule: "" }, option: a.option, ...(a.option === "correct" ? { correction: a.correction ?? "change" } : {}), at: "" });
+  // An answer you send now: after the baseline, a misreading is a change too (Q6).
+  return answerEffect(s.studio.import, { on: { rule: "" }, option: a.option, ...(a.option === "correct" ? { correction: a.correction ?? "change" } : {}), at: s.studio.import.lockedInAt ?? "" });
 }
 
 /** What an answer does, in a sentence under the question. Empty while it is open. */
@@ -395,6 +396,7 @@ export function effectSentence(s: State, options: readonly ImportOption[], a: Dr
     case "fixed":
       return `Your answer: ${name} does something else today. A designer fixes the part from your words, and it goes into the baseline as you wrote.`;
     case "change":
+      if (a?.option === "correct" && a.correction === "misread") return `Your answer: ${name} does something else today. After the baseline, it becomes a change to design, and its task adds the missing test.`;
       return `Your answer: ${label}. The baseline keeps what ${name} does today. Your change becomes a change to design.`;
   }
 }
@@ -574,6 +576,15 @@ export function answerChip(s: State, ruleId: string): { word: string; tone: "neu
   if (e === "open") return importQuestions(imp).asked.some((q) => q.ruleId === ruleId) ? { word: "not confirmed", tone: "you" } : undefined;
   return { word: e === "kept" ? "you confirmed it" : e === "fixed" ? "as you corrected it" : "a change to design", tone: e === "change" ? "you" : "neutral" };
 }
+
+/** An imported part in Vision after the Lock in (UX-5): what it is, and how it changes. */
+export function baselinePartLine(s: State): string {
+  const imp = s.studio.import;
+  return `What ${productName(s)} does today, at commit ${shortCommit(imp?.commit ?? "")}: in force and built since Lock in 1. To change it, ask the lead for a round.`;
+}
+
+/** "1 change to design waits for a round:", beside Ask the lead for a round. */
+export const changesWaitLine = (n: number) => `${count(n, "change")} to design ${n === 1 ? "waits" : "wait"} for a round:`;
 
 /** Home after the baseline: nothing to build, or the changes to design that wait. */
 export function nothingToBuild(s: State): { bold: string; rest: string; changes: number } {

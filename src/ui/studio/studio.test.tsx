@@ -506,15 +506,16 @@ describe("as it is today (round 0 of an import)", () => {
     return { s, id: parts.words! };
   }
 
-  it("the round is named As it is today, not What you brought; the artifact says it is a reproduction to correct, with the files it came from", () => {
+  it("once locked in, the round is named Lock in 1 · the baseline, not What you brought; the artifact says it is the baseline, with the files it came from (UX-5)", () => {
     const { s, id } = withAsIs();
-    expect(roundLabel(s, s.studio.rounds[0])).toBe("As it is today");
+    expect(roundLabel(s, s.studio.rounds[0])).toBe("Lock in 1 · the baseline");
     expect(artifactLine(S.getArtifact(s, id, 1))).toBe("as is · dictionary");
     const html = render(<Studio />, s);
-    expect(html).toContain("0 · As it is today");
+    expect(html).toContain("0 · Lock in 1 · the baseline");
     expect(html).not.toContain("What you brought");
-    expect(html).toContain('aria-label="As it is today"');
-    expect(html).toContain("It is not a proposal. Correct what it gets wrong");
+    expect(html).toContain('aria-label="The baseline"');
+    expect(html).toContain("in force and built since Lock in 1. To change it, ask the lead for a round.");
+    expect(html).not.toContain("Correct what it gets wrong");
     expect(html).toContain("Made from 2 files in the repository:");
     expect(html).toContain("<code>tally/cli.py</code>");
     expect(html).toContain("<code>README.md</code>");
