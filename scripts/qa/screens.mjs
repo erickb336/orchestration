@@ -5,12 +5,13 @@
 // Results, Settings), src/ui/settings/sections.ts (the five Settings sections) and #/kit (the component kit, not in
 // the navigation). The lead drawer and the two header menus are not routes; they are captured as overlays on Home.
 //
-// The state is the sample project, Weekend Trips (src/domain/demo.ts), in the factory. Some routes show nothing on it
-// (the sample has no studio rounds and no change order), so they are captured a second time on a fixture scene built
-// through the real commands: the pre-flight's (src/ui/preflight/preflightScene.ts: in Vision, with rounds and a draft)
-// and the factory floor's (src/ui/floor/floorScene.ts: an open change order). Every row says which state it shows.
-// The scenes write no studio files, so their prototype frames show "Not found"; those errors (the 404s, and the page
-// error Chrome logs for a sandboxed frame's error page) are listed in index.json, not failed.
+// The state is the sample project, Weekend Trips (src/domain/demo.ts), in the factory: its Vision has three rounds,
+// its start is recorded, and it has one change order, answered (ORC-030 C5); its studio files are on disk, as the fake
+// service writes them. Two states the sample does not show are captured a second time on a fixture scene built through
+// the real commands: the pre-flight before the start (src/ui/preflight/preflightScene.ts: in Vision, with a draft) and
+// an open change order (src/ui/floor/floorScene.ts). Every row says which state it shows. The scenes write no studio
+// files, so their prototype frames show "Not found"; those errors (the 404s, and the page error Chrome logs for a
+// sandboxed frame's error page) are listed in index.json, not failed.
 // The scheduler dispatches once and then its simulated clock stays paused: nothing moves while the screens are taken.
 //
 // Output: evidence/qa/screens/<route>-<width>.png and evidence/qa/screens/index.json (route, state, title, headings,
@@ -31,7 +32,7 @@ const OUT = join(EVIDENCE, "screens");
 rmSync(OUT, { recursive: true, force: true });
 mkdirSync(OUT, { recursive: true });
 
-const SAMPLE_TASKS = ["WT-002", "WT-004", "WT-004.3", "WT-005", "WT-007", "WT-011", "WT-012", "WT-013"];
+const SAMPLE_TASKS = ["WT-002", "WT-004", "WT-004.3", "WT-005", "WT-007", "WT-011", "WT-012", "WT-013", "WT-014", "WT-015", "T-019"];
 const SAMPLE = [
   "#/overview",
   "#/overview?history=1",
@@ -48,7 +49,7 @@ const SAMPLE = [
   "#/settings/quality",
   "#/settings/advanced",
   "#/kit",
-  "#/tasks/change-order/1",
+  "#/tasks/change-order/2",
   ...SAMPLE_TASKS.map((id) => `#/task/${id}`),
   "#/task/WT-999",
   // The overlays on Home.
