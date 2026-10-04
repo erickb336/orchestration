@@ -553,6 +553,32 @@ export const DOMAIN_TABLE: readonly { domain: ProjectDomain; device?: Device; te
 /** A test command that writes a JUnit report, from the repository's files: data, first match wins. */
 const TEST_REPORT_TABLE: readonly { marker: RegExp; argv: string[]; path: string }[] = [{ marker: /^(pytest\.ini|conftest\.py)$/, argv: ["python3", "-m", "pytest", "--junitxml=reports/junit.xml"], path: "reports/junit.xml" }];
 
+/**
+ * A test command that writes a JUnit report, as a README's tests section shows it: the section's first command line
+ * (indented or fenced, without a "$ " prompt) and the first .xml path the section names, when it says "JUnit". A line
+ * with shell syntax is not proposed: the owner reads and confirms the command on the Start screen.
+ */
+export function readmeTestReport(text: string): { argv: string[]; path: string; heading: string } | undefined {
+  const lines = text.split(/\r?\n/);
+  const start = lines.findIndex((l) => /^#{1,6}\s+(tests?|testing|running (the )?tests)\s*$/i.test(l));
+  if (start < 0) return undefined;
+  const end = lines.findIndex((l, i) => i > start && /^#{1,6}\s/.test(l));
+  const section = lines.slice(start + 1, end < 0 ? undefined : end);
+  let fenced = false;
+  let command: string | undefined;
+  for (const l of section) {
+    if (/^\s*```/.test(l)) fenced = !fenced;
+    else if ((fenced || /^( {4}|\t)/.test(l)) && l.trim()) {
+      command = l.trim().replace(/^\$\s+/, "");
+      break;
+    }
+  }
+  const prose = section.join("\n");
+  const path = /junit/i.test(prose) ? /[\w.-]+(?:\/[\w.-]+)*\.xml\b/.exec(prose)?.[0] : undefined;
+  if (!command || !path || /[|&;<>$`\\'"*?(){}]/.test(command)) return undefined;
+  return { argv: command.split(/\s+/), path, heading: lines[start].replace(/^#+\s+/, "").trim() };
+}
+
 /** The root files suggestChecks reads (package.json, lockfiles, Cargo.toml, go.mod, pyproject.toml). */
 const CHECK_FILES = ["package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb", "Cargo.toml", "go.mod", "pyproject.toml"];
 
@@ -578,10 +604,15 @@ export function importStartInfo(path: string, read?: ReadAtBase): ImportStartInf
   const p = found?.parsed;
   const devcontainer = found && p ? { file: found.file, ...("refused" in p ? { refused: p.refused } : "image" in p ? { image: p.image } : { dockerfile: p.build.dockerfile, context: p.build.context }), ...(found.sha256 ? { sha256: found.sha256 } : {}) } : undefined;
   const checks = read ? suggestChecks(CHECK_FILES.flatMap((f) => (files.includes(f) ? [{ path: f, text: read(f, 256 * 1024)?.text ?? "" }] : []))) : [];
-  const report = TEST_REPORT_TABLE.flatMap((row) => {
-    const file = files.find((f) => row.marker.test(f));
-    return file ? [{ command: { id: "test", label: "Tests with a JUnit report", kind: "check" as const, argv: [...row.argv] }, path: row.path, because: file }] : [];
-  })[0];
+  const command = (argv: readonly string[]) => ({ id: "test", label: "Tests with a JUnit report", kind: "check" as const, argv: [...argv] });
+  const readmeFile = read ? files.find((f) => /^readme(\.md|\.markdown|\.txt)?$/i.test(f)) : undefined;
+  const shown = readmeFile ? readmeTestReport(read!(readmeFile, 256 * 1024)?.text ?? "") : undefined;
+  const report = shown
+    ? { command: command(shown.argv), path: shown.path, because: `The README's ${shown.heading} section` }
+    : TEST_REPORT_TABLE.flatMap((row) => {
+        const file = files.find((f) => row.marker.test(f));
+        return file ? [{ command: command(row.argv), path: row.path, because: file }] : [];
+      })[0];
   return {
     ok: true,
     path,

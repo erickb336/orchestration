@@ -80,8 +80,10 @@ describe("the Start screen's facts (GET /api/import/start)", () => {
       branch: "main",
       size: { sourceFiles: 7, testFiles: 7 },
       domains: [{ domain: "screen", device: "terminal", because: "tally/__main__.py: a command-line entry" }],
-      proposal: { label: "Python", because: "requirements.txt" },
+      proposal: { label: "Python", because: "requirements.txt", prepare: [["python3", "-m", "pip", "install", "--user", "-r", "requirements.txt"]] },
       checks: [],
+      // The README's Tests section shows the command and where it writes its JUnit report.
+      testReport: { command: { id: "test", label: "Tests with a JUnit report", kind: "check", argv: ["python3", "tests/run.py"] }, path: "reports/junit.xml", because: "The README's Tests section" },
     });
     if (!info.ok) throw new Error(info.reason);
     expect(info.estimate.usd[0]).toBeGreaterThan(0);

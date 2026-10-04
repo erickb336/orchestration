@@ -3,7 +3,7 @@
 // src/domain/studio/import.ts (the review, the answers, the baseline), spend.ts (the import's spend and stop) and
 // itemStatus.ts (a baseline item's status).
 
-import type { EnvironmentFound } from "../../api";
+import type { ImportStartInfo } from "../../api";
 import { PRICES, estimateUsd, fmtUsd, importSpend, importStop } from "../../domain/spend";
 import {
   answerEffect,
@@ -21,7 +21,7 @@ import {
   type ImportOption,
   type ImportTarget,
 } from "../../domain/studio/import";
-import type { ImportEstimate, ImportRule, ImportSource, ImportStep, RepoSize, StudioArtifact } from "../../domain/studio/types";
+import type { ImportRule, ImportSource, ImportStep, StudioArtifact } from "../../domain/studio/types";
 import { DEVICES, PROJECT_DOMAINS, type CheckCommand, type Device, type ProjectDomain, type State, type TestCaseResult } from "../../domain/types";
 import type { StepItem, StepMark } from "../kit";
 
@@ -42,33 +42,7 @@ export const BASELINE_HASH = "#/vision/baseline";
 
 // ---------- 1 · Start ----------
 
-/**
- * What the Start screen reads of a repository before anything runs (GET /api/import/start?path=…, or POST
- * /api/import/demo for the bundled sample with the simulated runtime). Read only; nothing is saved. Unit 2 builds the
- * routes, and src/api.ts holds this type on its branch (orc-032-u2): at integration, import it from there and delete
- * this copy.
- */
-export type ImportStartInfo =
-  | { ok: false; reason: string }
-  | {
-      ok: true;
-      /** The bundled sample, tally, made in the service's data folder: the simulated runtime imports only it. */
-      demo?: true;
-      path: string;
-      /** HEAD, which the import is pinned to (C11), and its branch (absent when HEAD is detached). */
-      commit: string;
-      branch?: string;
-      size: RepoSize;
-      estimate: ImportEstimate;
-      /** The kinds of product the repository shows, each with the file that shows it. */
-      domains: { domain: ProjectDomain; device?: Device; because: string }[];
-      /** How it runs (C1): the proposed image, the dev container, and the check commands the repository's files suggest. */
-      proposal?: EnvironmentFound["proposal"];
-      devcontainer?: EnvironmentFound["devcontainer"];
-      checks: CheckCommand[];
-      /** A test command that writes a JUnit report, and the report's path, when the repository shows one. */
-      testReport?: { command: CheckCommand; path: string; because: string };
-    };
+/** A repository the Start screen found (src/api.ts, ImportStartInfo: what the routes read before anything runs). */
 export type FoundRepository = Extract<ImportStartInfo, { ok: true }>;
 
 /** Where the Start screen reads a repository: the demo's sample, or the path the owner gave. */

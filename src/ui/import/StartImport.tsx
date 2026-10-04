@@ -18,7 +18,8 @@ import { initProjectConfirm } from "../stageChoice";
 import { useStore } from "../store";
 import { DOMAIN_CHOICES, toggleDomain } from "../studio/studioView";
 import { SpendBar } from "./ImportPanel";
-import { argvLine, foundBecause, foundLine, howItRuns, startBlocker, startDraft, startInfoRequest, testCheck, type FoundRepository, type ImportStartInfo, type StartDraft } from "./importView";
+import type { ImportStartInfo } from "../../api";
+import { argvLine, foundBecause, foundLine, howItRuns, startBlocker, startDraft, startInfoRequest, testCheck, type FoundRepository, type StartDraft } from "./importView";
 import "./import.css";
 
 type Loaded = { status: "idle" } | { status: "loading" } | { status: "failed"; message: string } | { status: "ok"; info: ImportStartInfo };
