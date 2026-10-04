@@ -108,12 +108,11 @@ describe("the lead's studio brief", () => {
     expect(section(envelope(fresh(), CODE))).not.toContain("The import of the repository");
   });
 
-  it("shows the open round's artifacts with PE review and provenance, earlier rounds, the runs under way and the lead's own questions", () => {
+  it("shows the open round's artifacts with PE review, earlier rounds, the runs under way and the lead's own questions", () => {
     let s = run(fresh(), "setDomains", { domains: ["screen"] }, at(1)).state;
     const zero = openRound(s, "material", at(2));
-    const asIs = addScreen(zero.state, 0, at(3), { title: "Trip list (as is)", variants: [{ id: "a", label: "As it is today" }], provenance: { files: ["src/index.html", "src/trips.css"] } });
-    s = peAgrees(asIs.state, asIs.id, 1, ["a"], at(4));
-    const one = openRound(run(s, "closeRound", { round: 0, summary: "The trip list as the code has it." }, at(5)).state, "experience", at(6));
+    s = addScreen(zero.state, 0, at(3), { kind: "material", title: "Trip list sketch", variants: [], devices: [], madeBy: { role: "user" } }).state;
+    const one = openRound(run(s, "closeRound", { round: 0, summary: "A sketch of the trip list." }, at(5)).state, "experience", at(6));
     const plan = addScreen(one.state, one.n, at(7), { variants: [{ id: "A", label: "Map first" }, { id: "B", label: "Timeline" }] });
     s = pePass(plan.state, plan.id, 1, [{ variant: "A", verdict: "feasible-if", change: "cache the map tiles" }, { variant: "B", verdict: "feasible" }], at(8));
     const cli = addScreen(s, one.n, at(9), { title: "Packing list", variants: [{ id: "a", label: "One list" }] });
@@ -127,7 +126,7 @@ describe("the lead's studio brief", () => {
     expect(brief).toContain(`  - ${cli.id} "Packing list" v1 · screen · desktop, mobile · the designer revises for the PE (pass 1); objects: a: No packing data exists anywhere.`);
     expect(brief).toContain("  Your questions in this round: 1. Map or timeline first?");
     expect(brief).toContain(`\n  Runs under way: ${asked} designer queued (asked by the service).\n`);
-    expect(brief).toContain("- Round 0 (what exists), closed: The trip list as the code has it. (1 artifacts)");
+    expect(brief).toContain("- Round 0 (what exists), closed: A sketch of the trip list. (1 artifacts)");
   });
 
   it("says why PE review ended, with what the PE still says, and what the service did not do of the lead's last block", () => {

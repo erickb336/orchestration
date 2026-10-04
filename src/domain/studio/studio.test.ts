@@ -6,6 +6,7 @@ import { InvalidCommandError, runCommand } from "../commands";
 import * as M from "../model";
 import { buildSeed } from "../seed";
 import { startFactoryAsOwner } from "../testing/factory";
+import { TALLY_COMMIT, tallyImport } from "../testing/import";
 import { ABC, DESIGNER, addScreen, feedback, openRound, peAgrees, pePass, run, sha } from "../testing/studio";
 import { ControlError, StaleWriteError, type State } from "../types";
 import * as R from "./runs";
@@ -35,30 +36,36 @@ function nextRound(s: State, sec: number, focus = "experience") {
   return openRound(runCommand(s, "closeRound", { round: cur.n }, at(sec)).state, focus, at(sec));
 }
 
-describe("as it is today: round 0 of an existing repository (pass 4)", () => {
-  const asIs = (over: Record<string, unknown> = {}) => ({ title: "Trip list (as is)", variants: [{ id: "a", label: "As it is today", entry: "a/index.html" }], files: [{ path: "a/index.html", sha256: sha("a") }], provenance: { files: ["src/TripList.tsx", "src/trips.css"] }, ...over });
+describe("as it is today: round 0 of an import (ORC-032)", () => {
+  const asIs = (over: Record<string, unknown> = {}) => ({ title: "Trip list (as is)", variants: [{ id: "a", label: "As it is today", entry: "a/index.html" }], files: [{ path: "a/index.html", sha256: sha("a") }], devices: ["terminal"], provenance: { files: ["src/TripList.tsx", "src/trips.css"] }, ...over });
+  /** Round 0 of tally's import, as it starts. */
+  const importZero = () => ({ state: tallyImport("started").s, n: 0 });
 
-  it("holds the designer's reproductions of the code, labelled as is with the repository files they came from, which the PE reviews", () => {
-    const zero = openRound(fresh(), "material", at(1));
-    expect(zero.n).toBe(0);
+  it("holds the designer's reproductions of the code, labelled as is with the repository files they came from, at the import's commit", () => {
+    const zero = importZero();
     const a = addScreen(zero.state, 0, at(2), asIs({ provenance: { files: ["src/TripList.tsx", "src/trips.css", "src/TripList.tsx"] } }));
     const v1 = art(a.state, a.id, 1);
-    expect(v1).toMatchObject({ round: 0, kind: "screen", provenance: { asIs: true, files: ["src/TripList.tsx", "src/trips.css"] } });
+    expect(v1).toMatchObject({ round: 0, kind: "screen", provenance: { asIs: true, files: ["src/TripList.tsx", "src/trips.css"], commit: TALLY_COMMIT } });
     expect(a.state.events.at(-1)!.message).toBe("Trip list (as is) v1 added to round 0, by the designer (claude); as is, from 2 repository files");
-    // Not what the owner brought: the PE reviews it before the owner sees it.
-    expect(S.readyForOwner(a.state, v1)).toBe(false);
-    const agreed = peAgrees(a.state, a.id, 1, ["a"], at(3));
-    expect(S.readyForOwner(agreed, art(agreed, a.id, 1))).toBe(true);
+    // The PE does not review a part of an import (C6): its tests and its recording check it.
+    expect(S.peReview(a.state, v1)).toEqual({ status: "not-reviewed", why: S.IMPORT_PART_WHY });
     // A correction in round 0 is still as is, with its provenance; a later round's revision is a proposal and has none.
-    const v2 = addScreen(agreed, 0, at(4), asIs({ artifactId: a.id, provenance: { files: ["src/TripList.tsx"] } }));
-    expect(art(v2.state, a.id, 2).provenance).toEqual({ asIs: true, files: ["src/TripList.tsx"] });
+    const v2 = addScreen(a.state, 0, at(4), asIs({ artifactId: a.id, provenance: { files: ["src/TripList.tsx"] } }));
+    expect(art(v2.state, a.id, 2).provenance).toEqual({ asIs: true, files: ["src/TripList.tsx"], commit: TALLY_COMMIT });
     const later = openRound(run(v2.state, "closeRound", { round: 0 }, at(5)).state, "experience", at(6));
-    const v3 = addScreen(later.state, later.n, at(7), { artifactId: a.id });
+    const v3 = addScreen(later.state, later.n, at(7), { artifactId: a.id, devices: ["terminal"] });
     expect(art(v3.state, a.id, 3).provenance).toBeUndefined();
   });
 
-  it("refuses as-is artifacts anywhere else, from anyone else, and provenance that is not a path in the repository", () => {
+  it("refuses as-is provenance outside an import: the import is the one way to reproduce an existing repository (U2-Q3)", () => {
     const zero = openRound(fresh(), "material", at(1));
+    expect(() => addScreen(zero.state, 0, at(2), asIs({ devices: ["desktop"] }))).toThrow("Only the import of an existing repository reproduces its code as it is today.");
+    // In round 0 without an import, only what the owner brought.
+    expect(() => addScreen(zero.state, 0, at(2), { devices: ["desktop"] })).toThrow(/Round 0 holds what already exists/);
+  });
+
+  it("refuses as-is artifacts anywhere else, from anyone else, and provenance that is not a path in the repository", () => {
+    const zero = importZero();
     const outside = "Only the designer's reproductions of the existing code in round 0 (as it is today) are labelled as is.";
     expect(() => addScreen(zero.state, 0, at(2), asIs({ kind: "material", madeBy: { role: "user" } }))).toThrow(outside);
     expect(() => addScreen(zero.state, 0, at(2), asIs({ madeBy: { ...DESIGNER, role: "probe" } }))).toThrow(/Round 0 holds what already exists/);

@@ -11,6 +11,7 @@ import { buildSeed } from "../../domain/seed";
 import * as R from "../../domain/studio/runs";
 import * as S from "../../domain/studio/studio";
 import { DESIGNER, addScreen, feedback, openRound, peAgrees, pePass, run, sha } from "../../domain/testing/studio";
+import { tallyImport } from "../../domain/testing/import";
 import type { RoundLead, StudioRun } from "../../domain/studio/types";
 import type { State } from "../../domain/types";
 import { TABS, VisionBadge } from "../App";
@@ -497,28 +498,26 @@ describe("the product's kinds (domains), while they are not chosen", () => {
   });
 });
 
-describe("as it is today (round 0 of an existing repository)", () => {
-  /** Round 0 with the designer's reproduction of the trip board, labelled as is, from `files`; agreed by the PE. */
-  function withAsIs(files: string[]) {
-    const r = openRound(vision(), "material", at(1));
-    const a = addScreen(r.state, r.n, at(2), { title: "Trip board", variants: [{ id: "a", label: "As is", entry: "board/index.html" }], files: [{ path: "board/index.html", sha256: sha("a") }], provenance: { files } });
-    return { s: pePass(a.state, a.id, 1, [{ variant: "a", verdict: "feasible", reasons: "It shows the same trip cards as the code." }], at(3)), id: a.id };
+describe("as it is today (round 0 of an import)", () => {
+  /** tally's import, locked in as the baseline: Vision shows round 0 as any round, first its words, from `files`. */
+  function withAsIs(files?: string[]) {
+    const { s, parts } = tallyImport("baseline");
+    if (files) S.latestVersion(s, parts.words!)!.provenance!.files = files;
+    return { s, id: parts.words! };
   }
 
   it("the round is named As it is today, not What you brought; the artifact says it is a reproduction to correct, with the files it came from", () => {
-    const { s, id } = withAsIs(["src/board/index.html", "src/board/style.css"]);
+    const { s, id } = withAsIs();
     expect(roundLabel(s, s.studio.rounds[0])).toBe("As it is today");
-    expect(artifactLine(S.getArtifact(s, id, 1))).toBe("as is · screen");
+    expect(artifactLine(S.getArtifact(s, id, 1))).toBe("as is · dictionary");
     const html = render(<Studio />, s);
     expect(html).toContain("0 · As it is today");
     expect(html).not.toContain("What you brought");
     expect(html).toContain('aria-label="As it is today"');
     expect(html).toContain("It is not a proposal. Correct what it gets wrong");
     expect(html).toContain("Made from 2 files in the repository:");
-    expect(html).toContain("<code>src/board/index.html</code>");
-    expect(html).toContain("<code>src/board/style.css</code>");
-    // You can mark it, as any artifact the PE agreed on.
-    expect(html).toMatch(/<button[^>]*aria-pressed="false"[^>]*>Keep<\/button>/);
+    expect(html).toContain("<code>tally/cli.py</code>");
+    expect(html).toContain("<code>README.md</code>");
   });
 
   it("a long list of files shows the first six; the rest are one click away", () => {
@@ -527,16 +526,6 @@ describe("as it is today (round 0 of an existing repository)", () => {
     expect(html).toContain("Made from 9 files in the repository:");
     expect(html.indexOf("src/part-6.js")).toBeLessThan(html.indexOf("The other files"));
     expect(html.indexOf("src/part-7.js")).toBeGreaterThan(html.indexOf("The other files"));
-  });
-
-  it("a reproduction that matches: the PE checked it against the code, and it is never called feasible", () => {
-    const { s, id } = withAsIs(["src/board/index.html"]);
-    const text = peText(s);
-    expect(text).toContain("Matches the code The PE checked it against the code: it matches.");
-    expect(text).toContain("As is Matches the code");
-    expect(text).toContain("Mark it Keep, Change or Drop.");
-    expect(text).not.toMatch(/feasible/i);
-    expect(versionHistory(s, S.getArtifact(s, id, 1))).toEqual([{ version: 1, round: 0, current: true, tone: "done", state: "matches", text: "PE pass 1: it matches the code." }]);
   });
 
   it("what the owner brought, and every later round, keep their names", () => {

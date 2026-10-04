@@ -34,6 +34,7 @@ import {
   type Mark,
   type OpenCase,
   type PeVerdict,
+  type Provenance,
   type Pin,
   type Probe,
   type ProbeStatus,
@@ -248,9 +249,14 @@ export function addArtifact(state: State, input: ArtifactInput, now: string): { 
     throw new ControlError("Round 0 holds what already exists: what the owner brought (material), and the designer's reproductions of the existing code, labelled as is with the repository files they came from.");
   }
   if (asIs && (round.n !== 0 || input.kind === "material" || input.madeBy.role !== "designer")) throw new ControlError("Only the designer's reproductions of the existing code in round 0 (as it is today) are labelled as is.");
-  const commit = asIs ? (input.provenance!.commit ?? state.studio.import?.commit) : undefined;
-  if (asIs && state.studio.import && commit !== state.studio.import.commit) throw new ControlError(`The import reads commit ${state.studio.import.commit.slice(0, 7)}; a reproduction shows that commit, not ${agentLine(commit ?? "").slice(0, 12)}.`);
-  const provenance = asIs ? { asIs: true as const, files: provenanceFiles(input.provenance!.files), ...(commit ? { commit } : {}) } : undefined;
+  const imp = state.studio.import;
+  let provenance: Provenance | undefined;
+  if (asIs) {
+    if (!imp) throw new ControlError("Only the import of an existing repository reproduces its code as it is today.");
+    const commit = input.provenance!.commit ?? imp.commit;
+    if (commit !== imp.commit) throw new ControlError(`The import reads commit ${imp.commit.slice(0, 7)}; a reproduction shows that commit, not ${agentLine(commit).slice(0, 12)}.`);
+    provenance = { asIs: true, files: provenanceFiles(input.provenance!.files), commit };
+  }
   const title = required(agentLine(input.title), 200, "The title");
   if (input.variants.length > MAX_VARIANTS) throw new ControlError(`At most ${MAX_VARIANTS} variants side by side.`);
   if (!input.files.length || input.files.length > MAX_FILES) throw new ControlError(`An artifact has between 1 and ${MAX_FILES} files.`);

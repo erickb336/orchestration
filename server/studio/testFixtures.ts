@@ -170,9 +170,9 @@ export interface SampleVersion {
 }
 
 /**
- * A project in Vision with what the owner reviews: round 0, "as it is today", with a screen the designer reproduced
- * from the repository (labelled as is, with its files); round 1 with a document, Markdown and Mermaid. Both agreed by
- * the PE (simulated). Domains are not chosen yet. With `hostile`, round 1 also holds hostileDocuments.
+ * A project in Vision with what the owner reviews: round 1, the experience, with the trip board screen; round 2 with
+ * a document, Markdown and Mermaid. Both agreed by the PE (simulated). Domains are not chosen yet. With `hostile`,
+ * round 2 also holds hostileDocuments.
  */
 export function studioSample(t0: number, hostile?: { ext: string }): { state: State; versions: SampleVersion[] } {
   const at = (sec: number) => new Date(t0 + sec * 1000).toISOString();
@@ -184,12 +184,12 @@ export function studioSample(t0: number, hostile?: { ext: string }): { state: St
     s = peAgrees(a.state, a.id, a.version, variants.map((v) => v.id), at(versions.length + 20));
     versions.push({ id: a.id, version: a.version, files, meta: { kind, title, variants: variants.map((v) => ({ entry: "", ...v })), devices } });
   };
-  s = openRound(s, "material", at(1)).state;
-  add(0, "screen", "Trip board", { "board/index.html": BOARD_HTML, "board/style.css": BOARD_CSS }, [{ id: "a", label: "As is", entry: "board/index.html" }], ["desktop", "mobile"], { provenance: { files: ["src/board/index.html", "src/board/style.css", "src/trips.js"] } });
-  s = run(s, "closeRound", { round: 0, summary: "The trip board as the repository has it today." }, at(40)).state;
+  s = openRound(s, "experience", at(1)).state;
+  add(1, "screen", "Trip board", { "board/index.html": BOARD_HTML, "board/style.css": BOARD_CSS }, [{ id: "a", label: "The board", entry: "board/index.html" }], ["desktop", "mobile"]);
+  s = run(s, "closeRound", { round: 1, summary: "The trip board." }, at(40)).state;
   s = openRound(s, "data", at(41)).state;
-  add(1, "interface", "Trip planner API", { "api/README.md": API_MD, "api/flow.mmd": FLOW_MMD }, [], []);
-  if (hostile) add(1, "contract", "Hostile samples", hostileDocuments(hostile.ext), [], []);
+  add(2, "interface", "Trip planner API", { "api/README.md": API_MD, "api/flow.mmd": FLOW_MMD }, [], []);
+  if (hostile) add(2, "contract", "Hostile samples", hostileDocuments(hostile.ext), [], []);
   return { state: s, versions };
 }
 

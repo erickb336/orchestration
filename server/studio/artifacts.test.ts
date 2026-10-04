@@ -332,8 +332,9 @@ describe("importing a designer run", () => {
     expect(readdirSync(join(root, "artifacts")).flatMap((a) => readdirSync(join(root, "artifacts", a)))).toEqual([]);
   });
 
-  describe("as it is today (round 0 of an existing repository)", () => {
-    /** A repository with one existing screen, and a designer run reproducing it in round 0. */
+  describe("as it is today (round 0 of an import)", () => {
+    let commit = "";
+    /** A repository with one existing screen, its import, and the import's designer run reproducing it in round 0. */
     function asIsRun(): { s: State; runId: string } {
       const repo = join(dir, "repo");
       mkdirSync(join(repo, "src"), { recursive: true });
@@ -343,8 +344,10 @@ describe("importing a designer run", () => {
       execFileSync("git", ["init", "-q", "-b", "main", repo]);
       execFileSync("git", ["-C", repo, "add", "-A"]);
       execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"]);
-      const base = runCommand(M.initProject(buildSeed(T0, { inFlightRuns: false }), { name: "Trips", repoPath: repo, vision: "Weekend trips.", focus: "" }, at(0)), "openRound", { focus: "material", summary: "As it is today" }, at(1)).state;
-      const asked = runCommand(base, "startStudioRun", { kind: "designer", round: 0, brief: "Reproduce the trip list as it is today." }, at(2));
+      const project = runCommand(M.initProject(buildSeed(T0, { inFlightRuns: false }), { name: "Trips", repoPath: repo, vision: "Weekend trips.", focus: "" }, at(0)), "setDomains", { domains: ["screen"] }, at(0)).state;
+      commit = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+      const base = runCommand(project, "startImport", { commit, budgetUsd: 3, helpers: null, size: { sourceFiles: 2, testFiles: 0, kb: 1 } }, at(1)).state;
+      const asked = runCommand(base, "startStudioRun", { kind: "designer", round: 0, brief: "Reproduce the trip list as it is today.", importStep: "parts" }, at(2));
       const runId = (asked.result as { runId: string }).runId;
       return { s: R.dispatchStudioRuns(asked.state, at(3)).state, runId };
     }
@@ -365,8 +368,8 @@ describe("importing a designer run", () => {
       const root = studioRoot(dir, "p-1");
       const r = importDesignerRun(s, runId, handedIn(s, runId, read()), root, at(4));
       const art = S.latestArtifacts(r.state)[0];
-      expect(art).toMatchObject({ round: 0, kind: "screen", title: "Trip list (as is)", provenance: { asIs: true, files: ["src/index.html", "src/trips.css"] } });
-      expect(JSON.parse(readFileSync(join(versionDir(root, art.id, 1), "manifest.json"), "utf8")).provenance).toEqual({ asIs: true, files: ["src/index.html", "src/trips.css"] });
+      expect(art).toMatchObject({ round: 0, kind: "screen", title: "Trip list (as is)", provenance: { asIs: true, files: ["src/index.html", "src/trips.css"], commit } });
+      expect(JSON.parse(readFileSync(join(versionDir(root, art.id, 1), "manifest.json"), "utf8")).provenance).toEqual({ asIs: true, files: ["src/index.html", "src/trips.css"], commit });
     });
 
     it("the import reads no repository: the provenance is looked up before the store's transaction (review finding 11)", () => {
@@ -377,7 +380,7 @@ describe("importing a designer run", () => {
       // The repository is gone by the time the transaction runs: the import still records what was looked up.
       rmSync(s.project.repoPath, { recursive: true, force: true });
       const r = importDesignerRun(s, runId, given, studioRoot(dir, "p-1"), at(4));
-      expect(S.latestArtifacts(r.state)[0].provenance).toEqual({ asIs: true, files: ["src/index.html"] });
+      expect(S.latestArtifacts(r.state)[0].provenance).toEqual({ asIs: true, files: ["src/index.html"], commit });
       // Looked up from a repository that cannot be read, the provenance cannot be checked, and nothing is recorded.
       expect(refusal(() => importDesignerRun(s, runId, handedIn(s, runId, read()), studioRoot(dir, "p-1"), at(4)))).toBe('the provenance of "Trip list (as is)" cannot be checked: the repository cannot be read.');
     });
@@ -386,7 +389,7 @@ describe("importing a designer run", () => {
       const { s, runId } = asIsRun();
       const root = studioRoot(dir, "p-1");
       stage({ artifacts: [{ ...ONE, provenance: ["src/index.html", "src/TripList.tsx"] }] });
-      expect(refusal(() => importDesignerRun(s, runId, handedIn(s, runId, read()), root, at(4)))).toBe('the provenance of "Trip list (as is)" names "src/TripList.tsx", which the repository does not have.');
+      expect(refusal(() => importDesignerRun(s, runId, handedIn(s, runId, read()), root, at(4)))).toBe(`the provenance of "Trip list (as is)" names "src/TripList.tsx", which the repository does not have at the import's commit ${commit.slice(0, 7)}.`);
       stage({ artifacts: [ONE] });
       expect(() => importDesignerRun(s, runId, handedIn(s, runId, read()), root, at(4))).toThrow(/^Round 0 holds what already exists/);
       expect(S.latestArtifacts(s)).toEqual([]);
