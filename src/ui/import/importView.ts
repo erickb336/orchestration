@@ -26,7 +26,7 @@ import { DEVICES, PROJECT_DOMAINS, type CheckCommand, type Device, type ProjectD
 import type { StepItem, StepMark } from "../kit";
 
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-export const shortCommit = (sha: string) => sha.slice(0, 7);
+const shortCommit = (sha: string) => sha.slice(0, 7);
 
 /** The product's name in sentences: the project's name, without the sample's mark (a chip says that). */
 export const productName = (s: State) => s.project.name.replace(/\s*\(sample\)$/, "");
@@ -118,7 +118,7 @@ export function startDraft(info: FoundRepository): StartDraft {
 /** An argument list as one line; an argument with a space keeps its quotes. */
 export const argvLine = (argv: readonly string[]) => argv.map((a) => (/[\s"']/.test(a) ? JSON.stringify(a) : a)).join(" ");
 /** One line back to arguments: spaces split, quotes keep an argument whole. */
-export const splitLine = (line: string) => [...line.matchAll(/"((?:[^"\\]|\\.)*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]);
+const splitLine = (line: string) => [...line.matchAll(/"((?:[^"\\]|\\.)*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]);
 
 /** How it runs, each part complete or missing, and what a missing part means (C1, Q3 A). */
 export function howItRuns(d: StartDraft): { complete: boolean; missing: string[]; effect?: string } {
@@ -229,7 +229,7 @@ export function readingSteps(s: State): StepItem[] {
 }
 
 /** "22 read, all pass", "22 read: 21 pass, 1 fails". */
-export function testsLine(c: Record<"passed" | "failed" | "skipped" | "error", number>): string {
+function testsLine(c: Record<"passed" | "failed" | "skipped" | "error", number>): string {
   const total = c.passed + c.failed + c.skipped + c.error;
   if (total === c.passed) return `${total} read, all pass`;
   return `${total} read: ${[c.passed ? `${c.passed} pass` : "", c.failed ? `${c.failed} ${c.failed === 1 ? "fails" : "fail"}` : "", c.error ? `${c.error} ended with an error` : "", c.skipped ? `${c.skipped} skipped` : ""].filter(Boolean).join(", ")}`;
@@ -248,7 +248,7 @@ export const CONFIDENCE_WORDS: Record<Confidence["level"], { word: string; tone:
 export const ruleOf = (s: State, id: string): ImportRule | undefined => s.studio.import?.reading?.rules.find((r) => r.id === id);
 
 /** The baseline report's cases a rule names, in its order. */
-export function ruleCases(s: State, rule: ImportRule): TestCaseResult[] {
+function ruleCases(s: State, rule: ImportRule): TestCaseResult[] {
   const cases = s.studio.import?.reading?.cases ?? [];
   return rule.tests.map((id) => cases.find((c) => testId(c) === id)).filter((c): c is TestCaseResult => !!c);
 }
@@ -263,7 +263,7 @@ export function sourceRow(s: State, rule: ImportRule, x: ImportSource): { where:
 }
 
 /** An option with its label (the domain's) and what it does. */
-export interface OptionWords {
+interface OptionWords {
   id: string;
   label: string;
   detail: string;
@@ -366,7 +366,7 @@ export function answeredLine(c: ReturnType<typeof reviewCounts>): { bold: string
 export const UNANSWERED_TEXT = 'An unanswered question goes into the baseline as the code has it, marked "not confirmed", and stays open in Vision.';
 
 /** The rules a part places, as the reading holds them. */
-export function partRules(s: State, a: StudioArtifact): ImportRule[] {
+function partRules(s: State, a: StudioArtifact): ImportRule[] {
   const ids = new Set((a.rules ?? []).flatMap((v) => v.rules.map((r) => r.id)));
   return (s.studio.import?.reading?.rules ?? []).filter((r) => ids.has(r.id));
 }
@@ -399,7 +399,7 @@ export function testsTag(s: State, rule: ImportRule): string | undefined {
 // ---------- 4 · Baseline ----------
 
 /** "5 of 5 pass", "2 of 3 pass · 1 no test", "4 of 5 pass · 1 fails": a part's rules and the tests they name. */
-export function partTests(s: State, a: StudioArtifact): string | undefined {
+function partTests(s: State, a: StudioArtifact): string | undefined {
   const rules = partRules(s, a);
   if (!rules.length) return undefined;
   const cases = rules.map((r) => ruleCases(s, r));

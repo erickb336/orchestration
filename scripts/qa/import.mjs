@@ -12,11 +12,13 @@
 // 4. Baseline: the facts follow the answers. Another tab changes the summary: the screen says so and clears the
 //    agreement. The journey agrees and locks in the baseline through the service.
 // 5. After: Design and reality shows each part's status and each rule's evidence; Home says "Nothing to build".
+// 6. In real mode (a second service that says "real", every run still simulated; ORCHESTRATION_TEST_PORT + 2):
+//    Settings › Project › Start a new project › Import an existing repository, a path, and Read the repository.
 //
 // Stubs until unit 2 (the server) lands, each named in the check it feeds:
 // - POST /api/import/demo is unit 2's route. The page's request is answered with TALLY_START_INFO
 //   (src/ui/import/importScene.ts, in that route's shape), through the browser's request routing; the service is not
-//   changed.
+//   changed. So is GET /api/import/start?path=… in step 6.
 // - The import's progress is unit 2's scheduler. After Start, the journey puts tally's import at the next stage into the
 //   store (the state builders, src/domain/testing/import.ts: "parts" for Reading, "review" for Review), as the service
 //   will reach it. The owner's own commands (Start, the answers, the Lock in) go through the real service.
@@ -25,7 +27,7 @@
 //
 // Run: ORCHESTRATION_TEST_PORT=7900 node --import tsx scripts/qa/import.mjs
 
-import { runJourney, text } from "./harness.mjs";
+import { PORT, buildApp, runJourney, startService, text } from "./harness.mjs";
 import { buildDemo } from "../../src/domain/demo.ts";
 import { TALLY_COMMIT, tallyImport } from "../../src/domain/testing/import.ts";
 import { TALLY_START_INFO } from "../../src/ui/import/importScene.ts";
@@ -186,6 +188,33 @@ await runJourney(
       await j.shot("5-home");
       dropStubNoise(page);
       await j.pageChecks("Home after the baseline");
+    });
+
+    await j.step("6 Start in real mode", async () => {
+      const real = await startService(() => buildDemo(Date.now()), { port: PORT + 2, dist: await buildApp(), realLooking: true });
+      try {
+        let asked = "";
+        await page.route("**/api/import/start**", (route) => {
+          asked = new URL(route.request().url()).searchParams.get("path") ?? "";
+          const { demo: _demo, ...info } = TALLY_START_INFO;
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...info, path: asked }) });
+        });
+        await page.goto(`${real.origin}/#/settings/project/new-project`);
+        await page.getByRole("heading", { name: "Start a new project" }).waitFor({ timeout: 10_000 });
+        const form = page.getByText("New project form");
+        if (!(await page.getByRole("radio", { name: "Import an existing repository" }).isVisible())) await form.click();
+        await page.getByRole("radio", { name: "Import an existing repository" }).click();
+        await page.getByLabel("Repository path (absolute)").fill(real.repo);
+        await page.getByRole("button", { name: "Read the repository" }).click();
+        await page.getByText("✓ Found").waitFor({ timeout: 10_000 });
+        const t = flat(await text(page));
+        j.check(asked === real.repo && t.includes("The import reads the last commit, c0ffee0 on main.") && !t.includes("Try the import on a sample repository"), "real mode: Start a new project › Import an existing repository reads the path you give");
+        await page.locator(".imp-start").scrollIntoViewIfNeeded();
+        await j.shot("6-start-real", { full: false });
+        await j.pageChecks("Start in real mode");
+      } finally {
+        await real.stop();
+      }
     });
   },
 );
