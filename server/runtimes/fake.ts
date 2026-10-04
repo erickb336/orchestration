@@ -258,11 +258,14 @@ export function fakeStudio(prompt: string): Record<string, unknown> | undefined 
 /**
  * ORC-032: the simulated lead's message once the import is in review, built only from its envelope's import line: what
  * the import found, that the questions wait in Vision, and a vision draft of the product as it is today. Labelled
- * simulated. Undefined when the import is not in review.
+ * simulated. A reply to the owner's message during the review answers it and drafts nothing: the import's draft stays
+ * (QA3-F3). Undefined when the import is not in review.
  */
-export function fakeImportReview(prompt: string): { reply: string; vision: Record<string, unknown> } | undefined {
+export function fakeImportReview(prompt: string): { reply: string; vision?: Record<string, unknown> } | undefined {
   const m = /^The import of the repository at commit (\S+) is in review: ([^\n]*)$/m.exec(prompt);
   if (!m) return undefined;
+  const message = newestMessage(prompt);
+  if (message) return { reply: `I read your message ("${message}"). The import's questions wait in Vision, round 0, and its draft of the vision stays open for you to accept. I wrote no new draft (simulated).` };
   const found = m[2].replace(/\.$/, "");
   return {
     reply: `I read the repository at commit ${m[1]} as it is today: ${found}. The questions wait in Vision, round 0: answer the conflicts and the guesses that matter, then lock the baseline in (simulated).`,

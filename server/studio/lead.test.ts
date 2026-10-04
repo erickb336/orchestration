@@ -152,6 +152,13 @@ describe("the simulated lead in Vision", () => {
     expect(state().studio.rounds.map((x) => x.n)).toEqual([0]);
     for (let i = 0; i < 10; i++) tick();
     expect(state().leadRuns).toHaveLength(1);
+    // A message during the review gets an answer to it, and no draft over the import's (QA3-F3).
+    const importDraft = state().visionDrafts.at(-1)!;
+    cmd("postMessage", { text: "Is the CSV report part of the baseline?" });
+    until((x) => x.leadRuns.filter((l) => l.outcome === "completed").length === 2, "the lead's answer");
+    const answer = state().conversation.filter((m) => m.author === "lead").at(-1)!;
+    expect(answer.text).toBe("I read your message (\"Is the CSV report part of the baseline?\"). The import's questions wait in Vision, round 0, and its draft of the vision stays open for you to accept. I wrote no new draft (simulated).");
+    expect(state().visionDrafts.at(-1)!).toMatchObject({ id: importDraft.id, status: "open", text: importDraft.text });
   });
 
   it("for a new idea, plans round 1 on the experience in two takes; once it is closed, the data, as a document", () => {
