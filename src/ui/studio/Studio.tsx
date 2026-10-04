@@ -189,7 +189,7 @@ export function Studio() {
           <aside className="st-col st-left" aria-label="Rounds and artifacts">
             <section>
               <h2 className="st-label">Rounds</h2>
-              <ul className="st-list" aria-label="Rounds">
+              <ul className="st-list" aria-label="Rounds" data-tour="vision-rounds">
                 {roundsNewestFirst(state).map((r) => (
                   <li key={r.n}>
                     <button type="button" className="st-item" aria-current={r.n === n ? "true" : undefined} onClick={() => choose(() => (setRoundChoice(r.n), setArtifactChoice(undefined)))}>

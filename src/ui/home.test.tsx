@@ -391,7 +391,8 @@ describe("the factory floor", () => {
     expect(visible(u)).toContain("Maintenance · about $35 a month · no budget");
     expect(u).not.toContain("k-meter");
     // Before anything is locked in, the PE has nothing to estimate: no "nothing left to build".
-    expect(visible(render(<Overview />, store(buildDemo(T0))))).toContain("Building · $0 spent · no budget No building budget is set, so the factory does not stop for cost. The PE's estimate for the rest: none yet: nothing is locked in, so the PE has no part to estimate.");
+    // (The demo locks its blueprint in at the start since ORC-030 C5, so the sample notes project stands in.)
+    expect(visible(render(<Overview />, store(buildSeed(T0, { inFlightRuns: false }))))).toContain("Building · $0 spent · no budget No building budget is set, so the factory does not stop for cost. The PE's estimate for the rest: none yet: nothing is locked in, so the PE has no part to estimate.");
   });
 
   it("on a phone each area is one row: the area, how many build, wait and landed, and needs you; a tap opens its tasks (ORC-030 a-home-phone)", () => {

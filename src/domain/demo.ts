@@ -19,12 +19,20 @@
 // changed the focus and passed a note to WT-005's coder while it ran, delivered and applied.
 
 import * as C from "./checks";
+import { runCommand } from "./commands";
 import * as D from "./delivery";
 import * as M from "./model";
 import { DEMO_SCRIPT, type ScriptFinding } from "./demoScript";
+import { DEMO_BUILT_SHOTS } from "./demoShots";
+import { builtShotFile, demoVersion, fileList, shotName } from "./demoVision";
 import { builtInCatalog, builtInOrInternal, flowRef } from "./flows";
 import { instantiate, toDef } from "./pipeline";
-import { emptyBlueprint, emptyStudio } from "./studio/types";
+import * as B from "./studio/blueprint";
+import * as R from "./studio/runs";
+import { captureItems, evidenceSummary, notSetUpReason, type EvidenceFile, type EvidenceRun, type ItemCapture } from "./studio/evidence";
+import * as S from "./studio/studio";
+import type { FeedbackInput, VerdictInput } from "./studio/studio";
+import { emptyBlueprint, emptyStudio, type BudgetEstimate, type Mark } from "./studio/types";
 import {
   DEFAULT_AUTONOMY,
   DEFAULT_CHECKS,
@@ -129,6 +137,8 @@ const PASS_EXCERPTS: Record<string, string> = {
 };
 
 const utf8Length = (text: string) => new TextEncoder().encode(text).length;
+/** The project's environment: the Node image the app proposes for a package.json, pinned by digest. */
+const DEMO_IMAGE = "node:22-trixie-slim@sha256:b26b04c123d9ff8ab646ceb18b9d75a1173acf64b9a401094b906d27b29338d4";
 
 /** FNV-1a over the text, twice, as 12 hex characters: a deterministic finding key (pure, no crypto). */
 function hash12(text: string): string {
@@ -218,6 +228,13 @@ class DemoBuilder {
     return st;
   }
 
+  /** The owner's action, sent through the command table as the app sends it. Returns the command's result. */
+  private owner<T = unknown>(name: string, args: object, m: number): T {
+    const r = runCommand(this.s, name, args, this.at(m));
+    this.s = r.state;
+    return r.result as T;
+  }
+
   private event(m: number, actor: Actor, kind: EventKind, message: string, taskId?: string) {
     M.event(this.s, this.at(m), actor, kind, message, taskId);
   }
@@ -226,7 +243,7 @@ class DemoBuilder {
 
   private baseState(): State {
     const at = (m: number) => this.at(m);
-    const doc: VisionDoc = { id: "doc-1", name: "trail-research.md", path: "trail-research.md", size: utf8Length(DEMO_DOC_TEXT), hash: DEMO_DOC_HASH, text: true, addedAt: at(4336) };
+    const doc: VisionDoc = { id: "doc-1", name: "trail-research.md", path: "trail-research.md", size: utf8Length(DEMO_DOC_TEXT), hash: DEMO_DOC_HASH, text: true, addedAt: at(4436) };
     const leadRunId = "lead-1001";
     const draftId = `vd-${leadRunId}`;
     const visionText =
@@ -244,7 +261,7 @@ class DemoBuilder {
         visions: [
           {
             rev: 1,
-            at: at(4320),
+            at: at(4430),
             author: "user",
             text: visionText,
             focus: "Trip sharing first.",
@@ -265,14 +282,16 @@ class DemoBuilder {
         runLimits: { ...DEFAULT_RUN_LIMITS },
         autonomy: { ...DEFAULT_AUTONOMY, autoDeliver: { ...DEFAULT_AUTONOMY.autoDeliver } },
         steeringMode: "apply",
-        stage: "building",
+        // It starts in Vision; Start the factory (visionStory) moves it to building.
+        stage: "shaping",
         devices: ["desktop", "mobile"],
         domains: ["screen"],
         factoryStarts: [],
         changeOrders: "lead",
-        // The demo's factory started before PE review of new work existed (ORC-030 retakes the demo).
+        // Off in the demo (the setting a project had before PE review of new work existed): the story does not show the
+        // PE reviewing a task, so the change order's new task says "No PE review".
         peReviewsNewWork: false,
-        shapingSince: at(4340),
+        shapingSince: at(4440),
         checks: structuredClone(DEFAULT_CHECKS),
         triage: { askUserBy: "user" },
         budgets: { ...NO_BUDGETS },
@@ -298,8 +317,8 @@ class DemoBuilder {
           trigger: "message",
           provider: "claude",
           model: CLAUDE.model,
-          startedAt: at(4334),
-          endedAt: at(4332),
+          startedAt: at(4434),
+          endedAt: at(4432),
           outcome: "completed",
           messageIds: [],
           coverage: { intent: "clear", audience: "clear", problem: "clear", outcome: "clear", scope: "clear", constraints: "clear", risks: "clear", priorities: "clear", material: "clear" },
@@ -307,7 +326,7 @@ class DemoBuilder {
         },
       ],
       steering: [],
-      visionDrafts: [{ id: draftId, at: at(4332), leadRunId, messageIds: [], text: visionText, focus: "Trip sharing first.", reason: draftReason, basedOnVisionRev: 0, status: "accepted", resolvedAt: at(4320), visionRev: 1, simulated: true }],
+      visionDrafts: [{ id: draftId, at: at(4432), leadRunId, messageIds: [], text: visionText, focus: "Trip sharing first.", reason: draftReason, basedOnVisionRev: 0, status: "accepted", resolvedAt: at(4430), visionRev: 1, simulated: true }],
       decisions: [],
       // The built-in catalog until the server loads the files (it replaces this at start).
       flows: builtInCatalog(),
@@ -315,17 +334,18 @@ class DemoBuilder {
       studio: emptyStudio(),
       blueprint: emptyBlueprint(),
       events: [
-        { id: "ev-1", at: at(4340), actor: "system", kind: "config", message: `${DEMO_PROJECT_NAME} created; it starts in Vision` },
-        { id: "ev-2", at: at(4332), actor: "lead", kind: "vision", message: `Lead run ${leadRunId} drafted the vision (${draftId}) from the conversation in Vision: ${draftReason}. It waits for you to accept, edit or dismiss it.` },
-        { id: "ev-3", at: at(4320), actor: "user", kind: "vision", message: `Vision r1 by you: accepted the lead's draft ${draftId}` },
+        { id: "ev-1", at: at(4440), actor: "system", kind: "config", message: `${DEMO_PROJECT_NAME} created; it starts in Vision` },
+        { id: "ev-2", at: at(4432), actor: "lead", kind: "vision", message: `Lead run ${leadRunId} drafted the vision (${draftId}) from the conversation in Vision: ${draftReason}. It waits for you to accept, edit or dismiss it.` },
+        { id: "ev-3", at: at(4430), actor: "user", kind: "vision", message: `Vision r1 by you: accepted the lead's draft ${draftId}` },
       ],
     };
   }
 
-  /** Delivery as pull requests held for you, the project's checks on, and the simulated GitHub checked (all through the real commands). */
+  /**
+   * After the start (which set delivery to pull requests held for you): the simulated GitHub checked, the project's
+   * checks on, and how the project runs for captures of evidence (all through the real commands).
+   */
   private settings() {
-    this.event(4318, "user", "config", "The factory started");
-    this.s = D.setDeliveryMode(this.s, { mode: "pr" }, this.at(4317));
     this.preflight(4317);
     this.s = D.reportBaseFetched(this.s, SIM_BASE, this.at(4316));
     this.s = C.setChecks(
@@ -335,6 +355,9 @@ class DemoBuilder {
       this.at(4315),
     );
     this.checksReady(4314);
+    // How the built product runs, so the Capture evidence step can show it (the fake runtime runs nothing).
+    this.owner("setEnvironment", { environment: { image: DEMO_IMAGE, prepare: [["npm", "ci"]], hosts: [] } }, 4313);
+    this.owner("setPreview", { preview: { preview: ["npm", "run", "preview"], port: 4173 } }, 4313);
   }
 
   private preflight(m: number) {
@@ -355,6 +378,188 @@ class DemoBuilder {
 
   private checksReady(m: number) {
     this.s = C.reportChecksHealth(this.s, { sandbox: "codex", status: "ready", detail: "Simulated: no command runs and nothing is spawned.", checkedAt: this.at(m) }, this.at(m));
+  }
+
+  // ---------- Vision: the studio's rounds, through the studio's own commands ----------
+
+  /** The owner writes to the lead; the simulated lead answers, with a studio block when it opens or closes a round or asks the designer. */
+  private studioExchange(m: number, message: string, reply: string, studio?: Record<string, unknown>): string {
+    this.say(message, m);
+    return this.leadReplies(m, m - 2, reply, undefined, studio);
+  }
+
+  /** The studio runs asked for start, as the scheduler starts them on the fake runtime (simulated: a known $0). */
+  private startStudioRuns(m: number): string[] {
+    const r = R.dispatchStudioRuns(this.s, this.at(m), { simulated: ["claude", "codex"] });
+    this.s = r.state;
+    return r.started;
+  }
+
+  /**
+   * A designer run hands in versions (by title and number, from demoVision.ts), as the service imports them: each
+   * recorded with its files' hashes and the run as its maker, then its screenshots taken (a screen), then the run
+   * completes. With `revises`, the run makes the next version of that artifact.
+   */
+  private designerHandsIn(runId: string, m: number, versions: { title: string; version: number }[], summary: string): Record<string, string> {
+    const run = R.getStudioRun(this.s, runId)!;
+    const ids: Record<string, string> = {};
+    for (const { title, version } of versions) {
+      const v = demoVersion(title, version);
+      const prev = version > 1 ? S.latestArtifacts(this.s).find((a) => a.title === title) : undefined;
+      const r = S.addArtifact(
+        this.s,
+        {
+          ...(prev ? { artifactId: prev.id } : {}),
+          round: run.round!,
+          kind: v.kind,
+          title,
+          variants: v.variants,
+          files: fileList(v),
+          devices: v.devices,
+          madeBy: { role: "designer", provider: run.provider, model: run.model, attemptId: run.id },
+          ...(v.dictionary ? { dictionary: structuredClone(v.dictionary) } : {}),
+          ...(v.rules ? { rules: structuredClone(v.rules) } : {}),
+        },
+        this.at(m),
+      );
+      this.s = r.state;
+      ids[title] = r.artifactId;
+      if (v.kind === "screen") this.s = S.startArtifactMedia(this.s, r.artifactId, r.version);
+    }
+    // The service takes each variant's screenshot on each device after import (rendered for the demo by scripts/media/demo-shots.mjs).
+    for (const { title, version } of versions) {
+      const v = demoVersion(title, version);
+      if (v.kind !== "screen") continue;
+      const shots = v.variants.flatMap((x) => v.devices.filter((d) => d !== "terminal").map((device) => ({ variant: x.id, device, path: `shots/${shotName(x.id, device as "desktop" | "mobile")}` })));
+      this.s = S.recordArtifactMedia(this.s, ids[title], version, { shots: { status: "taken", at: this.at(m - 0.5), shots, failed: [] } }, this.at(m - 0.5));
+    }
+    this.s = R.completeStudioRun(this.s, runId, this.at(m - 0.5), { summary });
+    return ids;
+  }
+
+  /** The service asks the PE for each version that waits for review; they start. */
+  private askPe(m: number): string[] {
+    this.s = R.askForPeReviews(this.s, this.at(m));
+    return this.startStudioRuns(m);
+  }
+
+  /** A PE run answers with its verdicts on the newest version of `title` (with its checks of the earlier asks on a later pass). */
+  private peAnswers(runId: string, m: number, title: string, verdicts: VerdictInput[], summary: string) {
+    const run = R.getStudioRun(this.s, runId)!;
+    const a = S.latestVersion(this.s, run.artifactId!)!;
+    if (a.title !== title) throw new Error(`demo: PE run ${runId} reviews ${a.title}, not ${title}`);
+    const asks = S.earlierAsks(this.s, a);
+    const full = verdicts.map((v) => ({ ...v, ...(asks.length ? { earlier: S.asksOn(asks, v.variant).map((x) => ({ ask: x.id, met: v.verdict === "feasible" })) } : {}) }));
+    this.s = S.addPeVerdicts(this.s, { artifactId: a.id, version: a.version, verdicts: full, by: { provider: run.provider, model: run.model, runId } }, this.at(m)).state;
+    this.s = R.completeStudioRun(this.s, runId, this.at(m), { summary });
+  }
+
+  /** The PE's run on the newest version of `title` among those started. */
+  private peRunOn(runs: string[], title: string): string {
+    const id = runs.find((r) => S.latestVersion(this.s, R.getStudioRun(this.s, r)!.artifactId!)?.title === title);
+    if (!id) throw new Error(`demo: no PE run on ${title}`);
+    return id;
+  }
+
+  /** The service asks the designer to revise a version the PE asked a change of (the loop), as askForRevisions does. */
+  private askRevision(m: number, title: string, brief: string): string {
+    const a = S.latestArtifacts(this.s).find((x) => x.title === title)!;
+    if (!S.revisionDue(this.s, a)) throw new Error(`demo: ${title} v${a.version} is not waiting for a revision`);
+    this.s = R.requestStudioRun(this.s, { kind: "designer", round: a.round, artifactId: a.id, brief }, this.at(m)).state;
+    const started = this.startStudioRuns(m);
+    if (started.length !== 1) throw new Error(`demo: the revision of ${title} did not start`);
+    return started[0];
+  }
+
+  /**
+   * The owner's answer to a round, as Vision sends it: the marks on each version, then each Keep put into the draft
+   * (with the pick) and each Drop taken out when the draft holds it, then one message to the lead.
+   */
+  private ownerAnswers(m: number, marks: { title: string; mark: Mark; pick?: string; note?: string }[], message: string, reply: string, studio?: Record<string, unknown>) {
+    const entries: FeedbackInput[] = marks.map((x) => {
+      const a = S.latestArtifacts(this.s).find((v) => v.title === x.title)!;
+      // Keep on a word list or a flow's rules keeps each row too, as "Keep the other rules" does in Vision.
+      const rows = x.mark === "keep" ? S.markableRows(a).map((row) => ({ row, mark: "keep" as const })) : [];
+      return { artifactId: a.id, version: a.version, mark: x.mark, ...(x.pick ? { pickedVariant: x.pick } : {}), pins: [], note: x.note ?? "", ...(rows.length ? { rows } : {}) };
+    });
+    this.owner("sendFeedback", { entries }, m);
+    for (const [i, x] of marks.entries()) {
+      const e = entries[i];
+      if (x.mark === "keep") this.owner("approveArtifact", { artifactId: e.artifactId, version: e.version, ...(x.pick ? { variant: x.pick } : {}) }, m);
+      const held = B.draftItems(this.s).find((it) => it.artifactId === e.artifactId && it.status !== "dropped");
+      if (x.mark === "drop" && held) this.owner("dropBlueprintItem", { itemId: held.id }, m);
+    }
+    return this.studioExchange(m, message, reply, studio);
+  }
+
+  /**
+   * Vision, before the factory: the experience (round 1), then inputs and outputs (round 2). In each round the designer
+   * hands in its parts, the PE reviews each, asks one change that the designer makes, then agrees; the owner keeps,
+   * changes or drops each part. Then the budgets, and Start the factory: the first Lock in, with its summary and settings.
+   */
+  private visionStory() {
+    const est = (build: [number, number], month: [number, number], basis: string): BudgetEstimate => ({ buildUsd: build, maintenanceUsdPerMonth: month, basis });
+    // Round 1, the experience.
+    this.studioExchange(4428, "Let's start with the experience: the map at the trailhead, the trip page and the packing list.", "I opened a round on the experience and asked the designer for the screens: the trail map, the trip page in two variants, the packing list and a group chat.", {
+      openRound: { focus: "experience", summary: "The screens a group uses before and on a hike: the trail map, the trip page, the packing list." },
+      designerRuns: [{ brief: "Design the trail map, the trip page (two variants: plan first, people first), the packing list and a group chat, for a phone at the trailhead.", kinds: ["screen"], variants: 2, devices: ["desktop", "mobile"] }],
+    });
+    const [designer] = this.startStudioRuns(4426);
+    this.designerHandsIn(designer, 4410, [{ title: "Trail map", version: 1 }, { title: "Trip page", version: 1 }, { title: "Packing list", version: 1 }, { title: "Group chat", version: 1 }], "4 screens: Trail map, Trip page (2 variants), Packing list, Group chat");
+    let pe = this.askPe(4409);
+    this.peAnswers(this.peRunOn(pe, "Trail map"), 4404, "Trail map", [{ verdict: "feasible-if", reasons: "The map fetches its tiles as you move it, and most trailheads in the research note have no signal: the map would be a blank grid where it matters.", change: "Save the trail's map on the phone before the hike, and show when it was saved and that the map is offline." }], "Trail map v1: feasible if the trail's map is saved before the hike");
+    this.peAnswers(this.peRunOn(pe, "Trip page"), 4404, "Trip page", ["A", "B"].map((variant) => ({ variant, verdict: "feasible" as const, reasons: "One read of the trip record; friends open it by link.", budget: est([4, 7], [1, 2], "Similar screens, and a trip record for 1,000 groups") })), "Trip page v1: both variants feasible");
+    this.peAnswers(this.peRunOn(pe, "Packing list"), 4404, "Packing list", [{ verdict: "feasible", reasons: "A list per trip, suggested from the trail's length and the forecast the trip already fetches.", budget: est([3, 5], [0.5, 1], "A small list screen, and storage for shared lists") }], "Packing list v1: feasible");
+    // Three agents at most at once: the fourth review starts when one ends.
+    pe = [...pe, ...this.startStudioRuns(4404)];
+    this.peAnswers(this.peRunOn(pe, "Group chat"), 4401, "Group chat", [{ verdict: "feasible", reasons: "A message list per trip; needs a connection.", budget: est([6, 10], [4, 8], "Messages and push notifications for 1,000 groups") }], "Group chat v1: feasible");
+    const revision = this.askRevision(4400, "Trail map", "Revise Trail map for the PE: save the trail's map on the phone before the hike, and show that the map is offline and when it was saved.");
+    this.designerHandsIn(revision, 4396, [{ title: "Trail map", version: 2 }], "Trail map v2: saved for offline, with the offline banner");
+    pe = this.askPe(4395);
+    this.peAnswers(pe[0], 4392, "Trail map", [{ verdict: "feasible", reasons: "The map is saved before the hike, so it works with no signal; the banner says how old it is.", budget: est([5, 9], [2, 4], "Map tiles for 1,000 trails, 20 km around each route") }], "Trail map v2: feasible; the ask is met");
+    // Your answer: Keep, Change and Drop.
+    this.ownerAnswers(
+      4385,
+      [
+        { title: "Trail map", mark: "keep" },
+        { title: "Trip page", mark: "keep", pick: "A" },
+        { title: "Packing list", mark: "change", note: "Show who brings each shared item, so we never pack two stoves again." },
+        { title: "Group chat", mark: "drop", note: "The chat stays in the chat app; it was useless at the trailhead anyway." },
+      ],
+      "Kept Trail map and Trip page (plan first). Change Packing list: show who brings each shared item. Drop the group chat.",
+      "I put Trail map and Trip page (plan first) in the draft, and asked the designer for the next version of Packing list, with your note. The group chat is out.",
+    );
+    // The lead's reply asked the designer for Packing list v2.
+    const packingId = S.latestArtifacts(this.s).find((a) => a.title === "Packing list")!.id;
+    this.s = R.requestStudioRun(this.s, { kind: "designer", round: 1, artifactId: packingId, brief: "Packing list v2: show who brings each shared item (the owner's note).", fromLead: { leadRunId: this.s.leadRuns.at(-1)!.id, kinds: ["screen"], variants: 1, devices: ["desktop", "mobile"] } }, this.at(4383)).state;
+    const [packingRun] = this.startStudioRuns(4383);
+    this.designerHandsIn(packingRun, 4372, [{ title: "Packing list", version: 2 }], "Packing list v2: who brings each shared item");
+    pe = this.askPe(4371);
+    this.peAnswers(pe[0], 4368, "Packing list", [{ verdict: "feasible", reasons: "Who brings an item is one more field on the shared list.", budget: est([3, 6], [0.5, 1], "A small list screen, and storage for shared lists") }], "Packing list v2: feasible");
+
+    // Round 2, inputs and outputs: closed round 1 and opened round 2 in one reply.
+    this.ownerAnswers(4360, [{ title: "Packing list", mark: "keep" }], "Keep the packing list. Next, what a trip holds.", "Round 1 is closed. I opened a round on inputs and outputs and asked the designer for the trip's data and the project's words.", {
+      closeRound: { summary: "Kept: Trail map v2, Trip page (plan first), Packing list v2. Dropped: Group chat." },
+      openRound: { focus: "data", summary: "What a trip holds, and the words the app and its agents use." },
+      designerRuns: [{ brief: "The trip's data (trip, person, packing item) with a worked example, and the project's words.", kinds: ["contract", "dictionary"], variants: 1 }],
+    });
+    const [dataRun] = this.startStudioRuns(4358);
+    this.designerHandsIn(dataRun, 4346, [{ title: "Trip data", version: 1 }, { title: "Words", version: 1 }], "Trip data (contract) and Words (dictionary)");
+    pe = this.askPe(4345);
+    this.peAnswers(pe[0], 4342, "Trip data", [{ verdict: "feasible-if", reasons: "Friends join without an account, but the contract does not say what is kept about them, or for how long.", change: "Name what is kept about a friend who joins by link, and for how long." }], "Trip data v1: feasible if it says what is kept about guests");
+    const dataRevision = this.askRevision(4342, "Trip data", "Revise Trip data for the PE: name what is kept about a friend who joins by link, and for how long.");
+    this.designerHandsIn(dataRevision, 4334, [{ title: "Trip data", version: 2 }], "Trip data v2: guest links, and what is kept");
+    pe = this.askPe(4333);
+    this.peAnswers(pe[0], 4330, "Trip data", [{ verdict: "feasible", reasons: "A guest's name and link id for 30 days is small and easy to delete.", budget: est([2, 4], [0.5, 1], "Storage for 1,000 groups") }], "Trip data v2: feasible; the ask is met");
+    this.ownerAnswers(4326, [{ title: "Trip data", mark: "keep" }, { title: "Words", mark: "keep" }], "Keep both. I think we are ready to build.", "Round 2 is closed. The draft holds five parts; the pre-flight shows them with the PE's estimates.", {
+      closeRound: { summary: "Kept: Trip data v2 and Words." },
+    });
+
+    // The pre-flight: the two budgets, then Start the factory with the settings shown.
+    this.owner("setBudgets", { buildingUsd: 60, maintenanceUsdPerMonth: 15 }, 4322);
+    const req = M.startFactoryRequest(this.s);
+    this.owner("startFactory", { ...req, settings: { ...req.settings, delivery: { mode: "pr", branch: "main", merge: "user" }, pausePoints: { ...req.settings.pausePoints, tradeoffs: "user", changeOrders: "lead" } } }, 4318);
+    if (this.s.project.stage !== "building" || this.s.blueprint.revisions.length !== 1) throw new Error("demo: the factory did not start from blueprint r1");
   }
 
   // ---------- tasks ----------
@@ -437,6 +642,37 @@ class DemoBuilder {
         artifacts: [],
       };
       this.event(m, "lead", "dispatch", `Dispatched ${stepId} (checks) to the service as ${attemptId} on ${target.ref.slice(0, 12)} with settings r${cfg.rev}`, id);
+    } else if (st.role === "evidence") {
+      // A capture of evidence, as dispatch starts one: the screens the spec cites, on the commit the checks ran on.
+      const target = C.checkTargetOf(this.s, t, st);
+      const items = target ? captureItems(this.s, t) : [];
+      const preview = this.s.project.preview;
+      if (!target || !items.length || !preview || notSetUpReason(this.s)) throw new Error(`demo: ${id} ${stepId} has nothing to capture, or capture is not set up`);
+      a = {
+        id: attemptId,
+        taskId: id,
+        stepId,
+        snapshot: {
+          provider: "service",
+          model: "evidence",
+          source: "service",
+          routingReason: `Run by the service in the project's environment (preview r${preview.rev}, environment r${this.s.project.environment!.rev})`,
+          specRev: spec.rev,
+          stepRev: st.revision,
+          visionRev: vision.rev,
+          workspace,
+          pipelineRev: t.pipelineRev,
+          role: st.role,
+          purpose: st.purpose,
+          inputs: M.consumedInputs(this.s, t, st),
+          evidence: { target, items, preview: structuredClone(preview) },
+        },
+        startedAt: this.at(m),
+        outcome: "running",
+        progress: 0,
+        artifacts: [],
+      };
+      this.event(m, "lead", "dispatch", `Dispatched ${stepId} (evidence) to the service as ${attemptId} on ${target.ref.slice(0, 12)}: ${items.map((i) => i.itemId).join(", ")}`, id);
     } else {
       const r = M.resolveStep(this.s, t, st);
       if (!r.ok) throw new Error(`demo: ${id} ${stepId} does not resolve: ${r.reason}`);
@@ -533,6 +769,27 @@ class DemoBuilder {
     this.complete(attemptId, endM, [{ name, summary: C.runSummary(record), checkRun: record, findings: C.findingsFromRun(record, plan.commands) }]);
   }
 
+  /**
+   * A capture of evidence on the fake runtime, with screenshots: each screen the task cites, on each of its devices.
+   * The run is labelled simulated (its caption and summary say so), and each screenshot is a rendered stand-in that
+   * says it is simulated in the image (server/demo-shots/, with the sizes and hashes in demoShots.ts).
+   */
+  private capture(id: string, stepId: string, startM: number, endM: number) {
+    const attemptId = this.dispatch(id, stepId, startM);
+    const snap = this.s.attempts.find((x) => x.id === attemptId)!.snapshot.evidence!;
+    const items: ItemCapture[] = snap.items.map((i) => {
+      const devices = demoVersion(i.title, i.version).devices.filter((d): d is "desktop" | "mobile" => d === "desktop" || d === "mobile");
+      const files: EvidenceFile[] = devices.map((device) => {
+        const shot = DEMO_BUILT_SHOTS[builtShotFile(i.title, device)];
+        if (!shot) throw new Error(`demo: no rendered screenshot of ${i.title} built, on ${device}`);
+        return { path: `${i.itemId}/${device}.png`, type: "png", device, bytes: shot.bytes, sha256: shot.sha256 };
+      });
+      return { ...i, status: "captured", files };
+    });
+    const run: EvidenceRun = { sha: snap.target.ref, at: this.at(endM), durationMs: 41_000, previewRev: snap.preview!.rev, simulated: true, items };
+    this.complete(attemptId, endM, [{ name: this.step(id, stepId).outputs[0].name, summary: evidenceSummary(run), evidence: run }]);
+  }
+
   /** A review step. A code review is handed the change's file list and accounts for every file (complete coverage); findings are structured. */
   private review(id: string, stepId: string, startM: number, endM: number, change: CodeChange | undefined, summary: string, findings: Finding[] = []) {
     const st = this.step(id, stepId);
@@ -625,7 +882,7 @@ class DemoBuilder {
   }
 
   /** You chose Merge; the app merged it at your request; it landed and is listed for review. */
-  private mergePr(id: string, requestM: number, mergeM: number) {
+  private mergePr(id: string, requestM: number, mergeM: number, flags: string[] = []) {
     const pr = D.livePr(this.task(id))!;
     const number = pr.number!;
     this.s = D.requestPrMerge(this.s, id, pr.headSha, this.at(requestM));
@@ -637,7 +894,7 @@ class DemoBuilder {
     this.s = D.reportPrOp(begun.state, { op, observed: this.observation(id, mergeM - 0.05, "MERGED", number) }, this.at(mergeM - 0.05));
     const t = this.task(id);
     if (t.integration?.pr?.phase !== "merged" || !t.integration.landed) throw new Error(`demo: ${id} did not land`);
-    if (t.integration.landed.flags.length) throw new Error(`demo: ${id} landed with flags ${t.integration.landed.flags.join(", ")}`);
+    if (t.integration.landed.flags.join() !== flags.join()) throw new Error(`demo: ${id} landed with flags ${t.integration.landed.flags.join(", ")}`);
     // The base branch's check after the merge.
     this.s = D.reportObservations(this.s, { at: this.at(mergeM - 1), prs: [], commits: [{ oid: t.integration.landed.commit, checks: [{ ...SIM_CHECK }] }], rateRemaining: 5000 }, this.at(mergeM - 1), { repo: SIM_REPO });
   }
@@ -650,17 +907,20 @@ class DemoBuilder {
   }
 
   /** A simulated lead reply: the real run record, completed with the flag the fake runtime's replies carry. */
-  private leadReplies(startM: number, endM: number, reply: string, steer?: Record<string, unknown>) {
+  private leadReplies(startM: number, endM: number, reply: string, steer?: Record<string, unknown>, studio?: Record<string, unknown>) {
     const r = M.startLeadRun(this.s, { provider: CLAUDE.provider, model: CLAUDE.model, trigger: "message" }, this.at(startM));
-    this.s = M.completeLeadRun(r.state, r.runId, { reply, proposals: [], ...(steer ? { steer } : {}) }, this.at(endM), { simulated: true });
+    this.s = M.completeLeadRun(r.state, r.runId, { reply, proposals: [], ...(steer ? { steer } : {}), ...(studio ? { studio } : {}) }, this.at(endM), { simulated: true });
     const run = this.s.leadRuns.find((x) => x.id === r.runId)!;
     if (run.outcome !== "completed") throw new Error(`demo: lead run ${r.runId} is ${run.outcome}`);
+    const notes = this.s.conversation.filter((x) => x.leadRunId === r.runId).flatMap((x) => x.rejected ?? []);
+    if (studio && notes.length) throw new Error(`demo: lead run ${r.runId}'s studio block was refused in part: ${notes.join("; ")}`);
     return r.runId;
   }
 
   // ---------- the story ----------
 
   build() {
+    this.visionStory(); // Vision: two rounds with PE review and your marks, the budgets, Start the factory
     this.settings();
     this.specs();
     this.offlineMapsTileCache(); // WT-001: failed check → finding → repair → merged, in Review
@@ -670,6 +930,10 @@ class DemoBuilder {
     this.inviteScreenDesign(); // WT-013: the design, a UX finding revised away, the lead's brief; nothing to integrate
     this.tripSharingGoal(); // WT-004 and its children; WT-004.1's security finding repaired, merged and reviewed
     this.fasterTrailSearch(); // WT-011: your own Change task, merged, in Review
+    this.screenSpecs(); // WT-014 and WT-015: the trip page and the packing list screen, as Feature tasks
+    this.tripPageBuilt(); // WT-014: captured, matches its design: built and verified
+    this.packingScreenBuilt(); // WT-015: captured, one difference the lead accepted: fails a check
+    this.joinFlowChangeOrder(); // Vision again: round 3 (Join flow), your Lock in, the change order the lead answers
     const fix = this.bugReproduced(); // WT-009: reproduced; the fix starts
     this.voiceOver(); // WT-007: UX review raised a finding that needs you; the code review runs at start
     this.pauseFix(fix); // WT-009: paused by you, acknowledged by the runtime
@@ -688,6 +952,7 @@ class DemoBuilder {
       5,
       spec({
         title: "Cache trail map tiles for offline use",
+        blueprintRefs: [this.item("Trail map")],
         area: "Offline maps",
         whyNow: "At most trailheads the map shows a blank grid: tiles are fetched on demand and there is no signal.",
         outcome: "Tiles a person has looked at stay on the phone and show without a connection.",
@@ -710,6 +975,7 @@ class DemoBuilder {
       1,
       spec({
         title: "Show a clear offline state on the map",
+        blueprintRefs: [this.item("Trail map")],
         area: "Offline maps",
         whyNow: "With no signal the map looks the same as online, so nobody knows whether it is current.",
         outcome: "The map says when it is offline and how old the cached tiles are.",
@@ -732,6 +998,7 @@ class DemoBuilder {
       4,
       spec({
         title: "Download a trail area before you leave",
+        blueprintRefs: [this.item("Trail map")],
         area: "Offline maps",
         whyNow: "A cache only holds what someone looked at; the first visit to a trail happens with no signal.",
         outcome: "A trail's map can be saved on the phone from home, with its size shown first.",
@@ -779,6 +1046,7 @@ class DemoBuilder {
       5,
       spec({
         title: "Suggest a packing list from trail length and weather",
+        blueprintRefs: [this.item("Packing list")],
         area: "Packing lists",
         whyNow: "Two stoves and no first-aid kit: packing is decided from memory.",
         outcome: "A new trip starts with a packing list that fits its length and the forecast.",
@@ -801,6 +1069,7 @@ class DemoBuilder {
       6,
       spec({
         title: "Check items off together",
+        blueprintRefs: [this.item("Packing list")],
         area: "Packing lists",
         whyNow: "A list one person owns does not stop two people bringing stoves.",
         outcome: "Everyone on the trip can tick items off the same list and see who took what.",
@@ -846,6 +1115,7 @@ class DemoBuilder {
       7,
       spec({
         title: "Larger tap targets on the trip page",
+        blueprintRefs: [this.item("Trip page")],
         area: "Accessibility",
         whyNow: "Several controls on the trip page are under 30 pt; with gloves on they are missed.",
         outcome: "Every control on the trip page is at least 44 pt with 8 pt between controls.",
@@ -1097,6 +1367,180 @@ class DemoBuilder {
     this.mergePr(id, 2300, 2299);
   }
 
+  /** The id of an approved part of the blueprint in force, by its title. */
+  private item(title: string): string {
+    const i = B.blueprintItems(this.s).find((x) => x.title === title && x.status === "approved");
+    if (!i) throw new Error(`demo: no approved blueprint item "${title}"`);
+    return i.id;
+  }
+
+  /** The two screens the lead planned once the first changes had landed: Feature tasks, so each is captured and compared with its design. */
+  private screenSpecs() {
+    const T = 2290;
+    this.addTask(
+      "WT-014",
+      11,
+      spec({
+        title: "Build the trip page",
+        area: "Trip sharing",
+        blueprintRefs: [this.item("Trip page"), this.item("Trip data")],
+        whyNow: "The trip page is the one place for the plan and the people; the invite links have landed and need a page to open.",
+        outcome: "The trip page as approved: the plan first, then who is coming, with Share the invite link.",
+        benefit: "Friends see the plan and who is coming in one place.",
+        options: [
+          opt("A", "As approved (plan first)", "Build Trip page variant A on the trip record of Trip data", "Matches the design you kept", "Medium", "The people list is below the fold on small phones", "High"),
+          opt("B", "People first", "Build variant B instead", "Who is coming is seen first", "Medium", "Not the variant you kept", "High"),
+        ],
+        rationale: "You kept variant A in Vision.",
+        acceptance: ["The built page matches Trip page v1 (plan first) on desktop and mobile", "The trip record holds what Trip data v2 names"],
+        validationPlan: "Component tests; the capture of evidence and the UX review compare the built page with the design.",
+        effort: "medium",
+      }),
+      "feature",
+      T,
+    );
+    this.addTask(
+      "WT-015",
+      12,
+      spec({
+        title: "Build the packing list screen",
+        area: "Packing lists",
+        blueprintRefs: [this.item("Packing list")],
+        whyNow: "The suggested packing list needs its screen: shared items and each person's items.",
+        outcome: "The packing list as approved: shared items with who brings each, and each person's items.",
+        benefit: "The group sees what is packed and what is not.",
+        options: [
+          opt("A", "As approved", "Build Packing list v2 on the list the suggestion makes", "Matches the design you kept", "Small", "Who brings an item needs the trip's people", "High"),
+          opt("B", "Without who brings it", "Build the list first; who brings each item later", "Smaller first step", "Small", "Differs from the design", "High"),
+        ],
+        rationale: "You kept v2, which shows who brings each shared item.",
+        acceptance: ["The built screen matches Packing list v2 on desktop and mobile"],
+        validationPlan: "Component tests; the capture of evidence and the UX review compare the built screen with the design.",
+      }),
+      "feature",
+      T,
+    );
+    this.event(T, "lead", "spec", "Published specs for WT-014 and WT-015 from blueprint r1");
+    this.promote(["WT-014", "WT-015"], T - 1);
+  }
+
+  /** A Feature task from its design to its pull request: design, change, checks, capture, the three reviews, (repair), final checks, verification. */
+  private featureRun(id: string, t0: number, change: CodeChange, words: { design: string; change: string; handoff: string; ux: string; verification: string }, uxFindings: Finding[] = [], afterUx?: (m: number) => void): CodeChange {
+    this.output(id, "S1", t0, t0 - 30, words.design);
+    this.change(id, "S2", t0 - 31, t0 - 80, change, words.change, words.handoff);
+    this.checks(id, "C1", t0 - 81, t0 - 83);
+    this.capture(id, "E1", t0 - 84, t0 - 85);
+    this.reviews(id, "S3", "SR1", t0 - 86, t0 - 98, t0 - 100, change, "No findings: the screen reads the trip record only, and its tests cover each state.", "No security findings: nothing new is stored or sent.");
+    this.review(id, "S4", t0 - 101, t0 - 108, undefined, words.ux, uxFindings);
+    afterUx?.(t0 - 110);
+    this.skip(id, "S5", t0 - 116);
+    this.checks(id, "C2", t0 - 117, t0 - 119);
+    this.output(id, "S6", t0 - 120, t0 - 128, words.verification);
+    this.prHead(id, t0 - 129, change);
+    return change;
+  }
+
+  /** WT-014: built, captured on desktop and mobile, and the UX review found no difference from the design: built and verified. Merged, and you looked at it. */
+  private tripPageBuilt() {
+    const id = "WT-014";
+    const change = { sha: fakeSha("WT-014 S2"), paths: ["src/trip/TripPage.tsx", "src/trip/TripPage.test.tsx", "src/trip/People.tsx", "src/trip/record.ts"], files: 4, additions: 188, deletions: 22 };
+    this.featureRun(id, 2280, change, {
+      design: "The trip page as approved: the plan first, then who is coming, and Share the invite link at the top.",
+      change: "The trip page, plan first, on the trip record (+188 −22, 4 files)",
+      handoff: "The page reads the trip record of Trip data v2; people show in, out or maybe.",
+      ux: "No findings: the built page matches Trip page v1 (plan first) on desktop and mobile.",
+      verification: "The trip page matches its design on both devices; checks passed on the final change.",
+    });
+    this.openPr(id, 2150, 1002);
+    this.mergePr(id, 2100, 2099);
+    this.s = D.markLandedReviewed(this.s, [id], true, this.at(2050));
+  }
+
+  /**
+   * WT-015: built and captured; the UX review found that the list does not show who brings each item. You sent the
+   * decision to the lead, which accepted it because WT-006 builds it; the work landed. Only you can accept a
+   * difference from the design, so Design and reality says the packing list fails a check.
+   */
+  private packingScreenBuilt() {
+    const id = "WT-015";
+    const change = { sha: fakeSha("WT-015 S2"), paths: ["src/packing/PackingList.tsx", "src/packing/PackingList.test.tsx", "src/packing/items.ts"], files: 3, additions: 121, deletions: 9 };
+    this.featureRun(
+      id,
+      2040,
+      change,
+      {
+        design: "The packing list as approved: shared items with who brings each, then each person's items.",
+        change: "The packing list screen: shared items and each person's items (+121 −9, 3 files)",
+        handoff: "Who brings an item needs the trip's people on the list record; the field is there, not shown yet.",
+        ux: "1 finding for you to decide: the built list does not show who brings each shared item.",
+        verification: "The packing list screen works; it differs from its design in one place (the lead accepted it until WT-006); checks passed on the final change.",
+      },
+      [finding("F1", { severity: "warning", action: "ask-user", title: "The list does not show who brings each shared item", detail: "Packing list v2 shows a name beside each shared item (Ana, Ben, Nobody yet). The built screen shows the items only.", why: "It differs from the design you kept. Fixing it now, or later with WT-006, is a product choice." })],
+      (m) => {
+        const d = this.s.decisions.find((x) => x.taskId === id && x.status === "open");
+        if (!d || d.routedTo !== "user") throw new Error("demo: WT-015's finding did not come to you");
+        // You handed this one to the lead; the lead accepted it, since WT-006 (shared check-off) builds who brings each item.
+        this.owner("routeDecision", { decisionId: d.id, to: "lead" }, m);
+        const r = M.startLeadRun(this.s, { provider: CLAUDE.provider, model: CLAUDE.model, trigger: "decisions" }, this.at(m - 1));
+        this.s = M.completeLeadRun(r.state, r.runId, { reply: "Accepted for now: WT-006 builds who brings each item.", proposals: [], decisions: [{ id: d.id, decision: "accept", why: "WT-006 (check items off together) adds who brings each item; building it twice would cost more than waiting for it." }] }, this.at(m - 3), { simulated: true });
+        if (this.s.decisions.find((x) => x.id === d.id)?.status !== "accept") throw new Error("demo: the lead did not accept WT-015's finding");
+      },
+    );
+    this.openPr(id, 1905, 1004);
+    this.mergePr(id, 1850, 1849, ["findings-accepted"]); // the landing records that a finding was accepted
+    // You looked at it and kept the lead's call until WT-006; the difference stays open on Design and reality.
+    this.s = D.markLandedReviewed(this.s, [id], true, this.at(1800));
+  }
+
+  /**
+   * Vision stays open while the factory runs: a third round, on a flow (joining by link, with its rules), kept, and
+   * your Lock in. It brings new work, so it is a change order; the lead answers it with one new task, a line you can undo.
+   */
+  private joinFlowChangeOrder() {
+    this.studioExchange(1500, "Add how a friend joins a trip by link, with what happens when the link has expired.", "I opened a round on the flows and asked the designer for the join flow, with its rules.", {
+      openRound: { focus: "flows", summary: "How a friend joins a trip by link, and its rules." },
+      designerRuns: [{ brief: "The join flow: a friend opens the invite link, joins, or meets an expired link. Give its rules and one example.", kinds: ["flow"], variants: 1 }],
+    });
+    const [designer] = this.startStudioRuns(1498);
+    this.designerHandsIn(designer, 1488, [{ title: "Join flow", version: 1 }], "Join flow, with 4 rules and 1 example");
+    const pe = this.askPe(1487);
+    this.peAnswers(pe[0], 1484, "Join flow", [{ verdict: "feasible", reasons: "The guest link of Trip data v2 carries the trip and an expiry; each rule is testable.", budget: { buildUsd: [3, 6], maintenanceUsdPerMonth: [0, 0.5], basis: "One page and the link check; no new storage" } }], "Join flow v1: feasible");
+    this.ownerAnswers(1480, [{ title: "Join flow", mark: "keep" }], "Keep the join flow.", "Round 3 is closed. Your draft adds Join flow; Lock in shows what it changes.", { closeRound: { summary: "Kept: Join flow." } });
+    // Your Lock in: the summary you saw, by its draft revision and digest, as the Lock in screen sends them.
+    const summary = B.lockInSummary(this.s);
+    this.owner("lockIn", { draftRev: summary.draftRev, summaryDigest: B.summaryDigest(summary) }, 1470);
+    const co = this.s.blueprint.changeOrders.at(-1);
+    if (!co || co.status !== "open" || co.handler !== "lead") throw new Error("demo: the Lock in made no change order for the lead");
+    // The lead answers it: one new task for the new work (a line with its own Undo).
+    const r = M.startLeadRun(this.s, { provider: CLAUDE.provider, model: CLAUDE.model, trigger: "change-order" }, this.at(1469));
+    const block = {
+      rev: co.rev,
+      updates: [
+        {
+          action: "new-task",
+          task: null,
+          why: "Join flow is new: nothing builds it yet.",
+          proposal: {
+            title: "Join a trip by link",
+            area: "Trip sharing",
+            outcome: "A friend opens the invite link and joins the trip, or is told to ask the organiser for a new link, as Join flow's rules say.",
+            options: [
+              { id: "A", name: "As the flow says", approach: "Build the join page and the link check, with a test for each rule of Join flow." },
+              { id: "B", name: "Defer", approach: "Wait until the attendee list has landed." },
+            ],
+            recommendedOptionId: "A",
+            rationale: "You locked in Join flow; its rules need tests.",
+            acceptance: ["Each rule and the example of Join flow has a passing test"],
+            blueprintRefs: [this.item("Join flow")],
+          },
+        },
+      ],
+    };
+    this.s = M.completeLeadRun(r.state, r.runId, { reply: "I planned one task for the join flow. Undo it on the change order if you would rather wait.", proposals: [], changeOrder: block }, this.at(1467), { simulated: true });
+    const answered = this.s.blueprint.changeOrders.find((x) => x.rev === co.rev)!;
+    if (!answered.lines?.length) throw new Error(`demo: the lead's answer to change order ${co.rev} made no line (${JSON.stringify(this.s.leadRuns.find((x) => x.id === r.runId)?.note ?? "")})`);
+  }
+
   /** WT-007: designed and implemented; the UX review asks you about units; the code review is next (it starts when the service does). */
   private voiceOver() {
     const id = "WT-007";
@@ -1153,7 +1597,7 @@ class DemoBuilder {
       tasks: [{ id: "WT-010", defer: true, why: "It needs a connection anyway, and offline maps comes first." }],
       notes: [{ task: id, step: "S1", text: "Put a first-aid kit on every packing list, whatever the trail's length or forecast." }],
     });
-    const set = this.s.steering[0];
+    const set = this.s.steering.at(-1);
     if (!set || !set.changes.some((c) => c.kind === "focus" && c.status === "applied") || !set.changes.some((c) => c.kind === "defer" && c.taskId === "WT-010" && c.status === "applied")) throw new Error("demo: the steering exchange was not applied");
     const noteRow = set.changes.find((c) => c.kind === "note");
     const note = noteRow?.noteId ? this.s.notes.find((n) => n.id === noteRow.noteId) : undefined;

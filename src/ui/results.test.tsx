@@ -188,7 +188,7 @@ describe("the Results page", () => {
     const demo = buildDemo(T0);
     for (const t of D.landedTasks(demo)) t.integration!.landed!.status = "unreviewed";
     const markup = render(demo);
-    expect(markup).toContain("Mark all 4 as seen");
+    expect(markup).toContain("Mark all 6 as seen"); // every landed task of the demo
   });
 
   it("puts a ready pull request under Ready to merge with its verdict line, Merge, Keep for me and Why it's ready", () => {

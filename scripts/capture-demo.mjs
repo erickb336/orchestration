@@ -173,7 +173,9 @@ if (extra.length && !only.length) log(`scenes the README does not use (skipped):
 // ---------- the throwaway service ----------
 
 async function freePort() {
-  for (let port = 5391; port <= 5399; port++) {
+  // CAPTURE_PORT moves the range (nine ports from it), for a machine where 5391–5399 are taken.
+  const first = Number(process.env.CAPTURE_PORT ?? 5391);
+  for (let port = first; port <= first + 8; port++) {
     const free = await new Promise((done) => {
       const srv = createServer();
       srv.once("error", () => done(false));
@@ -181,7 +183,7 @@ async function freePort() {
     });
     if (free) return port;
   }
-  throw new Error("No free port between 5391 and 5399.");
+  throw new Error(`No free port between ${first} and ${first + 8}.`);
 }
 
 function makeApi(port) {

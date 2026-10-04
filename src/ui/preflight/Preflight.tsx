@@ -376,7 +376,7 @@ function Started({ words }: { words: { title: string; lines: string[] } }) {
         </>
       }
     >
-      <ul className="pf-started">
+      <ul className="pf-started" data-tour="start-record">
         {words.lines.map((l) => (
           <li key={l}>{l}</li>
         ))}

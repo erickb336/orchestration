@@ -68,8 +68,8 @@ describe("the groups", () => {
     expect(GROUPS.slice(1)).toEqual(M.BOARD_COLUMNS);
     const demo = buildDemo(T0);
     const groups = Object.fromEntries(demo.tasks.map((t) => [t.id, groupOf(demo, t, T0)]));
-    // The finding that waits for you and the two-option task, wherever their columns are.
-    expect(Object.keys(groups).filter((id) => groups[id] === "needs-you")).toEqual(["WT-007", "WT-004.3"]);
+    // The finding that waits for you, the two-option task, and the change order's new task, wherever their columns are.
+    expect(Object.keys(groups).filter((id) => groups[id] === "needs-you")).toEqual(["WT-007", "WT-004.3", "T-019"]);
     expect(groups["WT-001"]).toBe("done");
     expect(groups["WT-009"]).toBe("paused");
     expect(groups["WT-010"]).toBe("deferred");

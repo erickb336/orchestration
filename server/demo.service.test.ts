@@ -110,8 +110,8 @@ describe("the demo in the fake service", () => {
     // Nothing was added for it: no dedicated review, no dedicated check run; and nothing else changed its state.
     expect(s.tasks.map((t) => t.id)).toEqual(before.tasks.map((t) => t.id));
     // Landed work stays in the review-later list as it was.
-    expect(D.landedTasks(s).map((t) => `${t.id}:${t.integration!.landed!.status}`)).toEqual(["WT-011:unreviewed", "WT-001:unreviewed", "WT-004.1:reviewed", "WT-008:reviewed"]);
-    for (const id of ["WT-001", "WT-004.1", "WT-008", "WT-011"]) expect(task(s, id).integration!.pr!.phase, id).toBe("merged");
+    expect(D.landedTasks(s).map((t) => `${t.id}:${t.integration!.landed!.status}`)).toEqual(["WT-011:unreviewed", "WT-001:unreviewed", "WT-015:reviewed", "WT-014:reviewed", "WT-004.1:reviewed", "WT-008:reviewed"]);
+    for (const id of ["WT-001", "WT-004.1", "WT-008", "WT-011", "WT-014", "WT-015"]) expect(task(s, id).integration!.pr!.phase, id).toBe("merged");
     // The paused task stays paused with its acknowledged stop; the deferred one stays deferred.
     expect(M.stateLabel(s, task(s, "WT-009"))).toBe("Paused");
     expect(s.attempts.filter((a) => a.taskId === "WT-009").map((a) => a.outcome)).toEqual(["completed", "stopped"]);
@@ -125,8 +125,8 @@ describe("the demo in the fake service", () => {
     // The lead answers in the demo (a simulated run advances a few percent per tick): a steer from the fake
     // runtime carries the structured simulated flag, and no prefix.
     store.command("postMessage", { text: "Focus on offline maps" }, "k-msg", iso(now));
-    for (let i = 0; i < 40 && store.read().state.steering.length < 2; i++) s = await tick();
-    const set = s.steering[1];
+    for (let i = 0; i < 40 && store.read().state.steering.length < 3; i++) s = await tick();
+    const set = s.steering[2]; // after the demo's two
     expect(set.simulated).toBe(true);
     expect(set.refused).toBeUndefined();
     expect(set.changes.find((c) => c.kind === "focus")).toMatchObject({ status: "applied", after: "Focus on offline maps" });
@@ -173,7 +173,7 @@ describe("the demo in the fake service", () => {
     claude.reply(run.id, "Shifting the focus to packing lists.", [], steer({ focus: "Packing lists first.", reason: "You asked.", tasks: [] }));
     scheduler.tick((now += 1000));
     const s = store.read().state;
-    const set = s.steering[1];
+    const set = s.steering.at(-1)!; // the newest: the demo already has two (the change order's answer and the steering exchange)
     expect(set.changes.find((c) => c.kind === "focus")).toMatchObject({ status: "applied" });
     expect(set.simulated).toBeUndefined();
     expect(M.currentVision(s)).toMatchObject({ rev: 3, author: "lead", focus: "Packing lists first." });
