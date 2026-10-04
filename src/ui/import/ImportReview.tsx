@@ -158,6 +158,7 @@ export function ImportReview() {
               <span className="imp-need">{need.need}</span>
               {need.rest}
             </p>
+            {imp.checks.status === "not-run" && <p className="small no-margin">The tests did not run: {imp.checks.reason.replace(/\.$/, "")}. No rule has a test result.</p>}
             <div className="imp-answered">
               <Meter used={c.questions ? c.answered / c.questions : 1} tone="done" className="imp-answered__bar" />
               <span className="small">

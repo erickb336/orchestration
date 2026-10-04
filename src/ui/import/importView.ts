@@ -503,7 +503,7 @@ export function partLine(s: State, a: StudioArtifact): string {
   const rules = partRules(s, a);
   const tests = !rules.length ? "" : testsNotRun(s) ? " The tests did not run." : ` Its rules: ${rules.filter((r) => verified(s, r)).length} of ${rules.length} have a passing test.`;
   if (cap?.status === "captured") return `Recorded from the running ${a.kind === "screen" ? "app" : "CLI"}${s.studio.import?.capture?.simulated ? " (simulated)" : ""}.${tests}`;
-  if (cap?.status === "none") return `Read from the code: not recorded, because ${cap.detail.replace(/\.$/, "").replace(/^[A-Z]/, (c) => c.toLowerCase())}.${tests}`;
+  if (cap?.status === "none") return `Read from the code: not recorded. ${cap.detail.replace(/\.$/, "")}.${tests}`;
   return `Read from the code: ${a.provenance?.files.join(", ")}.${tests}`;
 }
 

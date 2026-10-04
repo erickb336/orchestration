@@ -242,7 +242,7 @@ describe("3 · Review (C5, C8, C9, C15)", () => {
     expect(t).toContain("tally add terminal demo Recorded from the running CLI (simulated). Its rules: 5 of 5 have a passing test.");
     expect(t).toContain("Splitting algorithm … Read from the code: tally/settle.py, tally/money.py. Its rules: 1 of 2 have a passing test.");
     const noDocker = text(<ImportReview />, stage("review", { checks: "not-run" }));
-    expect(noDocker).toContain("tally add terminal demo Read from the code: not recorded, because docker is not available on this computer, so nothing was recorded.");
+    expect(noDocker).toContain("tally add terminal demo Read from the code: not recorded. Docker is not available on this computer, so nothing was recorded.");
   });
 
   it("with no answer, Send is open: it sends the review with every question open, and leads on to the baseline (UX-3)", () => {
@@ -463,7 +463,7 @@ describe("5 · After (Design and reality, Home)", () => {
     const s = stage("answered", { checks: "not-run" });
     expect(text(<BaselineLockIn />, s)).toContain("Baseline tally add v1 (terminal demo; tests not run; not recorded)");
     expect(text(<BaselineLockIn />, s)).not.toMatch(/tests 0 of/);
-    expect(text(<ImportReview />, s)).toContain("tally add terminal demo Read from the code: not recorded, because docker is not available on this computer, so nothing was recorded. The tests did not run.");
+    expect(text(<ImportReview />, s)).toContain("tally add terminal demo Read from the code: not recorded. Docker is not available on this computer, so nothing was recorded. The tests did not run.");
     const after = text(<Reality />, stage("baseline", { checks: "not-run" }));
     expect(after).toContain("Tests: not run");
     expect(after).not.toMatch(/Tests: 0 of/);
@@ -475,6 +475,8 @@ describe("5 · After (Design and reality, Home)", () => {
     expect(review).not.toContain("The test, test_add.py");
     expect(review).not.toContain("No test covers it.");
     expect(review.match(/Tests The tests did not run\./g)).toHaveLength(5);
+    // The summary says why, once (UX57-2).
+    expect(review).toContain("2 conflicts and 3 guesses need you; 0 rules are confirmed. The tests did not run: Docker is not available on this computer, so the tests did not run. No rule has a test result.");
     // With the tests run, a rule that names no test still says so, and a test source is cited.
     const ran = text(<ImportReview />, stage("review"));
     expect(ran).toContain("The test, test_add.py::test_rejects_other_currency one currency per group · passes");
