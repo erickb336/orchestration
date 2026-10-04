@@ -96,14 +96,22 @@ describe("the lead's studio brief", () => {
     expect(section(envelope(openRound(fresh(), "experience", at(1)).state, CODE))).not.toContain("No round yet");
   });
 
-  it("says where the import stands, and once it is in review asks the lead only for the round's message and a vision draft (ORC-032)", () => {
+  it("says where the import stands, and once it is in review asks only the review run for the round's message and a vision draft (ORC-032, N2)", () => {
     const reading = tallyImport("read").s;
     expect(section(envelope(reading, CODE))).toContain(
       `The import of the repository at commit ${TALLY_COMMIT.slice(0, 7)} is reading: the tests ran: 22, 22 pass; 17 rules, 13 named by tests; 1 parts; the screens and commands not recorded yet.\nThe service runs the import. Open no round and ask for no designer run; if the user asks, say what it is doing.`,
     );
-    const review = section(envelope(tallyImport("review").s, CODE));
+    // The import's own review run (no message) writes the vision draft.
+    const write = 'Write "vision": what the product is today, from its parts and rules, for the user to accept. Open no round and ask for no designer run while round 0 is open.';
+    const reviewRun = M.startLeadRun(tallyImport("review").s, { provider: "claude", model: "claude-sample-large", trigger: "message" }, at(101));
+    const review = section(buildLeadEnvelope(reviewRun.state, reviewRun.state.leadRuns.find((x) => x.id === reviewRun.runId)!, "read", undefined, undefined, CODE));
     expect(review).toContain(`The import of the repository at commit ${TALLY_COMMIT.slice(0, 7)} is in review: the tests ran: 22, 22 pass; 17 rules, 13 named by tests; 6 parts; the screens and commands 3 of 3 recorded.`);
-    expect(review).toContain('Write "vision": what the product is today, from its parts and rules, for the user to accept. Open no round and ask for no designer run while round 0 is open.');
+    expect(review).toContain(write);
+    // A reply to the user's message during the review answers in chat, and leaves the import's draft alone (N2).
+    const chat = section(envelope(tallyImport("review").s, CODE));
+    expect(chat).toContain(`is in review: the tests ran: 22, 22 pass;`);
+    expect(chat).not.toContain(write);
+    expect(chat).toContain(`The import asks the user its own questions in round 0, and the review run of the import writes the vision draft. Answer the user in "reply" only: leave "vision" out, open no round and ask for no designer run while round 0 is open.`);
     expect(section(envelope(tallyImport("review", { checks: "not-run" }).s, CODE))).toContain("the tests did not run (Docker is not available on this computer, so the tests did not run); 17 rules, 0 named by tests;");
     expect(section(envelope(fresh(), CODE))).not.toContain("The import of the repository");
   });

@@ -1229,9 +1229,10 @@ function studioAnswers(state: State): string[] {
 
 /**
  * The import of the repository (ORC-032), when the project has one: where it stands, and the lead's part. The service
- * runs the import; the lead only writes the round's message and a vision draft once the import is in review.
+ * runs the import. Once it is in review, only the import's own review run writes the round's message and a vision draft;
+ * a reply to the user's message answers in chat and leaves the draft alone (N2).
  */
-function importLines(state: State): string {
+function importLines(state: State, run?: Pick<LeadRun, "trigger" | "messageIds">): string {
   const imp = state.studio.import;
   if (!imp) return "";
   const status = I.importStatus(state);
@@ -1243,7 +1244,9 @@ function importLines(state: State): string {
   const where = status === "review" ? "is in review" : status === "reading" ? "is reading" : status === "locked-in" ? "is the baseline" : `stopped (${truncate(imp.stopped?.reason ?? "", 160)})`;
   const what =
     status === "review"
-      ? 'The import asks the user its own questions in round 0. In your reply, say in two or three sentences what the import found, and that its questions wait in Vision. Write "vision": what the product is today, from its parts and rules, for the user to accept. Open no round and ask for no designer run while round 0 is open.'
+      ? run && isImportReviewRun(state, run)
+        ? 'The import asks the user its own questions in round 0. In your reply, say in two or three sentences what the import found, and that its questions wait in Vision. Write "vision": what the product is today, from its parts and rules, for the user to accept. Open no round and ask for no designer run while round 0 is open.'
+        : 'The import asks the user its own questions in round 0, and the review run of the import writes the vision draft. Answer the user in "reply" only: leave "vision" out, open no round and ask for no designer run while round 0 is open.'
       : status === "reading"
         ? "The service runs the import. Open no round and ask for no designer run; if the user asks, say what it is doing."
         : "";
@@ -1256,7 +1259,7 @@ function importLines(state: State): string {
  * first round), the rounds with their artifacts and PE review, the designer runs under way, and the user's answers
  * since the lead's last reply. Bounded: the open round's artifacts, the answers and the pins are capped and counted.
  */
-export function studioBriefSection(state: State, repo?: RepoGlance): string {
+export function studioBriefSection(state: State, repo?: RepoGlance, run?: Pick<LeadRun, "trigger" | "messageIds">): string {
   const p = state.project;
   const rounds = state.studio.rounds;
   const open = S.currentRound(state);
@@ -1321,7 +1324,7 @@ Product domains: the kind of product this is, which decides what the designer ma
 The user chooses the domains in the app. You never set them, and you do not ask about them in "questions"; you may recommend domains in one sentence of your reply. The user's choice:
 ${domainLines(p.domains).map((l) => `- ${l}`).join("\n")}
 Devices (the user's scope): ${p.devices.join(", ")}.
-${repoLine}${start}${importLines(state)}
+${repoLine}${start}${importLines(state, run)}
 
 Rounds:
 ${roundLines}${earlier.length ? `\n${earlier.join("\n")}` : ""}
@@ -1646,7 +1649,7 @@ Planning runs cannot steer. Serve the current focus; do not re-propose deferred 
     : "";
   // The studio brief goes to the replies that may run the studio: message runs, in Vision and while the factory runs
   // (pass 5): when the user talks to the lead about the design, the lead may open rounds on the draft.
-  const studioBrief = canDraft ? studioBriefSection(state, repo) : "";
+  const studioBrief = canDraft ? studioBriefSection(state, repo, run) : "";
   const shapingBrief = shaping
     ? `
 ## Draft the vision with the user
