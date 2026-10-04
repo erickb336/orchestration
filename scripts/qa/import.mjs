@@ -14,8 +14,9 @@
 // 5. After: Design and reality shows each part's status and each rule's evidence; Home says "Nothing to build".
 //
 // Stubs until unit 2 (the server) lands, each named in the check it feeds:
-// - GET /api/import/start?sample=tally is unit 2's route. The page's request is answered with TALLY_START_INFO
-//   (src/ui/import/importScene.ts), through the browser's request routing; the service is not changed.
+// - POST /api/import/demo is unit 2's route. The page's request is answered with TALLY_START_INFO
+//   (src/ui/import/importScene.ts, in that route's shape), through the browser's request routing; the service is not
+//   changed.
 // - The import's progress is unit 2's scheduler. After Start, the journey puts tally's import at the next stage into the
 //   store (the state builders, src/domain/testing/import.ts: "parts" for Reading, "review" for Review), as the service
 //   will reach it. The owner's own commands (Start, the answers, the Lock in) go through the real service.
@@ -49,7 +50,7 @@ await runJourney(
   "import",
   () => buildDemo(Date.now()),
   async (j, page, service, width) => {
-    await page.route("**/api/import/start**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(TALLY_START_INFO) }));
+    await page.route("**/api/import/demo", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(TALLY_START_INFO) }));
 
     await j.step("1 Start", async () => {
       await page.goto(`${service.origin}/#/settings/project/new-project`);
@@ -60,19 +61,19 @@ await runJourney(
       await page.waitForTimeout(300);
       const t = flat(await text(page));
       j.check(t.includes("The import reads the last commit, c0ffee0 on main. Changes you have not committed are left out."), "Start: it names the commit it reads, and leaves out what is not committed (C7)");
-      j.check(t.includes("14 source files, 5 test files") && !t.includes("22 tests"), "Start: it counts files, not tests (C7)");
+      j.check(t.includes("14 source files and 5 test files") && !t.includes("22 tests"), "Start: it counts files, not tests (C7)");
       j.check(t.includes("No file in your repository changes") && !t.includes("Nothing is written into the repository"), "Start: No file in your repository changes (C7)");
-      j.check(/How it runs\s*complete/.test(t) && t.includes("Use the image Python 3.12") && (await page.getByLabel("Test command").inputValue()) === "pytest --junitxml=reports/junit.xml" && (await page.getByLabel("JUnit report path").inputValue()) === "reports/junit.xml", "Start: how it runs is prefilled, each with its reason (C1)");
+      j.check(/How it runs\s*complete/.test(t) && t.includes("Use the image Python 3.12") && (await page.getByLabel("Test command").inputValue()) === "python3 -m pytest --junitxml=reports/junit.xml" && (await page.getByLabel("JUnit report path").inputValue()) === "reports/junit.xml", "Start: how it runs is prefilled, each with its reason (C1)");
       j.check(t.includes("The estimate: about $0.43–$2.07.") && t.includes("$3.00, the budget"), "Start: the estimate beside the budget");
       const form = page.locator(".imp-start");
-      j.check(await form.getByRole("checkbox", { name: /Screen product/ }).isChecked() && !(await form.getByRole("checkbox", { name: /Infrastructure/ }).isChecked()) && t.includes("Not found: no compose file"), "Start: the kinds are prefilled with their reasons");
+      j.check(await form.getByRole("checkbox", { name: /Screen product/ }).isChecked() && !(await form.getByRole("checkbox", { name: /Infrastructure/ }).isChecked()) && t.includes("Found: tally/__main__.py: a command-line entry"), "Start: the kinds are prefilled with their reasons");
       await j.shot("1-start");
       await j.pageChecks("Start");
       // What a missing test command means, then put it back.
       await page.getByLabel("Test command").fill("");
       await page.getByText("Without a test command and its report, the tests do not run").waitFor({ timeout: 5_000 });
       j.check(true, "Start: without a test command, it says the tests do not run and every rule is inferred");
-      await page.getByLabel("Test command").fill("pytest --junitxml=reports/junit.xml");
+      await page.getByLabel("Test command").fill("python3 -m pytest --junitxml=reports/junit.xml");
       await page.getByRole("button", { name: "Start the import" }).click();
       const dialog = page.getByRole("dialog");
       await dialog.waitFor();
@@ -82,7 +83,7 @@ await runJourney(
       const s = service.state();
       j.check(s.project.name === "tally" && s.project.repoPath === TALLY_START_INFO.path, "the record: a new project on the repository");
       j.check(s.studio.import.budgetUsd === 3 && s.studio.import.helpers === null && s.studio.rounds[0]?.n === 0, "the record: the import, with its $3 budget, and round 0 open");
-      j.check(s.project.checks.testReport === "reports/junit.xml" && s.project.checks.commands[0]?.argv.join(" ") === "pytest --junitxml=reports/junit.xml" && s.project.environment?.image === TALLY_START_INFO.environment.proposal.image, "the record: the test command, its report and the environment (C1)");
+      j.check(s.project.checks.testReport === "reports/junit.xml" && s.project.checks.commands[0]?.argv.join(" ") === "python3 -m pytest --junitxml=reports/junit.xml" && s.project.environment?.image === TALLY_START_INFO.proposal.image, "the record: the test command, its report and the environment (C1)");
       j.check(s.project.domains.join() === "screen,code" && s.project.devices.join() === "terminal", "the record: the kinds and the device");
     });
 

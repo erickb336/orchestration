@@ -21,8 +21,8 @@ import {
   type ImportOption,
   type ImportTarget,
 } from "../../domain/studio/import";
-import type { ImportRule, ImportSource, ImportStep, RepoSize, StudioArtifact } from "../../domain/studio/types";
-import type { CheckCommand, Device, ProjectDomain, State, TestCaseResult } from "../../domain/types";
+import type { ImportEstimate, ImportRule, ImportSource, ImportStep, RepoSize, StudioArtifact } from "../../domain/studio/types";
+import { DEVICES, PROJECT_DOMAINS, type CheckCommand, type Device, type ProjectDomain, type State, type TestCaseResult } from "../../domain/types";
 import type { StepItem, StepMark } from "../kit";
 
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -43,40 +43,44 @@ export const BASELINE_HASH = "#/vision/baseline";
 // ---------- 1 · Start ----------
 
 /**
- * What the Start screen reads of a repository before anything runs: GET /api/import/start?path=<absolute path>, or
- * ?sample=tally in the demo (the service writes the invented sample repository and answers for it). Read only. Unit 2
- * builds the route (server/http.ts); this is the shape the screen reads.
+ * What the Start screen reads of a repository before anything runs (GET /api/import/start?path=…, or POST
+ * /api/import/demo for the bundled sample with the simulated runtime). Read only; nothing is saved. Unit 2 builds the
+ * routes, and src/api.ts holds this type on its branch (orc-032-u2): at integration, import it from there and delete
+ * this copy.
  */
-export interface ImportStartInfo {
-  /** A git repository with at least one commit; else why not. */
-  ok: boolean;
-  reason?: string;
-  /** The absolute path: for the sample, the repository the service wrote. */
-  path: string;
-  sample?: true;
-  /** The commit the import would read: HEAD. */
-  commit: string;
-  branch?: string;
-  /** Counted at the commit: files, not tests (C7). */
-  size: RepoSize;
-  /** What the repository holds that the counts leave out: "a README", "a pyproject". */
-  holds: string[];
-  /** Each kind of product, proposed from the repository's files (a data table), with why. */
-  kinds: { domain: ProjectDomain; found: boolean; because: string }[];
-  devices: { device: Device; found: boolean; because: string }[];
-  /** How it runs (C1), each proposed with why. */
-  environment: EnvironmentFound;
-  testCommand?: { argv: string[]; because: string };
-  testReport?: { path: string; because: string };
-}
+export type ImportStartInfo =
+  | { ok: false; reason: string }
+  | {
+      ok: true;
+      /** The bundled sample, tally, made in the service's data folder: the simulated runtime imports only it. */
+      demo?: true;
+      path: string;
+      /** HEAD, which the import is pinned to (C11), and its branch (absent when HEAD is detached). */
+      commit: string;
+      branch?: string;
+      size: RepoSize;
+      estimate: ImportEstimate;
+      /** The kinds of product the repository shows, each with the file that shows it. */
+      domains: { domain: ProjectDomain; device?: Device; because: string }[];
+      /** How it runs (C1): the proposed image, the dev container, and the check commands the repository's files suggest. */
+      proposal?: EnvironmentFound["proposal"];
+      devcontainer?: EnvironmentFound["devcontainer"];
+      checks: CheckCommand[];
+      /** A test command that writes a JUnit report, and the report's path, when the repository shows one. */
+      testReport?: { command: CheckCommand; path: string; because: string };
+    };
+export type FoundRepository = Extract<ImportStartInfo, { ok: true }>;
 
-export const startInfoUrl = (q: { path: string } | { sample: "tally" }) => `/api/import/start?${"sample" in q ? `sample=${q.sample}` : `path=${encodeURIComponent(q.path)}`}`;
+/** Where the Start screen reads a repository: the demo's sample, or the path the owner gave. */
+export const startInfoRequest = (q: { path: string } | "demo"): { url: string; method: "GET" | "POST" } => (q === "demo" ? { url: "/api/import/demo", method: "POST" } : { url: `/api/import/start?path=${encodeURIComponent(q.path)}`, method: "GET" });
 
 /** "✓ Found" line: what the repository is, at which commit, and what the import leaves out (C7). */
-export function foundLine(info: ImportStartInfo): string {
-  const holds = info.holds.length ? `, ${info.holds.length === 1 ? info.holds[0] : `${info.holds.slice(0, -1).join(", ")} and ${info.holds.at(-1)}`}` : "";
-  return `a git repository${info.branch ? ` on ${info.branch}` : ""}: ${count(info.size.sourceFiles, "source file")}, ${count(info.size.testFiles, "test file")}${holds}. The import reads the last commit, ${shortCommit(info.commit)}${info.branch ? ` on ${info.branch}` : ""}. Changes you have not committed are left out.`;
+export function foundLine(info: FoundRepository): string {
+  return `a git repository${info.branch ? ` on ${info.branch}` : ""}: ${count(info.size.sourceFiles, "source file")} and ${count(info.size.testFiles, "test file")}. The import reads the last commit, ${shortCommit(info.commit)}${info.branch ? ` on ${info.branch}` : ""}. Changes you have not committed are left out.`;
 }
+
+/** Why the repository shows a kind of product or a device: the files that show it; undefined when none does. */
+export const foundBecause = (info: FoundRepository, match: (d: FoundRepository["domains"][number]) => boolean) => info.domains.filter(match).map((d) => d.because).join("; ") || undefined;
 
 /** The form on Start: the kinds, the devices, how it runs, the budget and the helpers. */
 export interface StartDraft {
@@ -94,15 +98,16 @@ export interface StartDraft {
 }
 
 /** The form as Start fills it from what the repository shows: each kind, device and how-it-runs value that was found. */
-export function startDraft(info: ImportStartInfo): StartDraft {
-  const dc = info.environment.devcontainer;
-  const p = info.environment.proposal;
+export function startDraft(info: FoundRepository): StartDraft {
+  const dc = info.devcontainer;
+  const p = info.proposal;
+  const test = info.testReport?.command ?? info.checks.find((c) => c.kind === "check");
   return {
     name: info.path.replace(/\/+$/, "").split("/").at(-1) ?? "",
-    domains: info.kinds.filter((k) => k.found).map((k) => k.domain),
-    devices: info.devices.filter((d) => d.found).map((d) => d.device),
+    domains: PROJECT_DOMAINS.filter((d) => info.domains.some((x) => x.domain === d)),
+    devices: DEVICES.filter((d) => info.domains.some((x) => x.device === d)),
     environment: dc?.sha256 && !dc.refused ? { devcontainer: { file: dc.file, sha256: dc.sha256 } } : p ? { image: p.image, prepare: p.prepare } : null,
-    testCommand: info.testCommand ? argvLine(info.testCommand.argv) : "",
+    testCommand: test ? argvLine(test.argv) : "",
     testReport: info.testReport?.path ?? "",
     budget: "3",
     helpers: false,

@@ -17,7 +17,7 @@ import { BaselineLockIn } from "./BaselineLockIn";
 import { ImportPanel } from "./ImportPanel";
 import { ImportReview } from "./ImportReview";
 import { TALLY_START_INFO } from "./importScene";
-import { UNANSWERED_TEXT, startBlocker, startDraft, type ImportStartInfo } from "./importView";
+import { UNANSWERED_TEXT, startBlocker, startDraft, type FoundRepository } from "./importView";
 import { StartForm } from "./StartImport";
 
 const svc = testService({ prototypePort: 5320 });
@@ -40,31 +40,35 @@ const KEEP_ALL = [
 ];
 
 describe("1 · Start (C1, C7)", () => {
-  const start = (info: ImportStartInfo) => text(<StartForm info={info} />, stage("started"));
+  const start = (info: FoundRepository) => text(<StartForm info={info} />, stage("started"));
 
   it("says what it found and which commit it reads, prefills the kinds and the devices with their reasons, and shows the estimate beside the budget", () => {
     const t = start(TALLY_START_INFO);
-    expect(t).toContain("✓ Found a git repository on main: 14 source files, 5 test files, a README and a pyproject. The import reads the last commit, c0ffee0 on main. Changes you have not committed are left out.");
-    expect(t).toContain("Screen product prefilled A CLI in a terminal: the console script tally in pyproject.toml.");
-    expect(t).toContain("Infrastructure Not found: no compose file, no IaC, no deploy scripts.");
-    expect(t).toContain("Terminal prefilled Demos of a command-line tool in a terminal. the console script tally.");
+    expect(t).toContain("✓ Found a git repository on main: 14 source files and 5 test files. The import reads the last commit, c0ffee0 on main. Changes you have not committed are left out.");
+    expect(t).toContain("Screen product prefilled Found: tally/__main__.py: a command-line entry.");
+    expect(t).toContain("Infrastructure Not found.");
+    expect(t).toContain("Terminal prefilled Demos of a command-line tool in a terminal. Found: tally/__main__.py: a command-line entry.");
+    expect(t).toContain("Desktop Screens at 1280 pixels wide. Not found.");
     expect(t).toContain("$0 the estimate $3.00, the budget The estimate: about $0.43–$2.07.");
     expect(t).toContain("No file in your repository changes, and the vision stays on this computer.");
     expect(t).not.toContain("Nothing is written into the repository");
-    expect(t).not.toContain("tests,");
   });
 
   it("how it runs is complete when the environment, the test command and its report are all prefilled", () => {
     expect(start(TALLY_START_INFO)).toContain("How it runs complete");
-    expect(startDraft(TALLY_START_INFO)).toMatchObject({ testCommand: "pytest --junitxml=reports/junit.xml", testReport: "reports/junit.xml", domains: ["screen", "code"], devices: ["terminal"], name: "tally" });
+    expect(startDraft(TALLY_START_INFO)).toMatchObject({ testCommand: "python3 -m pytest --junitxml=reports/junit.xml", testReport: "reports/junit.xml", domains: ["screen", "code"], devices: ["terminal"], name: "tally" });
   });
 
   it("says what is missing and what that means: no tests without a test command, no run at all without an environment", () => {
-    const { testCommand: _c, testReport: _r, ...noTests } = TALLY_START_INFO;
+    const { testReport: _r, ...noTests } = TALLY_START_INFO;
     const t = start(noTests);
     expect(t).toContain("How it runs missing the test command, the test report's path");
     expect(t).toContain("Without a test command and its report, the tests do not run: every rule is read from the code (inferred). The CLI and the screens are still recorded in the environment.");
-    const n = start({ ...TALLY_START_INFO, environment: { ref: "", reason: "The repository proposes no environment." } });
+    // A check command the repository suggests fills the test command; the report's path stays missing.
+    const suggested = start({ ...noTests, checks: [{ id: "unit", label: "Unit tests", kind: "check", argv: ["python3", "-m", "unittest"] }] });
+    expect(suggested).toContain("How it runs missing the test report's path");
+    const { proposal: _p, ...noEnv } = TALLY_START_INFO;
+    const n = start(noEnv);
     expect(n).toContain("How it runs missing the environment");
     expect(n).toContain("Without an environment, the import never runs your code: the tests do not run, nothing is recorded, and every rule is read from the code (inferred).");
   });

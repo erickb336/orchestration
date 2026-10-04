@@ -4,8 +4,8 @@
 // devices, how it runs and startImport, in that order. Words: importView.ts.
 
 import { useEffect, useState } from "react";
+import { CLIENT_HEADER } from "../../api";
 import * as M from "../../domain/model";
-import { importEstimate } from "../../domain/studio/import";
 import { fmtUsd } from "../../domain/spend";
 import { canAllowSubagents } from "../../domain/subagents";
 import { DEFAULT_CHECKS, MAX_SUBAGENT_CAP, type Device, type ProjectDomain } from "../../domain/types";
@@ -18,14 +18,15 @@ import { initProjectConfirm } from "../stageChoice";
 import { useStore } from "../store";
 import { DOMAIN_CHOICES, toggleDomain } from "../studio/studioView";
 import { SpendBar } from "./ImportPanel";
-import { argvLine, foundLine, howItRuns, startBlocker, startDraft, startInfoUrl, testCheck, type ImportStartInfo, type StartDraft } from "./importView";
+import { argvLine, foundBecause, foundLine, howItRuns, startBlocker, startDraft, startInfoRequest, testCheck, type FoundRepository, type ImportStartInfo, type StartDraft } from "./importView";
 import "./import.css";
 
 type Loaded = { status: "idle" } | { status: "loading" } | { status: "failed"; message: string } | { status: "ok"; info: ImportStartInfo };
 
-async function readRepository(q: { path: string } | { sample: "tally" }): Promise<Loaded> {
+async function readRepository(q: { path: string } | "demo"): Promise<Loaded> {
+  const { url, method } = startInfoRequest(q);
   try {
-    const res = await fetch(startInfoUrl(q), { headers: { Accept: "application/json" }, cache: "no-store" });
+    const res = await fetch(url, method === "POST" ? { method, headers: { Accept: "application/json", "Content-Type": "application/json", [CLIENT_HEADER]: "1" }, body: "{}" } : { headers: { Accept: "application/json" }, cache: "no-store" });
     if (!res.ok) return { status: "failed", message: `The service could not read it (${res.status}).` };
     return { status: "ok", info: (await res.json()) as ImportStartInfo };
   } catch {
@@ -38,7 +39,7 @@ export function StartImport({ sample, onCancel }: { sample: boolean; onCancel?: 
   const [path, setPath] = useState("");
   const [loaded, setLoaded] = useState<Loaded>({ status: sample ? "loading" : "idle" });
   useEffect(() => {
-    if (sample) void readRepository({ sample: "tally" }).then(setLoaded);
+    if (sample) void readRepository("demo").then(setLoaded);
   }, [sample]);
   const read = async () => {
     setLoaded({ status: "loading" });
@@ -66,13 +67,13 @@ export function StartImport({ sample, onCancel }: { sample: boolean; onCancel?: 
       )}
       {loaded.status === "loading" && sample && <p className="small muted">Reading the sample repository…</p>}
       {loaded.status === "failed" && <Banner tone="fail">{loaded.message}</Banner>}
-      {info && !info.ok && <Banner tone="fail" title="This is not a repository the import can read.">{info.reason}</Banner>}
+      {info && !info.ok && <Banner tone="fail" title="The import cannot read this repository.">{info.reason}</Banner>}
       {info?.ok && <StartForm key={`${info.path}@${info.commit}`} info={info} onCancel={onCancel} />}
     </div>
   );
 }
 
-export function StartForm({ info, onCancel }: { info: ImportStartInfo; onCancel?: () => void }) {
+export function StartForm({ info, onCancel }: { info: FoundRepository; onCancel?: () => void }) {
   const { state, send, disabled, setNotice } = useStore();
   const confirm = useConfirm();
   const [d, setD] = useState<StartDraft>(() => startDraft(info));
@@ -80,7 +81,7 @@ export function StartForm({ info, onCancel }: { info: ImportStartInfo; onCancel?
   const set = (p: Partial<StartDraft>) => setD((x) => ({ ...x, ...p }));
   const runs = howItRuns(d);
   const blocker = disabled ? "The service is offline." : startBlocker(d);
-  const estimate = importEstimate(info.size);
+  const estimate = info.estimate;
   const budget = Number(d.budget) > 0 ? Number(d.budget) : 0;
 
   const start = async () => {
@@ -109,7 +110,7 @@ export function StartForm({ info, onCancel }: { info: ImportStartInfo; onCancel?
       <div className="k-stack">
         <Card title="The repository" as="h3">
           <p className="small no-margin">
-            <b className="imp-ok">✓ Found</b> {foundLine(info)} {info.sample && <SimulatedChip title="The sample repository: tally is an invented command-line tool. No agent has run." />}
+            <b className="imp-ok">✓ Found</b> {foundLine(info)} {info.demo && <SimulatedChip title="The sample repository: tally is an invented command-line tool. No agent has run." />}
           </p>
           <p className="micro muted no-margin s-mono imp-wrap">{info.path}</p>
           <Field label="Project name">
@@ -121,16 +122,16 @@ export function StartForm({ info, onCancel }: { info: ImportStartInfo; onCancel?
           <fieldset className="s-choices">
             <legend className="sr-only">Kind of product</legend>
             {DOMAIN_CHOICES.map((c) => {
-              const p = info.kinds.find((k) => k.domain === c.value);
+              const because = foundBecause(info, (d) => d.domain === c.value);
               return (
                 <Checkbox
                   key={c.value}
                   label={
                     <>
-                      {c.label} {p?.found && <Chip>prefilled</Chip>}
+                      {c.label} {because && <Chip>prefilled</Chip>}
                     </>
                   }
-                  hint={p ? `${p.found ? "" : "Not found: "}${p.because}` : c.makes}
+                  hint={because ? `Found: ${because}. ${c.makes}` : `Not found. ${c.makes}`}
                   checked={d.domains.includes(c.value)}
                   onChange={() => set({ domains: toggleDomain(d.domains, c.value as ProjectDomain) })}
                 />
@@ -144,16 +145,16 @@ export function StartForm({ info, onCancel }: { info: ImportStartInfo; onCancel?
           <fieldset className="s-choices">
             <legend className="sr-only">Devices</legend>
             {DEVICE_CHOICES.map((c) => {
-              const p = info.devices.find((x) => x.device === c.value);
+              const because = foundBecause(info, (d) => d.device === c.value);
               return (
                 <Checkbox
                   key={c.value}
                   label={
                     <>
-                      {c.label} {p?.found && <Chip>prefilled</Chip>}
+                      {c.label} {because && <Chip>prefilled</Chip>}
                     </>
                   }
-                  hint={`${c.hint}${p ? ` ${p.found ? "" : "Not found: "}${p.because}` : ""}`}
+                  hint={`${c.hint} ${because ? `Found: ${because}.` : "Not found."}`}
                   checked={d.devices.includes(c.value)}
                   onChange={() => set({ devices: toggleDevice(d.devices, c.value as Device) })}
                 />
@@ -238,9 +239,10 @@ export function StartForm({ info, onCancel }: { info: ImportStartInfo; onCancel?
 }
 
 /** The environment, the test command and its report, each prefilled with why. */
-function HowItRunsFields({ info, d, set }: { info: ImportStartInfo; d: StartDraft; set: (p: Partial<StartDraft>) => void }) {
-  const dc = info.environment.devcontainer;
-  const p = info.environment.proposal;
+function HowItRunsFields({ info, d, set }: { info: FoundRepository; d: StartDraft; set: (p: Partial<StartDraft>) => void }) {
+  const dc = info.devcontainer;
+  const p = info.proposal;
+  const test = info.testReport?.command ?? info.checks.find((c) => c.kind === "check");
   const env = d.environment;
   return (
     <div className="k-stack k-stack--tight">
@@ -259,13 +261,13 @@ function HowItRunsFields({ info, d, set }: { info: ImportStartInfo; d: StartDraf
         ) : p ? (
           <Checkbox label={`Use the image ${p.label}`} hint={`${p.because} ${shortImage(p.image)}`} checked={!!env && "image" in env} onChange={(e) => set({ environment: e.target.checked ? { image: p.image, prepare: p.prepare } : null })} />
         ) : (
-          <p className="micro muted no-margin">{dc?.refused ?? info.environment.reason ?? "The repository proposes no environment. Set one in Settings › How your project runs after the start."}</p>
+          <p className="micro muted no-margin">{dc?.refused ?? "The repository proposes no environment. Set one in Settings › How your project runs after the start."}</p>
         )}
       </section>
-      <Field label="Test command" hint={info.testCommand ? `Prefilled. ${info.testCommand.because}` : "Not found. The command that runs your tests and writes a JUnit report."}>
-        <Input type="text" className="s-mono" value={d.testCommand} onChange={(e) => set({ testCommand: e.target.value })} placeholder={info.testCommand ? argvLine(info.testCommand.argv) : "pytest --junitxml=reports/junit.xml"} spellCheck={false} />
+      <Field label="Test command" hint={info.testReport ? `Prefilled. ${info.testReport.because} shows a test runner that writes a JUnit report.` : test ? "Prefilled from the repository's files. Make it write a JUnit report too." : "Not found. The command that runs your tests and writes a JUnit report."}>
+        <Input type="text" className="s-mono" value={d.testCommand} onChange={(e) => set({ testCommand: e.target.value })} placeholder={test ? argvLine(test.argv) : "pytest --junitxml=reports/junit.xml"} spellCheck={false} />
       </Field>
-      <Field label="JUnit report path" hint={info.testReport ? `Prefilled. ${info.testReport.because}` : "Not found. Where the test command writes its JUnit report, from the repository's root."}>
+      <Field label="JUnit report path" hint={info.testReport ? "Prefilled: where that test command writes its report." : "Not found. Where the test command writes its JUnit report, from the repository's root."}>
         <Input type="text" className="s-mono" value={d.testReport} onChange={(e) => set({ testReport: e.target.value })} placeholder="reports/junit.xml" spellCheck={false} />
       </Field>
     </div>
