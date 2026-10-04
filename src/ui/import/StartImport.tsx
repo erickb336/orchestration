@@ -71,7 +71,7 @@ export function StartImport({ sample, onCancel }: { sample: boolean; onCancel?: 
   );
 }
 
-function StartForm({ info, onCancel }: { info: ImportStartInfo; onCancel?: () => void }) {
+export function StartForm({ info, onCancel }: { info: ImportStartInfo; onCancel?: () => void }) {
   const { state, send, disabled, setNotice } = useStore();
   const confirm = useConfirm();
   const [d, setD] = useState<StartDraft>(() => startDraft(info));

@@ -81,12 +81,12 @@ export function importPlaces(s: State): { home?: PlaceState; vision?: PlaceState
     const open = importQuestions(s).filter((q) => answerEffect(s, { rule: q.rule.id }) === "open").length;
     return {
       home: home({ text: "1 needs you", short: "needs you", tone: "you", title: "The import's review waits for you in Vision." }),
-      vision: { text: open ? `round 0 · ${open} need you` : "round 0 · Lock in the baseline", short: "round 0", tone: "you", title: open ? `${count(open, "question")} of the import's review ${open === 1 ? "waits" : "wait"} for your answer.` : "Every question is answered. Lock in the baseline." },
+      vision: { text: open ? `round 0 · ${open} ${open === 1 ? "needs" : "need"} you` : "round 0 · Lock in the baseline", short: "round 0", tone: "you", title: open ? `${count(open, "question")} of the import's review ${open === 1 ? "waits" : "wait"} for your answer.` : "Every question is answered. Lock in the baseline." },
     };
   }
   const changes = changeRequests(s).length;
   return {
     home: home({ text: "nothing to build", short: "idle", tone: "neutral", title: "The baseline is in force and built. The factory starts when you change the design." }),
-    ...(changes ? { vision: { text: `${count(changes, "change")} to design`, short: `${changes} changes`, tone: "you" as const, title: `You asked for ${count(changes, "change")} in the import's review. Ask the lead for a round to design ${changes === 1 ? "it" : "them"}.` } } : {}),
+    ...(changes ? { vision: { text: `${count(changes, "change")} to design`, short: `${count(changes, "change")}`, tone: "you" as const, title: `You asked for ${count(changes, "change")} in the import's review. Ask the lead for a round to design ${changes === 1 ? "it" : "them"}.` } } : {}),
   };
 }
