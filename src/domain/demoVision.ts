@@ -175,7 +175,7 @@ const joinFlow = `# Join a trip by link
 > ${SAMPLE_BAND}
 
 \`\`\`mermaid
-flowchart LR
+flowchart TD
   open[Friend opens the link] --> valid{Link valid?}
   valid -- yes --> trip[Trip page with Join] --> join[Join] --> list[Added to who is coming]
   valid -- no --> expired[Ask the organiser for a new link]

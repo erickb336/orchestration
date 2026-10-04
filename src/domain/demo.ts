@@ -477,7 +477,9 @@ class DemoBuilder {
   private ownerAnswers(m: number, marks: { title: string; mark: Mark; pick?: string; note?: string }[], message: string, reply: string, studio?: Record<string, unknown>) {
     const entries: FeedbackInput[] = marks.map((x) => {
       const a = S.latestArtifacts(this.s).find((v) => v.title === x.title)!;
-      return { artifactId: a.id, version: a.version, mark: x.mark, ...(x.pick ? { pickedVariant: x.pick } : {}), pins: [], note: x.note ?? "" };
+      // Keep on a word list or a flow's rules keeps each row too, as "Keep the other rules" does in Vision.
+      const rows = x.mark === "keep" ? S.markableRows(a).map((row) => ({ row, mark: "keep" as const })) : [];
+      return { artifactId: a.id, version: a.version, mark: x.mark, ...(x.pick ? { pickedVariant: x.pick } : {}), pins: [], note: x.note ?? "", ...(rows.length ? { rows } : {}) };
     });
     this.owner("sendFeedback", { entries }, m);
     for (const [i, x] of marks.entries()) {
@@ -500,7 +502,6 @@ class DemoBuilder {
     this.studioExchange(4428, "Let's start with the experience: the map at the trailhead, the trip page and the packing list.", "I opened a round on the experience and asked the designer for the screens: the trail map, the trip page in two variants, the packing list and a group chat.", {
       openRound: { focus: "experience", summary: "The screens a group uses before and on a hike: the trail map, the trip page, the packing list." },
       designerRuns: [{ brief: "Design the trail map, the trip page (two variants: plan first, people first), the packing list and a group chat, for a phone at the trailhead.", kinds: ["screen"], variants: 2, devices: ["desktop", "mobile"] }],
-      questions: [{ question: "Should the group chat live in the app, or stay in the chat app people already use?", why: "The research note says the chat was fine until the day, and useless at the trailhead." }],
     });
     const [designer] = this.startStudioRuns(4426);
     this.designerHandsIn(designer, 4410, [{ title: "Trail map", version: 1 }, { title: "Trip page", version: 1 }, { title: "Packing list", version: 1 }, { title: "Group chat", version: 1 }], "4 screens: Trail map, Trip page (2 variants), Packing list, Group chat");
