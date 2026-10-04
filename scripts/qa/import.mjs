@@ -4,7 +4,9 @@
 // runtime: no agent runs, nothing leaves this computer, and the scheduler moves only when the journey steps it. The
 // demo starts as it does for a user: the sample's agents run (the scheduler dispatched them once).
 // Each screen that replaces another (Reading, Baseline) opens at its top, with focus on its heading (UX30-1); Start
-// opens in place of its button, with focus on its heading (UX30-2).
+// opens in place of its button, with focus on its heading (UX30-2). A heading that code focuses is as wide as its text
+// (UX35-1). A reload on Reading, Review or Baseline keeps the reader's place and moves no focus (QA36-2). When the
+// reading ends by itself, a message half typed in the lead drawer keeps focus and every keystroke (R33-1).
 // 1. Start: Settings › Project › "Try the import on a sample repository (tally)". The route makes the bundled tally in
 //    the service's data folder and reads it: its commit, its files, the kinds, and how it runs (the image from
 //    requirements.txt, its prepare, and the test command the README shows). Who reads it: Claude by default; Codex
@@ -53,13 +55,32 @@ const focused = (page) =>
   page.evaluate(() => {
     const el = document.activeElement;
     const r = el?.getBoundingClientRect();
-    return { tag: el?.tagName ?? "", text: (el?.textContent ?? "").trim().slice(0, 80), inView: !!r && r.top >= 0 && r.bottom <= window.innerHeight, scrollY: Math.round(window.scrollY) };
+    const range = document.createRange();
+    if (el) range.selectNodeContents(el);
+    // The width of the element and of its text: a focus ring as wide as the window looks like an empty field (UX35-1).
+    const widths = { width: Math.round(r?.width ?? 0), textWidth: Math.round(range.getBoundingClientRect().width) };
+    return { tag: el?.tagName ?? "", text: (el?.textContent ?? "").trim().slice(0, 80), inView: !!r && r.top >= 0 && r.bottom <= window.innerHeight, scrollY: Math.round(window.scrollY), ...widths };
   });
 /** A screen of the import that replaces another opens at its top, with focus on its heading (UX30-1). */
 const atTop = async (j, page, heading, where) => {
   await page.waitForTimeout(100);
   const f = await focused(page);
   j.check(f.tag === "H1" && f.text === heading && f.inView && f.scrollY === 0, `${where}: it opens at its top, with focus on its heading "${heading}" (UX30-1)`, JSON.stringify(f));
+  j.check(f.width > 0 && f.width <= f.textWidth + 2, `${where}: the focused heading is as wide as its text, not a full-width box (UX35-1)`, JSON.stringify(f));
+};
+/** A reload keeps the reader's place and moves no focus (QA36-2). `ready` waits for the screen after the reload. */
+const reloadKeeps = async (j, page, where, ready) => {
+  const y = await page.evaluate(() => {
+    window.scrollTo(0, Math.min(400, document.documentElement.scrollHeight - window.innerHeight));
+    return Math.round(window.scrollY);
+  });
+  const hBefore = await page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight);
+  await page.waitForTimeout(200);
+  await page.reload();
+  await ready();
+  await page.waitForTimeout(500);
+  const f = await focused(page);
+  j.check(y > 0 && Math.abs(f.scrollY - y) <= 2 && f.tag === "BODY", `${where}: a reload keeps the place (${y} px down) and moves no focus (QA36-2)`, JSON.stringify({ ...f, hBefore, hAfter: await page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight) }));
 };
 
 await runJourney(
@@ -156,6 +177,13 @@ await runJourney(
       j.check((nav.match(/importing/g) ?? []).length >= (width < 600 ? 0 : 2), "the header: Home and Vision say importing", nav);
       await j.shot("2-reading");
       await j.pageChecks("Reading");
+      await reloadKeeps(j, page, "Reading", () => page.getByText("4 of 5 steps done").waitFor({ timeout: 10_000 }));
+      // A message half typed in the lead drawer as the reading ends by itself (R33-1); step 3 types the rest.
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await page.getByRole("button", { name: "Message the lead" }).click();
+      const box = page.locator("aside[aria-label=Lead] textarea").first();
+      await box.click();
+      await page.keyboard.type("Half a sente");
     });
 
     await j.step("3 Review", async () => {
@@ -164,6 +192,17 @@ await runJourney(
       await page.getByText("2 conflicts and 3 guesses need you;").waitFor({ timeout: 10_000 });
       await page.locator(".imp-tile .imp-mini").first().waitFor({ timeout: 10_000 });
       await page.waitForTimeout(500);
+      {
+        // The review replaced the reading while the lead drawer had focus: focus and the keystrokes stay there (R33-1).
+        await page.keyboard.type("nce.");
+        const box = page.locator("aside[aria-label=Lead] textarea").first();
+        const f = await focused(page);
+        const draft = await box.inputValue();
+        j.check(f.tag === "TEXTAREA" && draft === "Half a sentence.", "Review: when the reading ends by itself, the lead drawer keeps focus and every keystroke (R33-1)", `${JSON.stringify(f)} | ${JSON.stringify(draft)}`);
+        await box.fill("");
+        await page.keyboard.press("Escape");
+        await page.locator("aside[aria-label=Lead]").waitFor({ state: "detached", timeout: 5_000 });
+      }
       const t = flat(await text(page));
       j.check(t.includes("Round 0 · As it is today") && !t.includes("Round 1"), "Review: round 0, As it is today (C9)");
       j.check(t.includes("12 rules are confirmed.") && t.includes("Recorded from the running CLI"), "Review: parts are listed as recorded or read from the code, not confirmed (C8)");
@@ -179,6 +218,7 @@ await runJourney(
       j.check(t.includes("The vision") && (await page.locator("#vision-text").isVisible()), "Review: Vision shows the vision text and the lead's draft (UX-6)");
       await j.shot("3-review");
       await j.pageChecks("Review");
+      await reloadKeeps(j, page, "Review", () => page.getByText("2 conflicts and 3 guesses need you;").waitFor({ timeout: 10_000 }));
 
       // A data folder before this one, on the same address, kept a first demo's unsent answers under the same import id
       // (sample data). This review starts empty and forgets them (UX26-1).
@@ -276,6 +316,7 @@ await runJourney(
       j.check(t.includes("Change tally add: The docs: a currency on each expense") && t.includes("Change The ledger: A negative amount should stop with an error.") && t.includes("Your 2 changes to design wait"), "Baseline: the changes to design stay out of the baseline (C5)");
       j.check(t.includes("Baseline tally add v1 (terminal demo; tests 5 of 5 pass; recorded)"), "Baseline: each part with its tests and its recording");
       j.check(t.includes("The vision: what tally is today") && t.includes("What the product is today, from the import at commit"), "Baseline: the vision card shows the lead's draft (C10)");
+      await reloadKeeps(j, page, "Baseline", () => page.getByRole("heading", { name: "What stays open" }).waitFor({ timeout: 10_000 }));
       const lockIn = page.getByRole("button", { name: "Lock in the baseline" });
       j.check((await lockIn.getAttribute("aria-disabled")) === "true" && t.includes("Tick the box first: your agreement is recorded with this summary."), "Baseline: Lock in waits for the agreement, and says why as text (UX-3)");
       const agree = page.getByRole("checkbox", { name: /I have reviewed the baseline/ });

@@ -85,6 +85,8 @@ small, .muted { color: var(--muted); }
 code, .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.85em; font-variant-numeric: tabular-nums; }
 .num, .count, time, table, .tabular { font-variant-numeric: tabular-nums; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+/* A heading that code focuses (focusHeading) is as wide as its text, so its ring does not look like a field (UX35-1). */
+:is(h1, h2, h3, h4)[tabindex="-1"] { width: fit-content; }
 
 button, select, input, textarea {
   font: inherit;

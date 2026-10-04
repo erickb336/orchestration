@@ -103,21 +103,71 @@ export function ProviderMark({ provider }: { provider: Runner | undefined }) {
 export const isSimulated = (x: unknown): boolean => !!(x as { simulated?: boolean } | undefined)?.simulated;
 
 /**
- * Put focus on a screen's heading as the screen opens (UX30-1): the reader starts at what the screen is. `top` scrolls
- * the page to its top first, for a screen that replaces another; without it, focus scrolls the heading into view, for a
- * panel that opens inside a page.
+ * False until the app's first page is on the screen. A screen that opens with that page came with the page load (a
+ * reload, an address typed in), not with a move between screens: it keeps the reader's place (QA36-2).
+ */
+let pageShown = false;
+const PLACE_KEY = "orchestration.place";
+
+/**
+ * The shell calls this, with `online` true once the live connection is open. The first effect runs after the effects
+ * of the first page's screens, so they see `false`. The browser cannot put a reload back at its place: the page shows
+ * only after the service answers, and the "Connecting" banner above it then goes away. So the page keeps its place
+ * itself, by address, for this tab, and goes back to it when the banner is gone.
+ */
+export function usePageShown(online: boolean) {
+  useEffect(() => {
+    pageShown = true;
+    const keep = () => {
+      try {
+        sessionStorage.setItem(PLACE_KEY, JSON.stringify({ hash: location.hash, y: Math.round(window.scrollY) }));
+      } catch {
+        // No storage (a private window, blocked site data): the page opens at its top.
+      }
+    };
+    window.addEventListener("pagehide", keep);
+    return () => window.removeEventListener("pagehide", keep);
+  }, []);
+  const placed = useRef(false);
+  useEffect(() => {
+    if (!online || placed.current) return;
+    placed.current = true;
+    try {
+      const place = JSON.parse(sessionStorage.getItem(PLACE_KEY) ?? "null") as { hash: string; y: number } | null;
+      if (place?.hash === location.hash) window.scrollTo(0, place.y);
+    } catch {
+      // No storage: the page stays where it is.
+    }
+  }, [online]);
+}
+
+/**
+ * Put focus on a heading as its screen or panel opens (UX30-1): the reader starts at what it is. Focus moves only from
+ * the page itself (the body, where focus falls when the control that caused the move goes away) or from inside the
+ * heading's `main`. A server update never takes focus from the lead drawer or a field (R33-1). `top` scrolls the page
+ * to its top first, for a screen that replaces another; without it, focus scrolls the heading into view, for a panel
+ * that opens inside a page.
  */
 export function focusHeading(heading: HTMLElement | null, top: boolean) {
   if (!heading) return;
+  const active = document.activeElement;
+  if (active && active !== document.body && !(heading.closest("main") ?? document.body).contains(active)) return;
   if (top) window.scrollTo(0, 0);
   heading.tabIndex = -1;
   heading.focus({ preventScroll: top });
 }
 
-/** A ref for a screen's heading: when the screen opens, the page goes to its top and focus goes to the heading. */
+/**
+ * A ref for a screen's heading. When a move between screens opens the screen, the page goes to its top and focus goes
+ * to the heading. When the screen opens with the page load, nothing moves.
+ */
 export function useScreenHeading<T extends HTMLElement = HTMLHeadingElement>() {
   const ref = useRef<T>(null);
-  useEffect(() => focusHeading(ref.current, true), []);
+  // Read at the first render, so that StrictMode's second run of the effect is not taken for a move.
+  const [moved] = useState(() => pageShown);
+  useEffect(() => {
+    if (moved) focusHeading(ref.current, true);
+  }, [moved]);
   return ref;
 }
 

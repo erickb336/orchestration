@@ -14,7 +14,7 @@ import { Overview } from "./Overview";
 import { Activity } from "./Activity";
 import { Review } from "./Review";
 import { Settings } from "./Settings";
-import { PREF_LEAD_SEEN, relTime, usePref } from "./common";
+import { PREF_LEAD_SEEN, relTime, usePageShown, usePref } from "./common";
 import { LeadDrawer, LeadDrawerContext, type LeadContext } from "./LeadDrawer";
 import { messageStatusText } from "./notes";
 import { useBrowserNotifications } from "./notifications";
@@ -110,11 +110,12 @@ function Gate() {
 
 function Shell() {
   const route = useRoute();
-  const { notice, setNotice, service } = useStore();
+  const { notice, setNotice, service, status } = useStore();
   // A task page belongs to Tasks.
   const tab = tabOf(route);
   const demo = service.runtime === "fake";
   useBrowserNotifications();
+  usePageShown(status === "online");
   // The first-run tour, demo only, once per browser.
   useFirstRunTour(demo, route.page === "overview");
 
