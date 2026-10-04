@@ -108,9 +108,12 @@ let arriving = false;
 /**
  * Open the screen at `hash` because the user asked for it (UX30-1): it opens at its top with focus on its heading.
  * Only the action knows that the user moved; a server update or a reload opens a screen without it (R33-1, QA36-2).
+ * An action can end long after its click (a start waits for the sample's agents): if you type in a field or the lead
+ * drawer outside the page by then, the screen opens without the move, and focus stays where you type (R43-1).
  */
 export function goTo(hash: string) {
-  arriving = true;
+  const el = document.activeElement;
+  arriving = !el || !!el.closest("main") || !(el.matches("input, textarea, select, [contenteditable]") || el.closest("aside, [role=dialog]"));
   location.hash = hash;
 }
 

@@ -261,7 +261,7 @@ function VisionDraftCard({ onAccept }: { onAccept: (a: { draftId: string; expect
             <Button size="small" disabled={disabled} onClick={() => onAccept({ draftId: draft.id, expectedRev: vision.rev })}>
               Accept the vision
             </Button>
-            <ButtonLink size="small" variant="quiet" href="#/vision">
+            <ButtonLink size="small" variant="quiet" href="#/vision" onClick={arrive}>
               Edit it in Vision
             </ButtonLink>
           </div>
