@@ -570,7 +570,12 @@ export function baselineFacts(s: State): { bold: string; rest: string }[] {
   else facts.push({ bold: `${count(verifiedN, "rule")} ${verifiedN === 1 ? "is" : "are"} verified:`, rest: ` ${verifiedN === 1 ? "its tests pass" : "their tests pass"}.` });
   if (failing) facts.push({ bold: `${count(failing, "rule")} ${failing === 1 ? "fails its test" : "fail their tests"}:`, rest: ` the part reads "fails a check".` });
   if (noTest.length) {
-    const split = [kept ? `${kept} you confirmed` : "", by("change") ? `${by("change")} you want changed` : "", by("open") ? `${by("open")} not answered` : ""].filter(Boolean);
+    // An open rule was a question you did not answer, or listed without a question (UX57-3).
+    const asked = new Set(unansweredQuestions(imp).map((q) => q.ruleId));
+    const open = noTest.filter((r) => itemAnswerEffect(imp, { rule: r.id }) === "open");
+    const unanswered = open.filter((r) => asked.has(r.id)).length;
+    const listed = open.length - unanswered;
+    const split = [kept ? `${kept} you confirmed` : "", by("change") ? `${by("change")} you want changed` : "", unanswered ? `${unanswered} not answered` : "", listed ? `${listed} listed, not asked` : ""].filter(Boolean);
     // With the tests not run, a rule may name a test that did not run: it has no result, not "no test" (QA3-F1).
     const none = imp.checks.status === "not-run" ? "no test result" : "no test";
     facts.push({ bold: `${count(noTest.length, "rule")} ${noTest.length === 1 ? "has" : "have"} ${none}:`, rest: ` ${split.join(", ")}. They go in as ${name} does them today.` });

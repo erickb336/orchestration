@@ -483,6 +483,8 @@ describe("5 · After (Design and reality, Home)", () => {
     expect(lockIn).not.toMatch(/have no test:|· no test\)/);
     expect(lockIn).toContain("The tests did not run: Docker is not available on this computer, so the tests did not run. Every rule is read from the code, and no part is recorded. 17 rules have no test result:");
     expect(lockIn).toContain("(R16 · was inferred · tests not run)");
+    // Only the questions asked can be not answered; the other rules were listed, not asked (UX57-3).
+    expect(lockIn).toContain("17 rules have no test result: 3 you confirmed, 1 you want changed, 1 not answered, 12 listed, not asked.");
   });
 
   it("an imported terminal demo says it was recorded in the project's container, not with VHS from the designer's tape (INT-F2)", () => {
