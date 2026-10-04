@@ -80,10 +80,10 @@ describe("the tour's seen-state", () => {
 const screenSources = Object.values(import.meta.glob<string>(["./**/*.tsx", "!./**/*.test.tsx"], { query: "?raw", import: "default", eager: true })).join("\n");
 
 describe("the tour's stops", () => {
-  it("are six or seven short stops in the order a first visitor needs, each one or two plain sentences", () => {
+  it("are at most nine short stops in the story's order (Vision, the start, then the factory), each one or two plain sentences", () => {
     expect(TOUR_STOPS.length).toBeGreaterThanOrEqual(6);
-    expect(TOUR_STOPS.length).toBeLessThanOrEqual(7);
-    expect(TOUR_STOPS.map((s) => s.title)).toEqual(["This is a demo", "Needs you", "The factory", "Message the lead", "A task's steps", "Results", "How involved you are"]);
+    expect(TOUR_STOPS.length).toBeLessThanOrEqual(9);
+    expect(TOUR_STOPS.map((s) => s.title)).toEqual(["This is a demo", "Vision", "The start you agreed to", "Needs you", "The factory", "Message the lead", "A task's steps", "Results", "How involved you are"]);
     // It opens on the demo bar: the visitor learns first that everything is simulated.
     expect(TOUR_STOPS[0]).toMatchObject({ element: '[data-tour="demo-bar"]', page: "#/overview" });
     expect(TOUR_STOPS[0].text).toMatch(/simulated/);
@@ -109,7 +109,7 @@ describe("the tour's stops", () => {
       if (id) expect(screenSources.includes(`id="${id}"`), id).toBe(true);
       if (s.page) expect(s.page.startsWith("#/"), s.page).toBe(true);
     }
-    expect(TOUR_STOPS.map((s) => s.page && parseRoute(s.page))).toEqual([{ page: "overview" }, { page: "overview" }, { page: "overview" }, undefined, { page: "task", id: TOUR_TASK_ID }, { page: "review" }, { page: "settings" }]);
+    expect(TOUR_STOPS.map((s) => s.page && parseRoute(s.page))).toEqual([{ page: "overview" }, { page: "vision" }, { page: "preflight" }, { page: "overview" }, { page: "overview" }, undefined, { page: "task", id: TOUR_TASK_ID }, { page: "review" }, { page: "settings" }]);
   });
 
   it("opens a stop's page only when it is not shown already", () => {

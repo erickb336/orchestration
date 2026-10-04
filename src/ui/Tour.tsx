@@ -121,7 +121,7 @@ export function TourButton({ onStart }: { onStart?: () => void }) {
     window.setTimeout(() => startTour(focusSimMenu), onHome ? 0 : 120);
   }, [onStart]);
   return (
-    <Button size="small" variant="quiet" onClick={start} title="A short tour of the demo: what needs you, progress, the lead, a task's steps, Results and how involved you are">
+    <Button size="small" variant="quiet" onClick={start} title="A short tour of the demo: Vision, the start you agreed to, what needs you, the factory, the lead, a task's steps, Results and how involved you are">
       Tour
     </Button>
   );

@@ -78,7 +78,11 @@ describe("the lead conversation", () => {
     expect(words).toMatch(/\bDelivered\b/);
     expect(words).not.toContain("Delivered when the run started");
     expect(words).toContain("sent; no Undo: a sent note cannot be unsent");
-    expect(count(markup, ">Undo</button>")).toBe(2); // the deferral's and the focus's rows; never the note's
+    // The steering reply's own rows: the deferral's and the focus's Undo, never the note's.
+    const steering = s.conversation.find((m) => m.changeSetId && s.steering.find((x) => x.id === m.changeSetId)?.changes.some((c) => c.kind === "note"))!;
+    const at = markup.indexOf(`id="msg-${steering.id}"`);
+    const next = markup.indexOf('id="msg-', at + 1);
+    expect(count(markup.slice(at, next < 0 ? undefined : next), ">Undo</button>")).toBe(2);
   });
 
   it("a change order's rows under a reply whose steering was refused read as applied, never as 'none were applied' (review finding 10)", () => {

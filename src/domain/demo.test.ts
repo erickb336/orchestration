@@ -458,8 +458,8 @@ describe("the demo state", () => {
     expect(search.integration?.pr?.changeAuthors).toEqual(["codex"]);
 
     // The review-later list: unreviewed first, newest first. The two tasks without code (WT-012, WT-013) are not in it.
-    expect(D.landedTasks(s).map((t) => `${t.id}:${t.integration!.landed!.status}`)).toEqual(["WT-015:unreviewed", "WT-011:unreviewed", "WT-001:unreviewed", "WT-014:reviewed", "WT-004.1:reviewed", "WT-008:reviewed"]);
-    expect(D.unreviewedCount(s)).toBe(3);
+    expect(D.landedTasks(s).map((t) => `${t.id}:${t.integration!.landed!.status}`)).toEqual(["WT-011:unreviewed", "WT-001:unreviewed", "WT-015:reviewed", "WT-014:reviewed", "WT-004.1:reviewed", "WT-008:reviewed"]);
+    expect(D.unreviewedCount(s)).toBe(2);
   });
 
   it("runs all six flows, and every finished code task has a finished security review beside each code review", () => {

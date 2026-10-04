@@ -159,7 +159,7 @@ describe("the badges and the lead's latest reply", () => {
     expect(latest.message.id).toBe([...s.conversation].reverse().find((m) => m.author === "lead")!.id);
     expect(latest.summary).toBe("No changes");
     // The steering reply: a focus change, a deferral and a note were applied.
-    const steeringAt = s.conversation.findIndex((m) => m.author === "lead" && m.changeSetId);
+    const steeringAt = s.conversation.findIndex((m) => m.author === "lead" && m.changeSetId && s.steering.find((x) => x.id === m.changeSetId)?.changes.some((c) => c.kind === "focus"));
     expect(steeringAt).toBeGreaterThanOrEqual(0);
     const earlier = structuredClone(s);
     earlier.conversation = earlier.conversation.slice(0, steeringAt + 1);

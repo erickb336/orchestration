@@ -1486,6 +1486,8 @@ class DemoBuilder {
     );
     this.openPr(id, 1905, 1004);
     this.mergePr(id, 1850, 1849, ["findings-accepted"]); // the landing records that a finding was accepted
+    // You looked at it and kept the lead's call until WT-006; the difference stays open on Design and reality.
+    this.s = D.markLandedReviewed(this.s, [id], true, this.at(1800));
   }
 
   /**
@@ -1534,7 +1536,7 @@ class DemoBuilder {
     };
     this.s = M.completeLeadRun(r.state, r.runId, { reply: "I planned one task for the join flow. Undo it on the change order if you would rather wait.", proposals: [], changeOrder: block }, this.at(1467), { simulated: true });
     const answered = this.s.blueprint.changeOrders.find((x) => x.rev === co.rev)!;
-    if (!answered.lines?.length) throw new Error(`demo: the lead's answer to change order ${co.rev} made no line (${JSON.stringify(this.s.leadRuns.find((x) => x.id === r.runId)?.notes ?? [])})`);
+    if (!answered.lines?.length) throw new Error(`demo: the lead's answer to change order ${co.rev} made no line (${JSON.stringify(this.s.leadRuns.find((x) => x.id === r.runId)?.note ?? "")})`);
   }
 
   /** WT-007: designed and implemented; the UX review asks you about units; the code review is next (it starts when the service does). */

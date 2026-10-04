@@ -19,14 +19,19 @@ export interface TourStop {
 /** The running task whose steps the tour opens. */
 export const TOUR_TASK_ID = "WT-002";
 
-/** Seven stops over the screens a first visitor needs: Home, the lead, a task page, Results and Settings. */
+/**
+ * Nine stops in the story's order: the demo, Vision (where you design the product), the pre-flight's record (the
+ * start you agreed to), then the factory floor on Home, the lead, a task page, Results and Settings.
+ */
 export const TOUR_STOPS: TourStop[] = [
   { element: '[data-tour="demo-bar"]', page: "#/overview", title: "This is a demo", text: "A sample project, and everything in it is simulated: no agents run, and nothing leaves this computer." },
+  { element: '[data-tour="vision-rounds"]', page: "#/vision", title: "Vision", text: "You design the product here with the lead, one round at a time. A designer makes the parts, the PE checks that each can be built and what it costs, and you keep, change or drop each part." },
+  { element: '[data-tour="start-record"]', page: "#/vision/pre-flight", title: "The start you agreed to", text: "Start the factory put what you kept into force, and recorded your agreement: the parts, the budgets and how the factory runs. Later changes go through Lock in." },
   { element: '[data-tour="needs-you"]', page: "#/overview", title: "Needs you", text: "Only the decisions that need you, answered right here: choose an approach, decide a finding, merge a pull request." },
-  { element: '[data-tour="progress"]', page: "#/overview", title: "The factory", text: "One line per area: each task at its step, from building to landed. Above it, the budgets." },
+  { element: '[data-tour="progress"]', page: "#/overview", title: "The factory", text: "One line per area: each task at its step, from building to landed. Above it, the budgets and the PE's estimate." },
   { element: '[data-tour="lead"]', align: "end", title: "Message the lead", text: "Your main channel, from any page: ask what is running, change the focus, or have it pass a note to a running coder. Every change it makes has an Undo." },
   { element: '[data-tour="steps"]', page: `#/task/${TOUR_TASK_ID}`, title: "A task's steps", text: "A task runs as steps in plain words, each a fresh agent given only the inputs and principles it needs. From here you can pause the task or send a note to the running step." },
-  { element: '[data-tour="tab-results"]', page: "#/results", title: "Results", text: "What landed waits here for you to look at, at your own pace. Merge a ready pull request, mark a result as seen, or send it back." },
+  { element: '[data-tour="tab-results"]', page: "#/results", title: "Results", text: "What landed waits here for you to look at. Design and reality shows each part of the design beside what was built, and whether the checks prove it." },
   { element: "#involvement", page: "#/settings/working-style/involvement", title: "How involved you are", text: "Choose how much the lead does on its own: Autopilot, Check-in or Manual. Replay this tour from the Simulation menu." },
 ];
 

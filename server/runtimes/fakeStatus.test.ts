@@ -76,13 +76,14 @@ describe("the demo lead answers from the board (ORC-025 L3)", () => {
     const { start } = await demoService();
     const { state: s, nowMs } = start;
     const answer = (text: string, from?: string) => statusAnswer(s, statusQuestion(s, text, from)!, nowMs);
-    // The same three things Home's Needs-you card lists, in its order (by priority).
-    expect(needsYouItems(s, nowMs).map((e) => `${e.kind} ${e.task?.id}`)).toEqual(["choose WT-004.3", "finding WT-007", "merge WT-005"]);
+    // The same four things Home's Needs-you card lists, in its order (by priority): T-019 is the change order's new task.
+    expect(needsYouItems(s, nowMs).map((e) => `${e.kind} ${e.task?.id}`)).toEqual(["choose WT-004.3", "finding WT-007", "choose T-019", "merge WT-005"]);
     expect(answer("what needs me?")).toBe(
       [
-        "3 things need you:",
+        "4 things need you:",
         "- Choose an option for “Join a trip without an account” (A, Guest link · B, One-time code) (WT-004.3)",
         "- Decide a finding on “Make the trail map readable with VoiceOver”: Read distances in miles or kilometres? (WT-007)",
+        "- Choose an option for “Join a trip by link” (A, As the flow says · B, Defer) (T-019)",
         "- Merge the pull request for “Suggest a packing list from trail length and weather” (WT-005)",
         "Each is on Home under Needs you.",
       ].join("\n"),
@@ -90,15 +91,15 @@ describe("the demo lead answers from the board (ORC-025 L3)", () => {
     expect(answer("What's going on?")).toMatch(
       new RegExp(
         "^3 agents are working: Codex is implementing “Show a clear offline state on the map”, Claude is reviewing “Make the trail map readable with VoiceOver” and Claude is implementing “See who is coming”\\. " +
-          "3 things need you: choose an option for “Join a trip without an account” \\(A, Guest link · B, One-time code\\); decide a finding on “Make the trail map readable with VoiceOver”: Read distances in miles or kilometres\\?; merge the pull request for “Suggest a packing list from trail length and weather”\\. " +
-          "Last landed: “Faster trail search”, \\d+[hd] ago\\.$",
+          "4 things need you: choose an option for “Join a trip without an account” \\(A, Guest link · B, One-time code\\); decide a finding on “Make the trail map readable with VoiceOver”: Read distances in miles or kilometres\\?; choose an option for “Join a trip by link” \\(A, As the flow says · B, Defer\\), and 1 more on Home\\. " +
+          "Last landed: “Build the packing list screen”, \\d+[hd] ago\\.$",
       ),
     );
     expect(answer("how is offline maps going?")).toBe("Offline maps: 1 of 3 tasks done, 1 in progress, 1 not started. Codex is implementing “Show a clear offline state on the map”.");
     expect(answer("what is WT-002 doing?")).toBe("“Show a clear offline state on the map” (WT-002): Running. Codex is implementing it.");
     expect(answer("Thanks. Keep the VoiceOver work going, though.")).toBe("“Make the trail map readable with VoiceOver” (WT-007): In review. Claude is reviewing it. It needs you: decide a finding: Read distances in miles or kilometres?");
     expect(answer("How is this going?", "WT-004")).toBe("“Share a trip plan with friends” (WT-004): Waiting for 2 child tasks. Claude is implementing “See who is coming”. 1 of 3 parts done. It needs you: choose an option for “Join a trip without an account” (A, Guest link · B, One-time code).");
-    expect(answer("What landed recently?")).toMatch(/^Landed most recently: “Faster trail search” \(\d+[hd] ago\), “Invite friends with a link” \(\d+[hd] ago\) and “Larger tap targets on the trip page” \(\d+[hd] ago\)\. 2 results are new for you in Results\. “Suggest a packing list from trail length and weather” waits for you to merge its pull request\.$/);
+    expect(answer("What landed recently?")).toMatch(/^Landed most recently: “Build the packing list screen” \(\d+[hd] ago\), “Build the trip page” \(\d+[hd] ago\) and “Faster trail search” \(\d+[hd] ago\)\. 2 results are new for you in Results\. “Suggest a packing list from trail length and weather” waits for you to merge its pull request\.$/);
   }, 20_000); // many scheduler cycles: more than vitest's default under a full-suite load
 
   it("in the running service, 'what needs me?' is answered from the board the lead read, labelled simulated, with nothing changed", async () => {
@@ -106,13 +107,13 @@ describe("the demo lead answers from the board (ORC-025 L3)", () => {
     const { reply, state, seen, nowMs } = await demo.ask("what needs me?");
     expect(seen).toBeDefined();
     expect(reply.text).toBe(statusAnswer(seen!, { kind: "needs-you" }, nowMs));
-    expect(reply.text).toMatch(/^3 things need you:\n- /);
+    expect(reply.text).toMatch(/^4 things need you:\n- /);
     for (const e of needsYouItems(seen!, nowMs)) expect(reply.text).toContain(`(${e.task!.id})`);
     expect(reply.text).not.toMatch(/live mode/i);
     expect(reply.changeSetId).toBeUndefined();
     // The reply came from the fake runtime: its run is simulated, and nothing was steered.
     expect(state.leadRuns.find((r) => r.id === reply.leadRunId)).toMatchObject({ outcome: "completed" });
-    expect(state.steering).toHaveLength(1);
+    expect(state.steering).toHaveLength(2); // the demo's own two change sets: nothing was added
   }, 20_000);
 
   it("keeps the simulated steering: a note to a coder is passed on, named in the user's words, and listed under the reply", async () => {
