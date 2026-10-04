@@ -3,6 +3,8 @@
 // It drives the real service, its routes and its scheduler, on a fresh demo service for each width, with the fake
 // runtime: no agent runs, nothing leaves this computer, and the scheduler moves only when the journey steps it. The
 // demo starts as it does for a user: the sample's agents run (the scheduler dispatched them once).
+// Each screen that replaces another (Reading, Baseline) opens at its top, with focus on its heading (UX30-1); Start
+// opens in place of its button, with focus on its heading (UX30-2).
 // 1. Start: Settings › Project › "Try the import on a sample repository (tally)". The route makes the bundled tally in
 //    the service's data folder and reads it: its commit, its files, the kinds, and how it runs (the image from
 //    requirements.txt, its prepare, and the test command the README shows). Who reads it: Claude by default; Codex
@@ -46,6 +48,20 @@ const onScreen = (locator) => locator.evaluate((el) => {
   return r.top >= 0 && r.bottom <= window.innerHeight;
 });
 
+/** Where focus is, its text, whether it is inside the window, and how far the page is scrolled. */
+const focused = (page) =>
+  page.evaluate(() => {
+    const el = document.activeElement;
+    const r = el?.getBoundingClientRect();
+    return { tag: el?.tagName ?? "", text: (el?.textContent ?? "").trim().slice(0, 80), inView: !!r && r.top >= 0 && r.bottom <= window.innerHeight, scrollY: Math.round(window.scrollY) };
+  });
+/** A screen of the import that replaces another opens at its top, with focus on its heading (UX30-1). */
+const atTop = async (j, page, heading, where) => {
+  await page.waitForTimeout(100);
+  const f = await focused(page);
+  j.check(f.tag === "H1" && f.text === heading && f.inView && f.scrollY === 0, `${where}: it opens at its top, with focus on its heading "${heading}" (UX30-1)`, JSON.stringify(f));
+};
+
 await runJourney(
   "import",
   () => buildDemo(Date.now()),
@@ -62,7 +78,12 @@ await runJourney(
       await page.goto(`${service.origin}/#/settings/project/new-project`);
       const tryIt = page.getByRole("button", { name: "Try the import on a sample repository (tally)" });
       await tryIt.waitFor({ timeout: 10_000 });
-      await tryIt.click();
+      await tryIt.focus();
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(100);
+      // Start opens in place of the button: focus goes to its heading, not to the page (UX30-2).
+      const opened = await focused(page);
+      j.check(opened.tag === "H3" && opened.text === "Import an existing repository" && opened.inView, "Start: after Enter on the button, focus is on the heading of Start (UX30-2)", JSON.stringify(opened));
       await page.getByText("✓ Found").waitFor({ timeout: 10_000 });
       await page.waitForTimeout(300);
       commit = headOf(tally);
@@ -121,6 +142,8 @@ await runJourney(
     await j.step("2 Reading", async () => {
       await page.waitForURL(/#\/vision$/, { timeout: 10_000 });
       await page.getByText("Importing").first().waitFor({ timeout: 10_000 });
+      // Start project is at the foot of Settings; the reading opens at its top all the same.
+      await atTop(j, page, "Vision", "Reading");
       // The scheduler runs the tests (simulated), the rules reader and the words, then the parts; the recording is next.
       await stepUntil(service, "the parts are in", (s) => I.importRuns(s, "parts").some((r) => r.status === "completed") && !s.studio.import.capture);
       await page.getByText("4 of 5 steps done").waitFor({ timeout: 10_000 });
@@ -176,6 +199,7 @@ await runJourney(
       await send.click();
       await page.waitForURL(/#\/vision\/baseline$/, { timeout: 10_000 });
       await page.getByRole("heading", { name: "What stays open" }).waitFor({ timeout: 10_000 });
+      await atTop(j, page, "Lock in 1 · the baseline", "Baseline, after a send with no answer");
       const open = flat(await page.locator("section[aria-labelledby=imp-b-open]").innerText());
       const rows = open.match(/[A-Z][^:]*: not answered/g) ?? [];
       j.check(service.state().studio.import.sentAt && service.state().studio.import.answers.length === 0 && rows.length === 5 && new Set(rows).size === 5 && open.includes("Where the ledger lives: not answered"), "Baseline: after a send with no answer, What stays open lists the 5 questions once each, by title (UX-3, UX-7)", rows.join(" | "));
@@ -244,6 +268,8 @@ await runJourney(
     await j.step("4 Baseline", async () => {
       await page.waitForURL(/#\/vision\/baseline$/, { timeout: 10_000 });
       await page.getByRole("heading", { name: "Lock in 1 · the baseline" }).waitFor({ timeout: 10_000 });
+      // Send to the lead is at the foot of the review; the baseline opens at its top all the same.
+      await atTop(j, page, "Lock in 1 · the baseline", "Baseline");
       await page.waitForTimeout(300);
       const t = flat(await text(page));
       j.check(t.includes("13 rules are verified: their tests pass.") && t.includes("4 rules have no test: 2 you confirmed, 1 you want changed, 1 not answered."), "Baseline: the facts follow the answers");

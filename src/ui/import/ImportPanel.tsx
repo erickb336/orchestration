@@ -6,6 +6,7 @@ import { useState } from "react";
 import { fmtUsd } from "../../domain/spend";
 import { importParts } from "../../domain/studio/import";
 import { Banner, Button, Card, Field, Input, SimulatedChip, StatePill, StepList } from "../kit";
+import { useScreenHeading } from "../common";
 import { useStore } from "../store";
 import { kindWord } from "../studio/studioView";
 import { heldLine, importHalt, importPill, productName, readingCards, readingSteps, roundZeroLine, spendWords } from "./importView";
@@ -39,10 +40,13 @@ export function ImportPanel() {
   const words = importParts(state).find((a) => a.kind === "dictionary");
   const parts = importParts(state).filter((a) => a.kind !== "dictionary");
   const example = reading?.rules.find((r) => r.tests.length) ?? reading?.rules[0];
+  const heading = useScreenHeading();
   return (
     <div className="k-stack imp-page">
       <header className="st-head">
-        <h1 className="no-margin">Vision</h1>
+        <h1 ref={heading} className="no-margin">
+          Vision
+        </h1>
         <p className="small muted no-margin">
           Importing <b>{name}</b> {simulated && <SimulatedChip />} at commit {imp.commit.slice(0, 7)}
           {imp.branch ? ` on ${imp.branch}` : ""}. The readers only read the repository. No file in it changes.

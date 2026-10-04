@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as M from "../domain/model";
 import { PROVIDERS, type Autonomy, type ModelSelection, type RoleId, type Runner, type State, type Task } from "../domain/types";
 
@@ -101,6 +101,25 @@ export function ProviderMark({ provider }: { provider: Runner | undefined }) {
 
 /** The fake runtime's lead records `simulated: true` on the vision revisions and steering change sets it writes. */
 export const isSimulated = (x: unknown): boolean => !!(x as { simulated?: boolean } | undefined)?.simulated;
+
+/**
+ * Put focus on a screen's heading as the screen opens (UX30-1): the reader starts at what the screen is. `top` scrolls
+ * the page to its top first, for a screen that replaces another; without it, focus scrolls the heading into view, for a
+ * panel that opens inside a page.
+ */
+export function focusHeading(heading: HTMLElement | null, top: boolean) {
+  if (!heading) return;
+  if (top) window.scrollTo(0, 0);
+  heading.tabIndex = -1;
+  heading.focus({ preventScroll: top });
+}
+
+/** A ref for a screen's heading: when the screen opens, the page goes to its top and focus goes to the heading. */
+export function useScreenHeading<T extends HTMLElement = HTMLHeadingElement>() {
+  const ref = useRef<T>(null);
+  useEffect(() => focusHeading(ref.current, true), []);
+  return ref;
+}
 
 /** True below `query` (phones by default); follows the viewport. */
 export function useNarrow(query = "(max-width: 767px)") {

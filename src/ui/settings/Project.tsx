@@ -3,7 +3,7 @@
 // runs have sections of their own (BudgetsSection.tsx, Runs.tsx). In real mode, Start a new project is its own form with its
 // own button.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import * as M from "../../domain/model";
 import type { Device, ProjectDomain } from "../../domain/types";
 import { Button, Checkbox, Disclosure, Field, Input, SegmentedControl, Textarea, useConfirm } from "../kit";
@@ -12,6 +12,7 @@ import { DeliveryCard, deliveryErrors, deliverySteps, liveDelivery, type Deliver
 import { confirmNewProject } from "../settingsText";
 import { DOMAIN_CHOICES, toggleDomain } from "../studio/studioView";
 import { initProjectConfirm } from "../stageChoice";
+import { focusHeading } from "../common";
 import { useStore } from "../store";
 import { devicesProblem, devicesSteps } from "./budgets";
 import { DevicesCard } from "./DevicesCard";
@@ -119,6 +120,10 @@ export function ProjectSection({ current, onDirty }: { current: boolean; onDirty
  */
 function TryImportCard() {
   const [open, setOpen] = useState(false);
+  // Start opens in place of the button: focus goes to the card's heading (the kit's Card names it `<id>-title`), UX30-2.
+  useEffect(() => {
+    if (open) focusHeading(document.getElementById("new-project-title"), false);
+  }, [open]);
   return (
     <SettingsCard id="new-project" title="Import an existing repository" help="In the demo, the import reads tally, an invented command-line tool, and every run is simulated. It replaces the sample project.">
       <StartWaits />

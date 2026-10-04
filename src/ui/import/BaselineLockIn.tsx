@@ -10,6 +10,7 @@ import { summaryDigest, type SummarySeen } from "../../domain/studio/blueprint";
 import { baselineBlocker, baselineSummary, importStatus, ruleTitle } from "../../domain/studio/import";
 import { fmtUsd, importSpend } from "../../domain/spend";
 import { Banner, Button, ButtonLink, Card, Checkbox, Chip, EmptyState, SimulatedChip } from "../kit";
+import { useScreenHeading } from "../common";
 import { useStore } from "../store";
 import { ImportBudgetStop } from "./ImportPanel";
 import { baselineFacts, baselineRows, changeLine, keptRules, openChanges, openQuestions, productName, summaryChanged } from "./importView";
@@ -32,6 +33,7 @@ export function BaselineLockIn() {
   const [done, setDone] = useState(false);
   /** You pressed Accept the vision here: the next change of the summary is yours. */
   const own = useRef(false);
+  const heading = useScreenHeading();
   // The summary changed: show the new one, and clear the agreement, with why (summaryChanged).
   useEffect(() => {
     if (!now || busy || done) return;
@@ -48,7 +50,9 @@ export function BaselineLockIn() {
       <p className="small muted no-margin">
         <a href="#/vision">Vision</a> › Lock in
       </p>
-      <h1 className="no-margin">{title}</h1>
+      <h1 ref={heading} className="no-margin">
+        {title}
+      </h1>
     </header>
   );
   if (done || status === "locked-in")

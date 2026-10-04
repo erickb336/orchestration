@@ -9,6 +9,7 @@ import { importParts, importQuestions, ruleConfidence, ruleTitle } from "../../d
 import type { ImportRule, StudioArtifact } from "../../domain/studio/types";
 import { Banner, Button, ButtonLink, Card, Chip, Disclosure, Field, Meter, SimulatedChip, Textarea } from "../kit";
 import { cx } from "../kit/cx";
+import { useScreenHeading } from "../common";
 import { useStore } from "../store";
 import { TerminalWindow, useServiceText } from "../studio/Frames";
 import { documentFiles, documentType, kindWord, roundLead, serviceFileUrl, showKind, variantDemo } from "../studio/studioView";
@@ -137,10 +138,13 @@ export function ImportReview() {
 
   const conflicts = qs.filter((q) => q.kind === "conflict");
   const guesses = qs.filter((q) => q.kind === "guess");
+  const heading = useScreenHeading();
   return (
     <div className="k-stack imp-page">
       <header className="st-head">
-        <h1 className="no-margin">Vision</h1>
+        <h1 ref={heading} className="no-margin">
+          Vision
+        </h1>
         <p className="small muted no-margin">
           Round 0 · <b>As it is today</b> · from the import of {name} at commit {imp.commit.slice(0, 7)} {simulated && <SimulatedChip />}
         </p>
