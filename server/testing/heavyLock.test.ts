@@ -11,7 +11,10 @@ import { takeHeavyLock } from "./heavyLock";
 const root = mkdtempSync(join(tmpdir(), "orc-heavylock-"));
 const lock = () => join(root, `lock-${Math.random().toString(36).slice(2)}`);
 const quiet = { log: () => {}, pollMs: 50 };
-afterEach(() => rmSync(root, { recursive: true, force: true }) || mkdirSync(root, { recursive: true }));
+afterEach(() => {
+  rmSync(root, { recursive: true, force: true });
+  mkdirSync(root, { recursive: true });
+});
 
 describe("the heavy tests' lock", () => {
   it("is taken when free, holds this process's id, and goes at release", async () => {
