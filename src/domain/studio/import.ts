@@ -139,6 +139,12 @@ export interface ImportStart {
   readsOn?: ProviderId;
 }
 
+/** Where the import reads: its commit, and its branch when the Start screen showed one. */
+const importWhere = (imp: ProjectImport): string => `commit ${short(imp.commit)}${imp.branch ? ` on ${imp.branch}` : ""}`;
+
+/** Round 0's summary: "As it is today" while the import reads, "The baseline" once the Lock in put it into force. */
+const roundZeroSummary = (imp: ProjectImport): string => `${imp.lockedInAt ? "The baseline" : "As it is today"}: what the repository does at ${importWhere(imp)}.`;
+
 const COMMIT_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 /**
@@ -174,8 +180,8 @@ export function startImport(state: State, input: ImportStart, now: string): Stat
     answers: [],
   };
   s.studio.import = imp;
-  const where = `commit ${short(imp.commit)}${branch ? ` on ${branch}` : ""}`;
-  s.studio.rounds.push({ n: 0, focus: "material", openedAt: now, summary: `As it is today: what the repository does at ${where}.` });
+  const where = importWhere(imp);
+  s.studio.rounds.push({ n: 0, focus: "material", openedAt: now, summary: roundZeroSummary(imp) });
   event(s, now, "user", "vision", `Import started: ${where}, with a budget of ${fmtUsd(imp.budgetUsd)} (the estimate: ${fmtUsd(imp.estimate.usd[0])}–${fmtUsd(imp.estimate.usd[1])}); round 0, As it is today, opened`);
   return s;
 }
@@ -721,7 +727,10 @@ export function lockInBaseline(state: State, seen: SummarySeen, now: string): St
   rev.lockIn!.baseline = { importId: imp.id, commit: imp.commit };
   s.studio.import!.lockedInAt = now;
   const round = s.studio.rounds.find((r) => r.n === 0);
-  if (round && !round.closedAt) round.closedAt = now;
+  if (round) {
+    round.closedAt ??= now;
+    round.summary = roundZeroSummary(s.studio.import!);
+  }
   event(s, now, "user", "vision", `The baseline: r${rev.rev} puts ${blueprintItems(s).length} part${blueprintItems(s).length === 1 ? "" : "s"} of the import into force, as the repository is at commit ${short(imp.commit)}`);
   return s;
 }

@@ -395,6 +395,12 @@ describe("the baseline Lock in (C4): the owner's, in Vision, once, on the summar
     expect(failure(() => run(changed, "lockInBaseline", seen, at(110))).name).toBe("StaleWriteError");
     expect(run(changed, "lockInBaseline", baselineArgsOf(changed), at(110)).state.blueprint.revisions[0].lockIn!.baseline).toEqual({ importId: sc.importId, commit: TALLY_COMMIT });
   });
+
+  it("renames round 0 the baseline: its summary no longer says As it is today (R1B-1)", () => {
+    const sc = tallyImport("review");
+    const locked = run(sc.s, "lockInBaseline", baselineArgsOf(sc.s), at(110)).state;
+    expect(locked.studio.rounds.find((r) => r.n === 0)).toEqual({ n: 0, focus: "material", openedAt: at(1), closedAt: at(110), summary: "The baseline: what the repository does at commit c0ffee0 on main." });
+  });
 });
 
 describe("the summary and the rest of the build leave the baseline's items out (2.4)", () => {
