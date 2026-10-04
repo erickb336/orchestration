@@ -157,10 +157,12 @@ export function resolveInVersion(from: string, ref: string): string | undefined 
   return parts.join("/") || undefined;
 }
 
+/** An artifact's kind in words: "terminal demo", "screen", "algorithm". */
+export const kindWord = (kind: string) => kind.replace("-", " ");
+
 /** "screen · 2 variants", "terminal demo · v2", "as is · screen". */
 export function artifactLine(a: StudioArtifact): string {
-  const kind = a.kind.replace("-", " ");
-  const parts = [a.provenance?.asIs ? "as is" : "", kind, a.variants.length > 1 ? `${a.variants.length} variants` : "", a.version > 1 ? `v${a.version}` : ""].filter(Boolean);
+  const parts = [a.provenance?.asIs ? "as is" : "", kindWord(a.kind), a.variants.length > 1 ? `${a.variants.length} variants` : "", a.version > 1 ? `v${a.version}` : ""].filter(Boolean);
   return parts.join(" · ");
 }
 

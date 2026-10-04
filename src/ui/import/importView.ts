@@ -26,6 +26,7 @@ import {
 import type { ImportRule, ImportSource, ImportStep, StudioArtifact } from "../../domain/studio/types";
 import { DEVICES, PROJECT_DOMAINS, type CheckCommand, type Device, type ProjectDomain, type State, type TestCaseResult } from "../../domain/types";
 import type { StepItem, StepMark } from "../kit";
+import { kindWord } from "../studio/studioView";
 
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const shortCommit = (sha: string) => sha.slice(0, 7);
@@ -437,12 +438,15 @@ const verified = (s: State, r: ImportRule) => {
   return cs.length > 0 && cs.every((c) => c.status === "passed");
 };
 
+/** The import's tests did not run (no Docker, no environment, no test command): no rule has a result. */
+export const testsNotRun = (s: State) => s.studio.import?.checks.status === "not-run";
+
 /** How a part is listed in the review (C8): recorded from the running code, or read from the code, with its rules' tests. */
 export function partLine(s: State, a: StudioArtifact): string {
   if (a.kind === "dictionary") return `${count(a.dictionary?.length ?? 0, "word")}, from the README, the docs and the names in the code.`;
   const cap = s.studio.import?.capture?.parts.find((p) => p.artifactId === a.id);
   const rules = partRules(s, a);
-  const tests = rules.length ? ` Its rules: ${rules.filter((r) => verified(s, r)).length} of ${rules.length} have a passing test.` : "";
+  const tests = !rules.length ? "" : testsNotRun(s) ? " The tests did not run." : ` Its rules: ${rules.filter((r) => verified(s, r)).length} of ${rules.length} have a passing test.`;
   if (cap?.status === "captured") return `Recorded from the running ${a.kind === "screen" ? "app" : "CLI"}${s.studio.import?.capture?.simulated ? " (simulated)" : ""}.${tests}`;
   if (cap?.status === "none") return `Read from the code: not recorded, because ${cap.detail.replace(/\.$/, "").replace(/^[A-Z]/, (c) => c.toLowerCase())}.${tests}`;
   return `Read from the code: ${a.provenance?.files.join(", ")}.${tests}`;
@@ -462,6 +466,7 @@ export function testsTag(s: State, rule: ImportRule): string | undefined {
 function partTests(s: State, a: StudioArtifact): string | undefined {
   const rules = partRules(s, a);
   if (!rules.length) return undefined;
+  if (testsNotRun(s)) return "not run";
   const cases = rules.map((r) => ruleCases(s, r));
   const fails = cases.filter((cs) => cs.some((c) => c.status === "failed" || c.status === "error")).length;
   const none = cases.filter((cs) => !cs.length).length;
@@ -473,7 +478,7 @@ export function baselineRows(s: State): { id: string; title: string; version: nu
   return importParts(s).map((a) => {
     const cap = s.studio.import?.capture?.parts.find((p) => p.artifactId === a.id);
     const tests = partTests(s, a);
-    return { id: a.id, title: a.title, version: a.version, facts: [a.kind.replace("-", " "), tests ? `tests ${tests}` : "", cap ? (cap.status === "captured" ? "recorded" : "not recorded") : ""].filter(Boolean).join("; ") };
+    return { id: a.id, title: a.title, version: a.version, facts: [kindWord(a.kind), tests ? `tests ${tests}` : "", cap ? (cap.status === "captured" ? "recorded" : "not recorded") : ""].filter(Boolean).join("; ") };
   });
 }
 

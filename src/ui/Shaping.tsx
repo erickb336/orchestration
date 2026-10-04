@@ -111,6 +111,7 @@ export function ShapingBanner() {
   const { state } = useStore();
   if (state.project.stage !== "shaping") return null;
   const running = M.activeAttempts(state).length;
+  const planned = state.tasks.some((t) => t.lifecycle !== "done" && t.lifecycle !== "cancelled");
   return (
     <Banner
       tone="info"
@@ -121,7 +122,7 @@ export function ShapingBanner() {
         </ButtonLink>
       }
     >
-      {running ? `${running} running ${plural(running, "step")} ${plural(running, "finishes", "finish")} normally; planned` : "Planned"} tasks are held.
+      {running ? `${running} running ${plural(running, "step")} ${plural(running, "finishes", "finish")} normally; planned tasks are held.` : planned ? "Planned tasks are held." : null}
     </Banner>
   );
 }

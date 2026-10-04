@@ -13,6 +13,7 @@ import { run } from "../../domain/testing/studio";
 import type { State } from "../../domain/types";
 import { ImportHome } from "../Overview";
 import { importPlaces } from "../placesView";
+import { ShapingBanner } from "../Shaping";
 import { ItemDetail, Reality } from "../studio/Reality";
 import { renderScreen, testService, visible } from "../testStore";
 import { BaselineLockIn } from "./BaselineLockIn";
@@ -285,8 +286,8 @@ describe("5 · After (Design and reality, Home)", () => {
   it("Design and reality lists each part of the baseline with its status from the import and its tests", () => {
     const t = text(<Reality />, stage("baseline"));
     expect(t).toContain("Lock in 1, the baseline · 6 parts.");
-    expect(t).toContain("tally add v1 terminal-demo built and verified from the import Tests: 5 of 5 pass");
-    expect(t).toContain("tally report v1 terminal-demo built, not verified from the import Tests: 2 of 3 pass · 1 no test");
+    expect(t).toContain("tally add v1 terminal demo built and verified from the import Tests: 5 of 5 pass");
+    expect(t).toContain("tally report v1 terminal demo built, not verified from the import Tests: 2 of 3 pass · 1 no test");
     // The ledger is v2: the designer's fix of what the reader misread.
     expect(t).toContain("The ledger v2 contract built, not verified from the import Tests: 3 of 5 pass · 2 no test");
     expect(t).toContain("Words v1 dictionary in force from the import");
@@ -306,9 +307,36 @@ describe("5 · After (Design and reality, Home)", () => {
     expect(add).toContain("R13 The ledger shall keep one currency per group, set in .tally.json. passes test_add.py::test_rejects_other_currency a change to design");
   });
 
+  it("says terminal demo, not terminal-demo; with no task, Results does not say planned tasks are held (UX-11)", () => {
+    const t = text(<Reality />, stage("baseline"));
+    expect(t).toContain("tally add v1 terminal demo built and verified");
+    expect(t).not.toContain("terminal-demo");
+    expect(text(<ShapingBanner />, stage("baseline"))).toBe("Vision: new work waits until you start the factory. Work on the vision");
+  });
+
+  it("with the tests not run, no part says 0 of 5 pass: it says the tests did not run (UX-10)", () => {
+    const s = stage("answered", { checks: "not-run" });
+    expect(text(<BaselineLockIn />, s)).toContain("Baseline tally add v1 (terminal demo; tests not run; not recorded)");
+    expect(text(<BaselineLockIn />, s)).not.toMatch(/tests 0 of/);
+    expect(text(<ImportReview />, s)).toContain("tally add terminal demo Read from the code: not recorded, because docker is not available on this computer, so nothing was recorded. The tests did not run.");
+    const after = text(<Reality />, stage("baseline", { checks: "not-run" }));
+    expect(after).toContain("Tests: not run");
+    expect(after).not.toMatch(/Tests: 0 of/);
+  });
+
+  it("an imported terminal demo says it was recorded in the project's container, not with VHS from the designer's tape (INT-F2)", () => {
+    const sc = tallyImport("baseline");
+    const s = structuredClone(sc.s);
+    const add = s.studio.artifacts.find((a) => a.id === sc.parts.add)!;
+    add.demo = { status: "done", at: at(61), variants: [{ variant: add.variants[0].id, status: "recorded", tape: "add/demo.tape", txt: "recording/a/demo.txt" }] };
+    const t = text(<ItemDetail view={itemFactoryStatus(s, item(s, sc.parts.add!))!} />, s);
+    expect(t).toContain("Recorded from the running code in the project's container, with no network (simulated: no code ran).");
+    expect(t).not.toContain("VHS");
+  });
+
   it("a part whose test fails reads fails a check", () => {
     const t = text(<Reality />, stage("baseline", { checks: { failing: ["test_add.py::test_unknown_payer"] } }));
-    expect(t).toContain("tally add v1 terminal-demo fails a check from the import Tests: 4 of 5 pass · 1 fails");
+    expect(t).toContain("tally add v1 terminal demo fails a check from the import Tests: 4 of 5 pass · 1 fails");
   });
 
   it("Home: nothing to build until you change the design; the changes to design you asked for wait for a round", () => {

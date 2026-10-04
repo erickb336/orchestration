@@ -101,7 +101,7 @@ describe("Design and reality", () => {
   it("a terminal demo: the approved demo beside the built recording", () => {
     const sc = realityScene();
     const html = detailHtml(sc.s, sc.items.cli);
-    expect(visible(html)).toContain(`trips CLI v1 built and verified terminal-demo ${sc.built.cli} landed, and its recording is of the landed commit. Demo · v1, approved`);
+    expect(visible(html)).toContain(`trips CLI v1 built and verified terminal demo ${sc.built.cli} landed, and its recording is of the landed commit. Demo · v1, approved`);
     expect(visible(html)).toMatch(/Built · commit \w{7} · design v1 · .* trips CLI as built — recorded/);
     expect(html).toContain(encodeURIComponent(`${sc.items.cli}/demo.gif`));
   });

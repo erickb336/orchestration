@@ -16,9 +16,9 @@ import { useStore } from "../store";
 import { ScaledBox, TerminalRecording, TerminalText, TerminalWindow, useServiceText } from "./Frames";
 import { ArtifactPreview, TermsTable } from "./Preview";
 import { readCast, renderAnsi } from "./ansi";
-import { answerChip, ruleOf } from "../import/importView";
+import { answerChip, ruleOf, testsNotRun } from "../import/importView";
 import { NO_EVIDENCE_CLAUSE, STATUS_TONE, STATUS_WORDS, differenceState, evidenceCaption, evidenceFileUrl, recordingOf, ruleCell, rulesLine, shortSha, shotOf, statusWhy, taskState, taskWords } from "./realityView";
-import { DEVICE_LABEL, DEVICE_SIZE, serviceFileUrl, showKind, variantDemo } from "./studioView";
+import { DEVICE_LABEL, DEVICE_SIZE, kindWord, serviceFileUrl, showKind, variantDemo } from "./studioView";
 import "./studio.css";
 
 /** The two views of Results: the delivered work, and Design and reality. Each is its own address. Design and reality is first once anything is locked in (resultsView.ts). */
@@ -85,13 +85,14 @@ export function Reality() {
 
 /** One part of the design: its name, version and kind, its status, its tasks, its rule results, and its evidence thumbnails. */
 function ItemRow({ view: v, current, onClick }: { view: ItemFactoryView; current: boolean; onClick: () => void }) {
-  const rules = rulesLine(v);
+  const { state } = useStore();
+  const rules = v.baseline && testsNotRun(state) ? "not run" : rulesLine(v);
   const status = v.status;
   return (
     <button type="button" className="st-bprow" aria-current={current ? "true" : undefined} onClick={onClick}>
       <span className="st-bprow__name">
         <b>{v.item.title}</b> <span className="muted">v{v.item.version}</span>
-        <span className="st-bprow__kind">{v.item.kind}</span>
+        <span className="st-bprow__kind">{kindWord(v.item.kind)}</span>
       </span>
       <StatePill tone={STATUS_TONE[status]} pulse={status === "being-built" && v.tasks.some((t) => t.state === "running")}>
         {STATUS_WORDS[status]}
@@ -159,7 +160,7 @@ export function ItemDetail({ view: v }: { view: ItemFactoryView }) {
       className="st-reality__card"
     >
       <p className="small muted no-margin">
-        {v.item.kind}
+        {kindWord(v.item.kind)}
         {v.baseline ? " · from the import, Lock in 1" : ""}
       </p>
       <p className="small">{statusWhy(v)}</p>

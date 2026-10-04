@@ -5,6 +5,7 @@
 import * as S from "../../domain/studio/studio";
 import type { StudioArtifact } from "../../domain/studio/types";
 import { Banner, EmptyState } from "../kit";
+import { useStore } from "../store";
 import { DocumentArtifact } from "./Document";
 import { DeviceFrame, NoPrototypeServer, PlainFrame, ScreenshotFallback, TerminalFile, TerminalRecording } from "./Frames";
 import { DEVICE_LABEL, prototypeUrl, serviceFileUrl, showKind, variantDemo, variantEntry, type ScreenDevice } from "./studioView";
@@ -66,6 +67,7 @@ export function TermsTable({ artifact: a }: { artifact: StudioArtifact }) {
  * shows while the prototype server is down too.
  */
 export function TerminalArtifact({ artifact: a, variant }: { artifact: StudioArtifact; variant: string | undefined }) {
+  const { state } = useStore();
   const demo = variantDemo(a, variant);
   const note = variant === undefined ? undefined : S.demoNote(a, variant);
   if (demo.status === "pending") return <EmptyState title="Recording…">The service is recording the designer's tape in the sandbox, with no network. It shows here when it is done.</EmptyState>;
@@ -78,7 +80,7 @@ export function TerminalArtifact({ artifact: a, variant }: { artifact: StudioArt
         ) : (
           demo.transcript && <TerminalFile artifact={a} path={demo.transcript} kind="transcript" />
         )}
-        <p className="small muted">Recorded with VHS from the designer's tape, in the sandbox with no network.</p>
+        <p className="small muted">{a.provenance?.asIs ? `Recorded from the running code in the project's container, with no network${state.studio.import?.capture?.simulated ? " (simulated: no code ran)" : ""}.` : "Recorded with VHS from the designer's tape, in the sandbox with no network."}</p>
       </div>
     );
   }

@@ -164,7 +164,7 @@ await runJourney(
       await page.getByText("Lock in 1, the baseline").waitFor({ timeout: 10_000 });
       await page.waitForTimeout(300);
       const t = flat(await text(page));
-      j.check(/tally add v1 terminal-demo built and verified from the import Tests: 5 of 5 pass/.test(t) && /tally report v1 terminal-demo built, not verified from the import Tests: 2 of 3 pass · 1 no test/.test(t), "After: each part's status from the import, with its tests");
+      j.check(/tally add v1 terminal demo built and verified from the import Tests: 5 of 5 pass/.test(t) && /tally report v1 terminal demo built, not verified from the import Tests: 2 of 3 pass · 1 no test/.test(t), "After: each part's status from the import, with its tests");
       await page.getByRole("button", { name: /^tally add v1/ }).click();
       await page.waitForTimeout(300);
       const demo = flat(await page.locator(".st-reality__detail").innerText());

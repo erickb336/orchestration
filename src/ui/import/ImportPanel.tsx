@@ -7,6 +7,7 @@ import { fmtUsd } from "../../domain/spend";
 import { importParts } from "../../domain/studio/import";
 import { Banner, Button, Card, Field, Input, SimulatedChip, StatePill, StepList } from "../kit";
 import { useStore } from "../store";
+import { kindWord } from "../studio/studioView";
 import { importHalt, importPill, productName, readingCards, readingSteps, roundZeroLine, spendWords } from "./importView";
 import "./import.css";
 
@@ -129,7 +130,7 @@ export function ImportPanel() {
                 return (
                   <li key={a.id} className={cap || !["screen", "terminal-demo", "tui"].includes(a.kind) ? "" : "imp-ticks--run"}>
                     {a.title}
-                    <span>{cap ? (cap.status === "captured" ? `recorded${imp.capture?.simulated ? " (simulated)" : ""}` : `not recorded: ${cap.detail}`) : ["screen", "terminal-demo", "tui"].includes(a.kind) ? "to record" : `${a.kind}, from ${a.provenance?.files.join(", ")}`}</span>
+                    <span>{cap ? (cap.status === "captured" ? `recorded${imp.capture?.simulated ? " (simulated)" : ""}` : `not recorded: ${cap.detail}`) : ["screen", "terminal-demo", "tui"].includes(a.kind) ? "to record" : `${kindWord(a.kind)}, from ${a.provenance?.files.join(", ")}`}</span>
                   </li>
                 );
               })}

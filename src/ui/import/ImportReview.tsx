@@ -10,7 +10,7 @@ import type { ImportRule, StudioArtifact } from "../../domain/studio/types";
 import { Banner, Button, ButtonLink, Card, Chip, Disclosure, Field, Meter, SimulatedChip, Textarea } from "../kit";
 import { cx } from "../kit/cx";
 import { useStore } from "../store";
-import { roundLead } from "../studio/studioView";
+import { kindWord, roundLead } from "../studio/studioView";
 import { ImportBudgetStop } from "./ImportPanel";
 import {
   BASELINE_HASH,
@@ -308,7 +308,7 @@ function PartTile({ part: a, answer, onAnswer }: { part: StudioArtifact; answer:
     <div className="imp-tile">
       <div className="imp-between">
         <h4 className="no-margin">{a.title}</h4>
-        <span className="micro muted">{a.kind.replace("-", " ")}</span>
+        <span className="micro muted">{kindWord(a.kind)}</span>
       </div>
       <p className="small no-margin">{partLine(state, a)}</p>
       <CorrectToggle id={partKey(a.id)} answer={answer} onAnswer={onAnswer} />
