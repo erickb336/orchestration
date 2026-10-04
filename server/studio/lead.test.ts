@@ -130,7 +130,7 @@ describe("the simulated lead in Vision", () => {
     const r = tallyRepo(join(dir, "tally"));
     service(r);
     const commit = execFileSync("git", ["-C", r, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-    cmd("startImport", { name: "tally", repoPath: r, commit, domains: ["screen", "code"], devices: ["terminal"], budgetUsd: 3, helpers: null, size: { sourceFiles: 7, testFiles: 7, kb: 12 } });
+    cmd("startImport", { name: "tally", repoPath: r, commit, domains: ["screen", "code"], devices: ["terminal"], environment: { image: `python:3.13-slim@sha256:${"b".repeat(64)}`, prepare: [], hosts: [] }, tests: { argv: ["python3", "tests/run.py"], report: "reports/junit.xml" }, budgetUsd: 3, helpers: null, size: { sourceFiles: 7, testFiles: 7, kb: 12 } });
     // The import's service steps end asynchronously: wait for each before the next cycle.
     for (let i = 0; i < 400 && I.importStatus(state()) !== "review"; i++) {
       tick();

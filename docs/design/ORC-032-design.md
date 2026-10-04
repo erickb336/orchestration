@@ -67,9 +67,9 @@ reading ──(reading and capture recorded, no words/rules/parts run under way)
 
 | Command | Who | What it does |
 | --- | --- | --- |
-| `startImport { commit, branch?, budgetUsd, helpers, size, readsOn? }` | owner | After `initProject` and `setDomains`. Opens round 0, "As it is today", and records the estimate from `size`. Refused outside a new project in Vision, before the kind of product, with a short commit, or with helpers no provider tracks. |
-| `setImportBudget { budgetUsd }` | owner | For example at the import's stop. |
-| `answerImport { answers }` | owner | In the review or after the baseline. Each answer names one of its item's options; Neither and Correct need the owner's words. |
+| `startImport` (`ImportProjectStart`) | owner | Everything Start sets, in one command (R1-A): the new project, its kind and devices, how it runs, who reads, the budget, the helpers, and the commit, branch and size the screen read. Checked in full first: on a refusal nothing changes. While the sample's runs are active, it pauses the sample and waits (`importPending`). Opens round 0, "As it is today". |
+| `setImportBudget { budgetUsd }` | owner | At any stage before the baseline, for example at the import's stop. |
+| `answerImport { answers }` | owner | In the review or after the baseline. Each answer names one of its item's options; Neither and Correct need the owner's words. No answer: the owner sent the review with everything open (`sentAt`). |
 | `lockInBaseline { draftRev, summaryDigest }` | owner | Revision 1 in Vision, marked as the baseline; closes round 0. |
 | `recordImportChecks`, `recordImportRules`, `recordImportCapture`, `stopImport` | service | In `SERVICE_COMMANDS`: a client cannot send them. A late or repeated report changes nothing. |
 | `startStudioRun { …, importStep }` | service | The import's runs: a reader for the rules; a designer for the words, the parts and a fix. Round 0 only. |
@@ -164,11 +164,12 @@ The repository's content is untrusted: it may be someone else's code. "(unit 2)"
 | --- | --- | --- |
 | Steer a reader by prompt injection (README, comments, test names) | Read-only runs; Claude's reads stay in the checkout; no connections; "confirmed" comes from test results, never from the reader | Codex reads are not confined: Codex reads only if the owner picks it, with a warning (Q5). An injected text can bend a guess; the owner sees the sources. |
 | Run its code | Only in the project's environment: prepare through the allowlist proxy, run with no network, non-root, a copy | Without Docker nothing runs: rules are inferred, nothing is recorded (Q3). |
-| Run git hooks, filters or fsmonitor | Hooks and fsmonitor off for the workspace manager's calls; no `git status` on the repository, `GIT_LFS_SKIP_SMUDGE=1`, and a refusal of a local config with filter drivers (unit 2) | — |
+| Run git hooks, filters or fsmonitor | No checkout before the baseline (R1-A, SR-2): every read is a snapshot, the commit's files written from git's object store (`git ls-tree`, `git cat-file --batch`), which runs no filter, smudge, git-lfs, hook or fsmonitor of any config (an include.path, an includeIf, a config.worktree too). No `.git` in it; a path with a `..` or `.git` part, a path twice or a file and a folder alike is refused; files are written new (O_EXCL), links last. No `git status` on the repository | After the baseline the project's checkouts run its config's filters, as for any project |
+| Make the service write through a link | The capture's plan and tapes are the service's, in memory (`CaptureJob.plan`): nothing is written into the copy of the repository (R1-A, CR-2) | — |
 | Feed hostile data | The reader's output is checked at the boundary (`parseImportReading`, then `recordImportRules`: every test id in the cases, caps; unit 2 checks the ids against the full report); the capture (`parseImportCapture`); JUnit and casts as today | — |
 | Spend money | The import's stop; the per-run limit | An unrecorded run counts at $2. |
 | Change under the import | A reproduction shows the import's commit (`addArtifact` refuses another); every read, check and capture uses that commit (unit 2) | — |
-| Change the repository | Readers only read; copies leave out `.git` | `git worktree add` writes records under `.git`: "No file in your repository changes" (C7). |
+| Change the repository | Readers only read; snapshots and copies have no `.git`, and git keeps no record of them | — |
 
 ## 8. The build units
 
@@ -192,3 +193,19 @@ The repository's content is untrusted: it may be someone else's code. "(unit 2)"
 - **C12, the pass-4 round.** The domain skips PE review only for reproductions in a project with an import. When unit 2 removes the lead-driven round, the `as-is` end of PE review (`LoopEnd`, `studio.ts`) has no caller left: delete it and its tests then (`src/domain/studio/studio.test.ts`, `src/ui/studio/studio.test.tsx`, `server/studio/runs.test.ts`).
 - **The lead's review run.** The review needs a lead trigger in Vision (`src/domain/model/lead.ts`), which checks `importStop` like studio dispatch. No unit owns that file: the lead assigns it.
 - **The fix run's brief.** `importFixesDue` gives each part's fix with the owner's words; unit 2 asks for the run.
+
+## 10. Repair round 1, part A: the domain's contract for the screens
+
+**What this is.** The first review cycle found defects in the domain and the server, and the screens needed facts the domain did not give. Part A fixed the domain and the server; part B builds the screens on this contract. Every name below is in `src/domain/studio/` unless the row says otherwise.
+
+| # | What the screens read or send | Where |
+| --- | --- | --- |
+| 1 | `startImport` takes `ImportProjectStart` (types.ts): `name`, `repoPath` (the bundled sample's as POST /api/import/demo gives it), `commit`, `branch?`, `size`, `domains`, `devices`, `environment?` and `preview?` (as setEnvironment and setPreview take them), `tests? { argv, report? }`, `readsOn?`, `budgetUsd`, `helpers`. Every part is checked before any change (a provider that is not enabled too); a refusal changes nothing. | `importStart.ts`, `commands.ts` |
+| 2 | While the sample's runs are active, `startImport` pauses the sample and records `project.importPending`; the scheduler starts the import once no run is active. `importStartStatus(s)`: `{ status: "pausing", runs }` ("Pausing the sample's agents…"), `{ status: "refused", reason }`, or undefined. Resuming the project ends the wait; another project's active runs refuse the start. | `importStart.ts` |
+| 3 | `importHold(s)`: at any stage before the baseline, the import's stop (`stop`: spend, budget, why) and what it holds (`holds`: queued runs by step, a fix with its part, `{ step: "review" }` for the lead's message). A raise lets them start. | `import.ts` |
+| 4 | The lead's review reply is round 0's message (`round.lead`), also when it ends after the Lock in. | `model/leadOutput.ts` |
+| 5 | Each question has a `title`: the reader's (at most 60 characters), else `ruleTitle` (the rule's condition, else what it does). | `import.ts` |
+| 6 | `answerImport { answers: [] }` records `import.sentAt`: the review was sent with everything open. | `import.ts` |
+| 7 | Without a baseline run, no test is cited: a test's source makes no conflict and names no option. | `import.ts` |
+
+**The fixes.** Start the factory waits for the baseline (CR-1). Round 0 of an import closes only with the baseline, so no later round opens before it (CR-3). The import keeps its whole report as its file, and the reader may name up to 1,000 of its tests, failing ones first (CR-4). Of two cases with one id, a failure counts (CR-6). A capture of an earlier version than the one in force is the gap "evidence-older-design" (CR-7). A stored pass-4 reproduction gets one PE pass, "earlier-rule" (CR-8). The import never checks the repository out: snapshots from git's object store (SR-2), so `GIT_LFS_SKIP_SMUDGE` and the filter-driver refusal go (INT-F3). The capture's plan and tapes stay in memory (CR-2, SR-1). The simulated import follows Q3 (QA-F5). Section 7 has the security rows.

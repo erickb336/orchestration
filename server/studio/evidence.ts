@@ -551,6 +551,12 @@ export interface CaptureJob {
   lender?: EnvironmentLender;
   /** Names this capture's folder in the environment's root. */
   attemptId?: string;
+  /**
+   * A capture plan the service made itself (the import's, ORC-032): its text, and the tapes it names by path. It is
+   * checked like the change's own plan, but read from here, so nothing is written into the copy of a repository
+   * (CR-2). Absent: the change's plan, CAPTURE_PLAN in the copy.
+   */
+  plan?: { text: string; files: ReadonlyMap<string, string> };
 }
 
 /** What the capture needs of the project's environment: a copy of the change, prepared as the checks prepare it. */
@@ -801,8 +807,10 @@ export async function captureEvidence(job: CaptureJob): Promise<Omit<EvidenceRun
       return finish();
     }
 
-    // The plan, from the copy: what runs is what was checked.
-    const read = readCapturePlan(stage.work, job.items, job.preview.cliEntry ? { cliEntry: job.preview.cliEntry } : {});
+    // The plan, from the copy, or the service's own: what runs is what was checked.
+    const cli = job.preview.cliEntry ? { cliEntry: job.preview.cliEntry } : {};
+    const own = job.plan;
+    const read = own ? checkCapturePlan(own.text, job.items, { readFile: (rel) => own.files.get(rel), ...cli }) : readCapturePlan(stage.work, job.items, cli);
     if (!read.ok) {
       none(job.items, read.reason, read.error);
       return finish();

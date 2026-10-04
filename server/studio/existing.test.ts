@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { isCode, localFilterDrivers, repoAt, repoFiles, repoGlance, trackedAmong } from "./existing";
+import { isCode, repoAt, repoFiles, repoGlance, trackedAmong } from "./existing";
 
 let dir: string;
 beforeEach(() => {
@@ -76,14 +76,6 @@ describe("an existing repository", () => {
     const head = execFileSync("git", ["-C", r, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
     expect(repoAt(r)).toEqual({ commit: head, branch: "main", size: { sourceFiles: 2, testFiles: 3, kb: 3.0 } });
     expect(repoAt(join(dir, "missing"))).toBeUndefined();
-  });
-
-  it("names the filter drivers the repository's own config defines, which a checkout would run", () => {
-    const r = repo({ "a.txt": "1" });
-    expect(localFilterDrivers(r)).toEqual([]);
-    execFileSync("git", ["-C", r, "config", "--local", "filter.evil.smudge", "touch /tmp/pwned"]);
-    execFileSync("git", ["-C", r, "config", "--local", "filter.lfs.process", "git-lfs filter-process"]);
-    expect(localFilterDrivers(r)).toEqual(["evil", "lfs"]);
   });
 
   it("a repository with documents only has no code; one that cannot be read gives nothing", () => {

@@ -35,13 +35,13 @@ import { ControlError, type Device, type ProjectDomain, type State, type TestCas
 import type { EnvironmentAssignment } from "../checks";
 import { lastJsonObject } from "../envelope";
 import type { Store } from "../store";
-import { clearReport, readTestReport } from "../testReport";
+import { clearReport, keepCases, readTestReport } from "../testReport";
 import type { WorkspaceManager } from "../workspaces";
 import type { StagedArtifact } from "./artifacts";
-import { captureEvidence, copyChange, evidenceDir, type EnvironmentLender } from "./evidence";
+import { captureEvidence, evidenceDir, type EnvironmentLender } from "./evidence";
 import { sharedEnvironments } from "../environment/prepared";
 import { readDevcontainer, type ReadAtBase } from "../environment/devcontainer";
-import { localFilterDrivers, repoAt, repoFiles } from "./existing";
+import { repoAt, repoFiles } from "./existing";
 import { PROPOSAL_MARKERS, proposeImage } from "../../src/domain/environment";
 import { suggestChecks } from "../../src/domain/checks";
 import type { ImportStartInfo } from "../../src/api";
@@ -154,19 +154,29 @@ export interface ImportRunner {
 
 const notRun = (reason: string): I.ImportChecksResult => ({ status: "not-run", reason });
 
-/** Keep the report's counts and cases as the import's file; the state keeps only the cases its rules name (C14). */
+const NO_REPORT_PATH = "No JUnit report path is set, so the import cannot read the tests' results. Set it in Settings › Checks.";
+/** Why the baseline run has nothing to run or to read (Q3): no report path, or no test command. */
+const noTests = (job: Pick<ImportChecksJob, "testReport" | "commands">): string | undefined => (!job.testReport ? NO_REPORT_PATH : !job.commands.length ? "No test command is set. Set it in Settings › Checks." : undefined);
+
+/** Read the whole baseline report: the import keeps every case in its file (C14, CR-4). */
+const readWholeReport = (rel: string, ctx: Parameters<typeof readTestReport>[1]) => readTestReport(rel, ctx, Number.POSITIVE_INFINITY);
+
+/** Keep the report's counts and every case as the import's file; the state keeps only the cases its rules name (C14). */
 function keepReport(outDir: string, report: Extract<TestReport, { status: "read" }>, simulated?: true): I.ImportChecksResult {
   const file = join(outDir, REPORT_FILE);
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-  writeFileSync(file, `${JSON.stringify({ counts: report.counts, cases: report.cases, truncated: report.truncated })}\n`, { mode: 0o600 });
+  writeFileSync(file, `${JSON.stringify({ counts: report.counts, cases: report.cases })}\n`, { mode: 0o600 });
   return { status: "read", counts: report.counts, reportFile: REPORT_FILE, ...(simulated ? { simulated } : {}) };
 }
 
-/** The cases of the baseline report the import kept, or none (no report, not run). */
+/**
+ * The cases of the baseline report the rules reader sees and may name: every case of the import's file, up to
+ * MAX_IMPORT_CASES, the failing ones first (C14, CR-4). None without a report.
+ */
 export function reportCases(outDir: string): TestCaseResult[] {
   try {
     const raw = JSON.parse(readFileSync(join(outDir, REPORT_FILE), "utf8")) as { cases?: TestCaseResult[] };
-    return Array.isArray(raw.cases) ? raw.cases : [];
+    return Array.isArray(raw.cases) ? keepCases(raw.cases, I.MAX_IMPORT_CASES).cases : [];
   } catch {
     return [];
   }
@@ -184,8 +194,8 @@ export class EnvironmentImport implements ImportRunner {
 
   async checks(job: ImportChecksJob): Promise<I.ImportChecksResult> {
     if (!job.environment) return notRun(job.noEnvironment ?? NO_ENVIRONMENT);
-    if (!job.testReport) return notRun("No JUnit report path is set, so the import cannot read the tests' results. Set it in Settings › Checks.");
-    if (!job.commands.length) return notRun("No test command is set. Set it in Settings › Checks.");
+    const missing = noTests(job);
+    if (missing || !job.testReport) return notRun(missing ?? NO_REPORT_PATH);
     if (!job.source) return notRun("No copy of the commit could be made.");
     const testReport = job.testReport;
     const lender = this.o.lender ?? sharedEnvironments(this.o.log);
@@ -199,7 +209,7 @@ export class EnvironmentImport implements ImportRunner {
           job.log?.(`import: running ${c.label} in the project's environment, with no network`);
           await p.run(c.argv, c.timeoutMs);
         }
-        return readTestReport(testReport, { workspace: p.work, scratch: [], env: this.o.env ?? process.env });
+        return readWholeReport(testReport, { workspace: p.work, scratch: [], env: this.o.env ?? process.env });
       },
     );
     if (!out.ok) {
@@ -218,49 +228,37 @@ export class EnvironmentImport implements ImportRunner {
     if (!job.environment) return none(job.noEnvironment ?? NO_ENVIRONMENT, "not-set-up");
     if (!job.source) return none("No copy of the commit could be made.");
     const outDir = job.outDir;
-    // A copy of the commit with the import's capture plan and tapes: the repository and its checkout are never written.
-    const src = `${outDir}.src-${randomBytes(4).toString("hex")}`;
-    try {
-      const copied = copyChange(job.source, src);
-      if (copied) return none(`The commit could not be copied for the capture: ${copied}.`);
-      const items: CaptureItem[] = job.parts.map((p, i) => ({ itemId: `bi-${i + 1}`, kind: p.kind, title: p.title, artifactId: p.artifactId, version: p.version }));
-      const terminals = job.parts.flatMap((p, i) => {
-        if (!p.tape) return [];
-        const tape = posix.join(".orchestrator", "import", `p${i + 1}`, basename(p.tape.path));
-        mkdirSync(join(src, dirname(tape)), { recursive: true });
-        writeFileSync(join(src, tape), p.tape.text);
-        return [{ item: `bi-${i + 1}`, tape }];
-      });
-      const screens = job.parts.flatMap((p, i) => (p.kind === "screen" && p.page ? [{ item: `bi-${i + 1}`, path: p.page, devices: CAPTURE_DEVICES.filter((d) => p.devices?.includes(d)) }] : []));
-      mkdirSync(join(src, ".orchestrator"), { recursive: true });
-      writeFileSync(join(src, ".orchestrator", "capture.json"), JSON.stringify({ screens, terminals }));
-      rmSync(outDir, { recursive: true, force: true });
-      const run = await captureEvidence({
-        source: src,
-        sha: job.commit,
-        items,
-        preview: job.preview ?? { rev: 0 },
-        outDir,
-        environment: job.environment,
-        signal: job.signal,
-        ...(this.o.lender ? { lender: this.o.lender } : {}),
-        ...(this.o.env ? { env: this.o.env } : {}),
-        ...(this.o.docker ? { docker: this.o.docker } : {}),
-        ...(this.o.recorderRoot ? { root: this.o.recorderRoot } : {}),
-        log: (m) => job.log?.(`import: ${m}`),
-        attemptId: `import-${randomBytes(4).toString("hex")}`,
-      });
-      // The capture keys its files by item (bi-1/…); the import keys them by part (<artifactId>/…).
-      const parts = run.items.map((x, i): ImportPartCapture => {
-        const p = job.parts[i];
-        if (x.status !== "captured") return { artifactId: p.artifactId, version: p.version, status: "none", reason: x.reason, detail: p.kind === "screen" && !p.page ? NO_PAGE : x.detail, ...(x.log ? { log: x.log } : {}) };
-        if (existsSync(join(outDir, x.itemId))) renameSync(join(outDir, x.itemId), join(outDir, p.artifactId));
-        return { artifactId: p.artifactId, version: p.version, status: "captured", files: x.files.map((f) => ({ ...f, path: `${p.artifactId}/${f.path.split("/").slice(1).join("/")}` })), ...(x.warnings?.length ? { warnings: x.warnings } : {}) };
-      });
-      return { parts, ...(run.path ? { path: run.path } : {}) };
-    } finally {
-      rmSync(src, { recursive: true, force: true });
-    }
+    // The import's capture plan and its tapes are the service's, kept in memory: nothing is written into the copy of
+    // the repository, whose links could lead anywhere on this computer (CR-2, SR-1). The tapes' paths only name them.
+    const items: CaptureItem[] = job.parts.map((p, i) => ({ itemId: `bi-${i + 1}`, kind: p.kind, title: p.title, artifactId: p.artifactId, version: p.version }));
+    const tapes = new Map(job.parts.flatMap((p, i) => (p.tape ? [[posix.join("import", `p${i + 1}`, basename(p.tape.path)), p.tape.text] as const] : [])));
+    const terminals = job.parts.flatMap((p, i) => (p.tape ? [{ item: `bi-${i + 1}`, tape: posix.join("import", `p${i + 1}`, basename(p.tape.path)) }] : []));
+    const screens = job.parts.flatMap((p, i) => (p.kind === "screen" && p.page ? [{ item: `bi-${i + 1}`, path: p.page, devices: CAPTURE_DEVICES.filter((d) => p.devices?.includes(d)) }] : []));
+    rmSync(outDir, { recursive: true, force: true });
+    const run = await captureEvidence({
+      source: job.source,
+      sha: job.commit,
+      items,
+      preview: job.preview ?? { rev: 0 },
+      outDir,
+      environment: job.environment,
+      signal: job.signal,
+      plan: { text: JSON.stringify({ screens, terminals }), files: tapes },
+      ...(this.o.lender ? { lender: this.o.lender } : {}),
+      ...(this.o.env ? { env: this.o.env } : {}),
+      ...(this.o.docker ? { docker: this.o.docker } : {}),
+      ...(this.o.recorderRoot ? { root: this.o.recorderRoot } : {}),
+      log: (m) => job.log?.(`import: ${m}`),
+      attemptId: `import-${randomBytes(4).toString("hex")}`,
+    });
+    // The capture keys its files by item (bi-1/…); the import keys them by part (<artifactId>/…).
+    const parts = run.items.map((x, i): ImportPartCapture => {
+      const p = job.parts[i];
+      if (x.status !== "captured") return { artifactId: p.artifactId, version: p.version, status: "none", reason: x.reason, detail: p.kind === "screen" && !p.page ? NO_PAGE : x.detail, ...(x.log ? { log: x.log } : {}) };
+      if (existsSync(join(outDir, x.itemId))) renameSync(join(outDir, x.itemId), join(outDir, p.artifactId));
+      return { artifactId: p.artifactId, version: p.version, status: "captured", files: x.files.map((f) => ({ ...f, path: `${p.artifactId}/${f.path.split("/").slice(1).join("/")}` })), ...(x.warnings?.length ? { warnings: x.warnings } : {}) };
+    });
+    return { parts, ...(run.path ? { path: run.path } : {}) };
   }
 }
 
@@ -276,12 +274,17 @@ export class SimulatedImport implements ImportRunner {
   readonly simulated = true;
 
   async checks(job: ImportChecksJob): Promise<I.ImportChecksResult> {
-    const report = readTestReport("junit.xml", { workspace: TALLY_FIXTURE, scratch: [], env: {} });
+    // What the service's runner needs, it needs here too (Q3, QA-F5): an environment, the report's path, a test command.
+    const why = job.noEnvironment ?? noTests(job);
+    if (why) return notRun(why);
+    const report = readWholeReport("junit.xml", { workspace: TALLY_FIXTURE, scratch: [], env: {} });
     if (report.status !== "read") return notRun(`The simulated report could not be read: ${report.reason}`);
     return keepReport(job.outDir, report, true);
   }
 
   async capture(job: ImportCaptureJob): Promise<I.ImportCaptureInput> {
+    const noEnvironment = job.noEnvironment;
+    if (noEnvironment !== undefined) return { parts: job.parts.map((p) => ({ artifactId: p.artifactId, version: p.version, status: "none", reason: "not-set-up", detail: noEnvironment })) };
     const keep = (p: CapturePart, name: string, type: "cast" | "txt" | "png", body: Buffer, device?: CaptureDevice) => {
       mkdirSync(join(job.outDir, p.artifactId), { recursive: true, mode: 0o700 });
       writeFileSync(join(job.outDir, p.artifactId, name), body, { mode: 0o600 });
@@ -328,7 +331,7 @@ export function readImportReading(finalText: string, cases: readonly TestCaseRes
   if (!obj) return { refused: 'its answer has no JSON block with the rules: { "rules": [...] }' };
   const parsed = I.parseImportReading({ rules: obj.rules, cases: [] });
   if (!parsed.ok) return { refused: parsed.errors.join("; ") };
-  const byId = new Map(cases.map((c) => [I.testId(c), c]));
+  const byId = I.casesById(cases);
   const unknown: string[] = [];
   for (const r of parsed.value.rules) for (const t of r.tests) if (!byId.has(t)) unknown.push(`rule ${r.id} names ${JSON.stringify(t.length > 80 ? `${t.slice(0, 79)}…` : t)}`);
   if (unknown.length) return { refused: `${unknown.slice(0, 3).join("; ")}${unknown.length > 3 ? `; and ${unknown.length - 3} more` : ""}: not in the baseline report` };
@@ -516,7 +519,8 @@ export class ImportDriver {
     const abort = new AbortController();
     const job = { importId: imp.id, abort };
     this.job = job;
-    const env = this.runner.simulated ? {} : environmentAt(s, imp.commit);
+    // The simulated runner runs nothing, but has an environment only where the project sets one, as the service's (Q3).
+    const env: { environment?: EnvironmentAssignment; reason?: string } = this.runner.simulated ? (s.project.environment ? {} : { reason: NO_ENVIRONMENT }) : environmentAt(s, imp.commit);
     const log = this.o.log;
     const cfg = s.project.checks;
     const parts = kind === "capture" ? captureParts(s, this.o.studioDir?.(s)) : [];
@@ -525,13 +529,10 @@ export class ImportDriver {
     let checkout: string | undefined;
     const run = async () => {
       try {
-        if (needsCopy && this.o.workspaces) {
-          const ws = this.o.workspaces.prepare({ repoPath: s.project.repoPath, projectId: s.project.id, attemptId: `${imp.id}-${kind}-${randomBytes(3).toString("hex")}`, taskId: "IMPORT", stepId: kind, access: "read", baseRef: imp.commit });
-          checkout = ws.path;
-          if (ws.base !== imp.commit) throw new Error(`the copy is not at the import's commit ${short(imp.commit)}`);
-        }
+        // The commit's files from git's object store: no checkout of the repository runs (SR-2).
+        if (needsCopy && this.o.workspaces) checkout = this.o.workspaces.snapshot({ repoPath: s.project.repoPath, projectId: s.project.id, attemptId: `${imp.id}-${kind}-${randomBytes(3).toString("hex")}`, commit: imp.commit }).path;
         mkdirSync(outDir, { recursive: true, mode: 0o700 });
-        const common = { source: checkout, commit: imp.commit, ...(env.environment ? { environment: env.environment } : { noEnvironment: env.reason ?? NO_ENVIRONMENT }), outDir, signal: abort.signal, ...(log ? { log } : {}) };
+        const common = { source: checkout, commit: imp.commit, ...(env.environment ? { environment: env.environment } : {}), ...(env.reason !== undefined ? { noEnvironment: env.reason } : {}), outDir, signal: abort.signal, ...(log ? { log } : {}) };
         const done: Done =
           kind === "checks"
             ? { importId: imp.id, kind, result: await this.runner.checks({ ...common, commands: cfg.commands.filter((c) => c.kind === "check").map((c) => ({ id: c.id, label: c.label, argv: [...c.argv], timeoutMs: cfg.commandTimeoutMinutes * 60_000 })), ...(cfg.testReport ? { testReport: cfg.testReport } : {}) }) }
@@ -599,15 +600,13 @@ const CHECK_FILES = ["package.json", "package-lock.json", "pnpm-lock.yaml", "yar
 /**
  * What the import's Start screen shows for the repository at `path`, read without changing it (git's own records, never
  * `git status`): its commit and branch, its size, the estimate, the kinds of product it shows, and how it runs (C1).
- * Refused, with the reason, when it cannot be read or its own config defines filter drivers, which a checkout runs.
+ * Refused, with the reason, when it cannot be read. The import never checks the repository out (`snapshot`), so its git config runs nothing.
  * `read` reads a file at the commit (the workspace manager's, read-only); without it nothing is read but names.
  */
 export function importStartInfo(path: string, read?: ReadAtBase): ImportStartInfo {
   if (!path.trim()) return { ok: false, reason: "Give the repository's path." };
   const at = repoAt(path);
   if (!at) return { ok: false, reason: `${path} is not a git repository with a commit.` };
-  const filters = localFilterDrivers(path);
-  if (filters.length) return { ok: false, reason: `The repository's own git config defines filter drivers (${filters.join(", ")}). A checkout would run them on this computer, so the import does not read it. Import a fresh clone, or remove them from its .git/config.` };
   const files = repoFiles(path) ?? [];
   const domains = DOMAIN_TABLE.flatMap((row) => {
     const file = files.find((f) => row.test.test(f));
@@ -663,9 +662,10 @@ export function readerEnvelope(state: State, run: StudioRun, where: { folder: st
   const imp = state.studio.import!;
   const confined = run.provider === "claude" ? "The service lets you read only that checkout." : "On Codex the service cannot confine what you read, so read only that checkout.";
   const checks = imp.checks;
+  const ids = [...I.casesById(where.cases).keys()];
   const tests =
     checks.status === "read"
-      ? [`The project's tests ran once at this commit, in the project's container: ${where.cases.length} test${where.cases.length === 1 ? "" : "s"}. Their ids, as a rule names them ("suite::name"):`, ...where.cases.map((c) => `- ${I.testId(c)}`)]
+      ? [`The project's tests ran once at this commit, in the project's container: ${ids.length} test${ids.length === 1 ? "" : "s"}. Their ids, as a rule names them ("suite::name"):`, ...ids.map((id) => `- ${id}`)]
       : [`The project's tests did not run (${checks.status === "not-run" ? checks.reason : "not yet"}). Name no test: give every rule "tests": [].`];
   return [
     `# Import reader run ${run.id}: the rules of ${state.project.name} at commit ${short(imp.commit)}`,

@@ -125,17 +125,3 @@ export function repoAt(repoPath: string): RepoAt | undefined {
     return undefined;
   }
 }
-
-/**
- * The filter drivers the repository's own config defines (filter.<name>.*). A checkout runs them, so a repository from
- * someone else could run a command on this computer that way: the import refuses one that has any. Read with
- * `git config`, which runs nothing. Empty when there are none or the config cannot be read.
- */
-export function localFilterDrivers(repoPath: string): string[] {
-  try {
-    const out = git(repoPath, ["config", "--local", "--name-only", "--get-regexp", "^filter\\."]);
-    return [...new Set(out.split("\n").map((l) => /^filter\.(.+)\.[^.]+$/.exec(l.trim())?.[1]).filter((x): x is string => !!x))].sort();
-  } catch {
-    return [];
-  }
-}

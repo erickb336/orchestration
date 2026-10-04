@@ -138,7 +138,7 @@ describe("the runners", () => {
   it("the simulated runner reads tally's bundled report and gives each terminal demo its bundled cast, labelled simulated", async () => {
     const out = join(dir, "import");
     const signal = new AbortController().signal;
-    expect(await new SimulatedImport().checks({ commit: TALLY_COMMIT, commands: [], outDir: out, signal })).toEqual({ status: "read", counts: { passed: 22, failed: 0, skipped: 0, error: 0 }, reportFile: "checks/report.json", simulated: true });
+    expect(await new SimulatedImport().checks({ commit: TALLY_COMMIT, commands: [{ id: "t", label: "Tests", argv: ["python3", "tests/run.py"], timeoutMs: 1000 }], testReport: "reports/junit.xml", outDir: out, signal })).toEqual({ status: "read", counts: { passed: 22, failed: 0, skipped: 0, error: 0 }, reportFile: "checks/report.json", simulated: true });
     expect(reportCases(out)).toHaveLength(22);
     const capture = await new SimulatedImport().capture({
       commit: TALLY_COMMIT,

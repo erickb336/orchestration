@@ -5,7 +5,7 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -28,14 +28,21 @@ let repo: string;
 let store: Store;
 let scheduler: Scheduler;
 let started: Assignment[];
-/** The commit each run's read-only checkout was at when the run started. */
-let checkoutHeads: string[];
+/** What each run's read-only copy of the repository held when the run started: its files, and whether it has a .git. */
+let reads: { stepId: string; files: string[]; git: boolean }[];
 let now = Date.parse("2026-10-03T09:00:00Z");
 let key = 0;
 const iso = () => new Date(now).toISOString();
 const state = (): State => store.read().state;
 const cmd = (name: string, args: object = {}) => store.command(name, args, `k${++key}`, iso());
 const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
+
+/** Every file under `d`, relative, sorted. */
+function listFiles(d: string, pre = ""): string[] {
+  return readdirSync(d, { withFileTypes: true })
+    .flatMap((e) => (e.isDirectory() ? listFiles(join(d, e.name), `${pre}${e.name}/`) : [`${pre}${e.name}`]))
+    .sort();
+}
 
 /** One scheduler cycle, then wait for the service step it started, so its result is recorded on the next cycle. */
 async function tick() {
@@ -84,17 +91,20 @@ function service(runner: ImportRunner = new SimulatedImport()) {
   const start = claude.start.bind(claude);
   claude.start = (a: Assignment) => {
     started.push(a);
-    const checkout = a.workspace.readRoots?.[0] ?? (a.stepId === "reader" ? a.workspace.path : undefined);
-    if (checkout && existsSync(join(checkout, ".git"))) checkoutHeads.push(execFileSync("git", ["-C", checkout, "rev-parse", "HEAD"], { encoding: "utf8" }).trim());
+    const read = a.workspace.readRoots?.[0] ?? (a.stepId === "reader" || a.stepId === "LEAD" ? a.workspace.path : undefined);
+    if (read && existsSync(read)) reads.push({ stepId: a.stepId, files: listFiles(read), git: existsSync(join(read, ".git")) });
     start(a);
   };
   scheduler = new Scheduler(store, { claude, codex: new FakeAdapter("codex", defaultFakeConfig(), catalog.codex) }, { dataDir, leaseMs: 600_000, workspaces: new WorkspaceManager(join(dir, "worktrees")), imports: runner, studioMedia: media });
 }
 
 /** A new project on tally, a screen and code product on the terminal, and the import started at HEAD. */
-function startImport(o: { helpers?: number | null; budgetUsd?: number; setup?: (s: State) => State } = {}) {
+/** How tally runs, as the Start screen prefills it for the sample: an image, its test command and its JUnit report. */
+const RUNS = { environment: { image: `python:3.13-slim@sha256:${"b".repeat(64)}`, prepare: [], hosts: [] }, tests: { argv: ["python3", "tests/run.py"], report: "reports/junit.xml" } };
+
+function startImport(o: { helpers?: number | null; budgetUsd?: number; setup?: (s: State) => State; runs?: Partial<typeof RUNS> } = {}) {
   if (o.setup) store.update(o.setup, iso());
-  cmd("startImport", { name: "tally", repoPath: repo, commit: git("rev-parse", "HEAD"), branch: "main", domains: ["screen", "code"], devices: ["terminal"], budgetUsd: o.budgetUsd ?? 3, helpers: o.helpers ?? null, size: { sourceFiles: 7, testFiles: 7, kb: 12 } });
+  cmd("startImport", { name: "tally", repoPath: repo, commit: git("rev-parse", "HEAD"), branch: "main", domains: ["screen", "code"], devices: ["terminal"], ...(o.runs ?? RUNS), budgetUsd: o.budgetUsd ?? 3, helpers: o.helpers ?? null, size: { sourceFiles: 7, testFiles: 7, kb: 12 } });
 }
 
 beforeEach(() => {
@@ -103,7 +113,7 @@ beforeEach(() => {
   mkdirSync(dataDir);
   repo = tallyRepo(join(dir, "tally"));
   started = [];
-  checkoutHeads = [];
+  reads = [];
 });
 afterEach(async () => {
   await scheduler?.stop();
@@ -177,9 +187,9 @@ describe("the import of tally, end to end with the fake runtime", () => {
     git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "later");
     await until((s) => I.importStatus(s) === "review", "the import in review");
     expect(I.importParts(state()).find((a) => a.title === "tally report")!.provenance).toMatchObject({ commit, files: ["tally/cli.py", "tally/report.py"] });
-    // Every run read a checkout at the import's commit, and was told that commit.
-    expect(checkoutHeads.length).toBe(3);
-    expect(new Set(checkoutHeads)).toEqual(new Set([commit]));
+    // Every run read the import's commit (the file HEAD removed is there), with no .git, and was told that commit.
+    expect(reads.filter((r) => r.stepId !== "LEAD").map((r) => r.stepId).sort()).toEqual(["designer", "designer", "reader"]);
+    for (const r of reads) expect([r.files.includes("tally/report.py"), r.git]).toEqual([true, false]);
     for (const a of started.filter((x) => x.studio)) expect(a.prompt).toContain(`commit ${commit.slice(0, 7)}`);
   });
 });
@@ -295,11 +305,34 @@ describe("the import's controls", () => {
   });
 });
 
+describe("a hostile repository (SR-2)", () => {
+  it("whose git config includes a filter: no step of the import runs it, the copies for the environment included", async () => {
+    // The repository's .git/config includes a file that sets filter "evil" on every file; its smudge writes a marker.
+    const marker = join(dir, "the-filter-ran");
+    const evil = join(dir, "evil.sh");
+    writeFileSync(evil, `#!/bin/sh\ntouch "${marker}"\ncat\n`, { mode: 0o755 });
+    writeFileSync(join(repo, ".gitattributes"), "* filter=evil\n");
+    git("-c", "user.name=t", "-c", "user.email=t@t", "add", "-A");
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "attributes");
+    writeFileSync(join(repo, ".git", "hostile.cfg"), `[filter "evil"]\n\tsmudge = ${evil}\n`);
+    git("config", "--local", "include.path", "hostile.cfg");
+    // With an environment set, the checks and the capture copy the commit too; Docker is not there to run them.
+    const copies: string[] = [];
+    const lender = { withPrepared: async (o: { workspace: string }) => (copies.push(o.workspace), { ok: false as const, reason: "unavailable" as const, detail: "Docker is not running", prepare: [] }) };
+    service(new EnvironmentImport({ lender: lender as never, recorderRoot: join(dir, "recorder") }));
+    cmd("startImport", { name: "tally", repoPath: repo, commit: git("rev-parse", "HEAD"), domains: ["screen", "code"], devices: ["terminal"], environment: { image: `python:3.13-slim@sha256:${"b".repeat(64)}`, prepare: [], hosts: [] }, tests: { argv: ["python3", "tests/run.py"], report: "reports/junit.xml" }, budgetUsd: 3, helpers: null, size: { sourceFiles: 7, testFiles: 7, kb: 12 } });
+    await until((s) => I.importStatus(s) === "review" && s.leadRuns.length > 0, "the import in review, and the lead's reply");
+    expect(copies.length).toBeGreaterThan(0);
+    expect(reads.length).toBeGreaterThanOrEqual(4);
+    expect(existsSync(marker)).toBe(false);
+  });
+});
+
 describe("with no Docker or no environment (Q3)", () => {
   it("records the checks as not run and the parts as not recorded, each with the reason; nothing runs on this computer", async () => {
     // The project has no environment: the service's own runner runs nothing, and never falls back to the host.
     service(new EnvironmentImport({ lender: { withPrepared: () => Promise.reject(new Error("the environment must not be used without one")) }, recorderRoot: join(dir, "recorder") }));
-    startImport();
+    startImport({ runs: {} });
     await until((s) => I.importStatus(s) === "review", "the import in review");
     const imp = state().studio.import!;
     expect(imp.checks).toMatchObject({ status: "not-run" });
@@ -309,12 +342,30 @@ describe("with no Docker or no environment (Q3)", () => {
     expect(imp.capture!.parts.map((p) => p.status === "none" && p.reason)).toEqual(["not-set-up", "not-set-up", "not-set-up"]);
   });
 
+  it("the simulated import says the same as the service's (QA-F5): no environment, not run and not recorded; no test command, not run", async () => {
+    service();
+    startImport({ runs: {} });
+    await until((s) => I.importStatus(s) === "review", "the import in review");
+    let imp = state().studio.import!;
+    expect(imp.checks.status === "not-run" && imp.checks.reason).toMatch(/^The project has no environment, so nothing of the repository runs/);
+    expect(imp.reading!.rules.every((r) => r.tests.length === 0)).toBe(true);
+    expect(imp.capture!.parts.map((p) => p.status === "none" && [p.reason, p.detail.slice(0, 32)])).toEqual(Array(3).fill(["not-set-up", "The project has no environment, "]));
+    await scheduler.stop();
+    store.close();
+    rmSync(join(dataDir, "db.sqlite"), { force: true });
+    service();
+    startImport({ runs: { environment: RUNS.environment } });
+    await until((s) => I.importStatus(s) === "review", "the second import in review");
+    imp = state().studio.import!;
+    expect(imp.checks).toMatchObject({ status: "not-run", reason: "No JUnit report path is set, so the import cannot read the tests' results. Set it in Settings › Checks." });
+    expect(imp.capture!.simulated).toBe(true);
+    expect(imp.capture!.parts.map((p) => p.status)).toEqual(["captured", "captured", "captured"]);
+  });
+
   it("records the reason when Docker is not running: the environment is set, the container cannot start", async () => {
     const lender = { withPrepared: async () => ({ ok: false as const, reason: "unavailable" as const, detail: "Docker is not running", prepare: [] }) };
     service(new EnvironmentImport({ lender, recorderRoot: join(dir, "recorder") }));
     startImport();
-    cmd("setEnvironment", { environment: { image: "python:3.13-slim-trixie@sha256:bb2988715db2cf7ace7b53f38f3cffbef7c7046a656bee66245eb0ed386e2e81", prepare: [], hosts: [] } });
-    cmd("setChecks", { config: { ...state().project.checks, commands: [{ id: "test", label: "tests", kind: "check", argv: ["python3", "tests/run.py"] }], testReport: "reports/junit.xml" } });
     await until((s) => I.importStatus(s) === "review", "the import in review");
     const imp = state().studio.import!;
     expect(imp.checks).toMatchObject({ status: "not-run", reason: "The project's environment could not run: Docker is not running" });
