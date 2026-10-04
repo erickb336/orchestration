@@ -5,7 +5,7 @@
 
 import { useState } from "react";
 import { fmtUsd, importSpend } from "../../domain/spend";
-import { importParts, importQuestions, ruleConfidence } from "../../domain/studio/import";
+import { importParts, importQuestions, ruleConfidence, ruleTitle } from "../../domain/studio/import";
 import type { ImportRule, StudioArtifact } from "../../domain/studio/types";
 import { Banner, Button, ButtonLink, Card, Chip, Disclosure, Field, Meter, SimulatedChip, Textarea } from "../kit";
 import { cx } from "../kit/cx";
@@ -61,16 +61,20 @@ export function ImportReview() {
       else delete next[key];
       return next;
     });
-  const titleOf = (key: string) => (key.startsWith("rule:") ? (rules.find((r) => r.id === key.slice(5))?.area ?? key.slice(5)) : (parts.find((p) => p.id === key.slice(5))?.title ?? key.slice(5)));
+  const titleOf = (key: string) => {
+    const rule = key.startsWith("rule:") ? rules.find((r) => r.id === key.slice(5)) : undefined;
+    return rule ? ruleTitle(rule) : (parts.find((p) => p.id === key.slice(5))?.title ?? key.slice(5));
+  };
   const entries = Object.entries(draft).filter(([, a]) => a.option);
   const missingWords = entries.find(([, a]) => (a.option === "neither" || a.option === "correct") && !a.text?.trim());
-  const blocker = disabled ? "The service is offline. Your answers stay here until it reconnects." : missingWords ? `Write what is right for ${titleOf(missingWords[0])}.` : !entries.length && !note.trim() ? "Answer a question, correct an item, or write a note first." : undefined;
+  // With no answer, Send sends the review with every question open (UX-3).
+  const blocker = disabled ? "The service is offline. Your answers stay here until it reconnects." : missingWords ? `Write what is right for ${titleOf(missingWords[0])}.` : undefined;
 
   const sendAll = async () => {
     if (blocker || sending) return;
     setSending(true);
     const answers = entries.map(([key, a]) => ({ on: targetOf(key), option: a.option!, ...(a.option === "correct" ? { correction: a.correction ?? "change" } : {}), ...(a.text?.trim() ? { text: a.text.trim() } : {}) }));
-    const ok = (!answers.length || (await send("answerImport", { answers })).ok) && (!note.trim() || (await send("postMessage", { text: note.trim() })).ok);
+    const ok = (await send("answerImport", { answers })).ok && (!note.trim() || (await send("postMessage", { text: note.trim() })).ok);
     setSending(false);
     if (!ok) return;
     setDraft({});
@@ -180,8 +184,8 @@ export function ImportReview() {
               {sending ? "Sending…" : "Send to the lead"}
             </Button>
           </div>
-          {imp.answers.length > 0 && (
-            <Banner tone="done" title={`${imp.answers.length} answer${imp.answers.length === 1 ? " is" : "s are"} recorded.`} actions={<ButtonLink size="small" variant="primary" href={BASELINE_HASH}>Lock in the baseline…</ButtonLink>}>
+          {imp.sentAt && (
+            <Banner tone="done" title={imp.answers.length ? `${imp.answers.length} answer${imp.answers.length === 1 ? " is" : "s are"} recorded.` : "You sent the review with every question open."} actions={<ButtonLink size="small" variant="primary" href={BASELINE_HASH}>Lock in the baseline…</ButtonLink>}>
               The baseline follows your answers. You can change an answer here until you lock it in.
             </Banner>
           )}

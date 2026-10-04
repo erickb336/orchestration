@@ -235,6 +235,14 @@ describe("3 · Review (C5, C8, C9, C15)", () => {
     expect(noDocker).toContain("tally add terminal demo Read from the code: not recorded, because docker is not available on this computer, so nothing was recorded.");
   });
 
+  it("with no answer, Send is open: it sends the review with every question open, and leads on to the baseline (UX-3)", () => {
+    const html = renderScreen(<ImportReview />, stage("review"), svc);
+    expect(html).toMatch(/<button[^>]*class="k-btn k-btn--primary"[^>]*>Send to the lead<\/button>/);
+    expect(html).not.toMatch(/aria-disabled="true"[^>]*>Send to the lead/);
+    const sent = run(stage("review"), "answerImport", { answers: [] }, at(100)).state;
+    expect(text(<ImportReview />, sent)).toContain("You sent the review with every question open. The baseline follows your answers. You can change an answer here until you lock it in. Lock in the baseline…");
+  });
+
   it("each part's tile shows the part: its recording, its pseudo-code or data, or its words (UX-8)", () => {
     const sc = tallyImport("review");
     const s = structuredClone(sc.s);
