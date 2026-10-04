@@ -18,7 +18,7 @@ import { BaselineLockIn } from "./BaselineLockIn";
 import { ImportPanel } from "./ImportPanel";
 import { ImportReview } from "./ImportReview";
 import { TALLY_START_INFO } from "./importScene";
-import { UNANSWERED_TEXT, startBlocker, startDraft, type FoundRepository } from "./importView";
+import { UNANSWERED_TEXT, previewSetting, startBlocker, startDraft, type FoundRepository } from "./importView";
 import { StartForm } from "./StartImport";
 
 const svc = testService({ prototypePort: 5320 });
@@ -74,6 +74,20 @@ describe("1 · Start (C1, C7)", () => {
     const n = start(noEnv);
     expect(n).toContain("How it runs missing the environment");
     expect(n).toContain("Without an environment, the import never runs your code: the tests do not run, nothing is recorded, and every rule is read from the code (inferred).");
+  });
+
+  it("for a screen product on a desktop or a phone, takes the preview command and its port, which the capture opens the screens on (U2-F2)", () => {
+    const web: FoundRepository = { ...TALLY_START_INFO, domains: [{ domain: "screen", device: "desktop", because: "index.html: a web page" }] };
+    const t = start(web);
+    expect(t).toContain("Preview command");
+    expect(t).toContain("What serves the app in the project's container, on the port. The capture opens each screen's page there. Without it, the screens are not recorded.");
+    // A CLI only (tally): no preview to give.
+    expect(start(TALLY_START_INFO)).not.toContain("Preview command");
+    const d = { ...startDraft(web), preview: "python3 -m http.server 8000 --bind 127.0.0.1", port: "8000" };
+    expect(previewSetting(d)).toEqual({ preview: ["python3", "-m", "http.server", "8000", "--bind", "127.0.0.1"], port: 8000 });
+    expect(previewSetting({ ...d, preview: " " })).toBeUndefined();
+    expect(startBlocker({ ...d, port: "80" })).toBe("The preview's port is a number from 1024 to 65535.");
+    expect(startBlocker({ ...d, port: "" })).toBe("The preview's port is a number from 1024 to 65535.");
   });
 
   it("does not start without a name, a kind, a device or a positive budget", () => {

@@ -19,7 +19,7 @@ import { useStore } from "../store";
 import { DOMAIN_CHOICES, toggleDomain } from "../studio/studioView";
 import { SpendBar } from "./ImportPanel";
 import type { ImportStartInfo } from "../../api";
-import { argvLine, foundBecause, foundLine, howItRuns, startBlocker, startDraft, startInfoRequest, testCheck, type FoundRepository, type StartDraft } from "./importView";
+import { argvLine, foundBecause, foundLine, hasPages, howItRuns, previewSetting, startBlocker, startDraft, startInfoRequest, testCheck, type FoundRepository, type StartDraft } from "./importView";
 import "./import.css";
 
 type Loaded = { status: "idle" } | { status: "loading" } | { status: "failed"; message: string } | { status: "ok"; info: ImportStartInfo };
@@ -92,11 +92,13 @@ export function StartForm({ info, onCancel }: { info: FoundRepository; onCancel?
     setBusy(true);
     const env = d.environment && ("devcontainer" in d.environment ? { prepare: [], hosts: [], devcontainer: d.environment.devcontainer } : { image: d.environment.image, prepare: d.environment.prepare, hosts: [] });
     const { rev: _rev, ...checks } = DEFAULT_CHECKS;
+    const preview = previewSetting(d);
     const ok = await sendInOrder([
       () => send("initProject", { name, repoPath: info.path, vision: "", focus: "" }),
       () => send("setDomains", { domains: d.domains }),
       () => send("setDevices", { devices: d.devices }),
       () => (env ? send("setEnvironment", { environment: env }) : null),
+      () => (preview ? send("setPreview", { preview }) : null),
       () => (d.testCommand.trim() ? send("setChecks", { config: { ...checks, enabled: true, commands: [testCheck(d.testCommand)], ...(d.testReport.trim() ? { testReport: d.testReport.trim() } : {}) } }) : null),
       () => send("startImport", { commit: info.commit, ...(info.branch ? { branch: info.branch } : {}), budgetUsd: Number(d.budget), helpers: d.helpers ? d.helperCap : null, size: info.size }),
     ]);
@@ -271,6 +273,16 @@ function HowItRunsFields({ info, d, set }: { info: FoundRepository; d: StartDraf
       <Field label="JUnit report path" hint={info.testReport ? "Prefilled: where that test command writes its report." : "Not found. Where the test command writes its JUnit report, from the repository's root."}>
         <Input type="text" className="s-mono" value={d.testReport} onChange={(e) => set({ testReport: e.target.value })} placeholder="reports/junit.xml" spellCheck={false} />
       </Field>
+      {hasPages(d) && (
+        <div className="imp-preview">
+          <Field label="Preview command" hint="What serves the app in the project's container, on the port. The capture opens each screen's page there. Without it, the screens are not recorded.">
+            <Input type="text" className="s-mono" value={d.preview} onChange={(e) => set({ preview: e.target.value })} placeholder="npm run preview" spellCheck={false} />
+          </Field>
+          <Field label="Port">
+            <Input type="text" inputMode="numeric" className="s-mono" value={d.port} onChange={(e) => set({ port: e.target.value })} placeholder="4173" />
+          </Field>
+        </div>
+      )}
     </div>
   );
 }

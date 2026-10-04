@@ -27,7 +27,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeF
 import { basename, dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as I from "../../src/domain/studio/import";
-import { isCapturedKind, type CaptureItem, type CapturedKind, type PreviewSetting } from "../../src/domain/studio/evidence";
+import { CAPTURE_DEVICES, isCapturedKind, type CaptureDevice, type CaptureItem, type CapturedKind, type PreviewSetting } from "../../src/domain/studio/evidence";
 import * as R from "../../src/domain/studio/runs";
 import { latestVersion, isInsidePath } from "../../src/domain/studio/studio";
 import { isUnderWay, type ImportStep, type ImportPartCapture, type ImportRule, type StudioRun } from "../../src/domain/studio/types";
@@ -48,6 +48,8 @@ import type { ImportStartInfo } from "../../src/api";
 
 /** The bundled tally fixture: the invented repository, its canned report and casts, the parts the fake runtime hands in. */
 export const TALLY_FIXTURE = fileURLToPath(new URL("./fixtures/tally/", import.meta.url));
+/** The bundled screen sample: one static page, and its screenshots on each device, recorded once in Docker. */
+export const WEB_FIXTURE = fileURLToPath(new URL("./fixtures/import-web/", import.meta.url));
 
 /**
  * tally as a git repository at `dir`, made from the bundled fixture with one commit by a fixed author at a fixed time,
@@ -122,7 +124,13 @@ export interface CapturePart {
   title: string;
   /** A terminal demo's or TUI's tape: its path in the part and its text. It runs the real command, at the repository's root. */
   tape?: { path: string; text: string };
+  /** A screen's page in the running app, which the preview serves, and the devices it is shot on. */
+  page?: string;
+  devices?: Device[];
 }
+
+/** Why a screen without a page is not recorded. */
+const NO_PAGE = "The designer gave no page for this screen, so the capture cannot open it.";
 
 export interface ImportCaptureJob {
   source?: string;
@@ -223,8 +231,9 @@ export class EnvironmentImport implements ImportRunner {
         writeFileSync(join(src, tape), p.tape.text);
         return [{ item: `bi-${i + 1}`, tape }];
       });
+      const screens = job.parts.flatMap((p, i) => (p.kind === "screen" && p.page ? [{ item: `bi-${i + 1}`, path: p.page, devices: CAPTURE_DEVICES.filter((d) => p.devices?.includes(d)) }] : []));
       mkdirSync(join(src, ".orchestrator"), { recursive: true });
-      writeFileSync(join(src, ".orchestrator", "capture.json"), JSON.stringify({ screens: [], terminals }));
+      writeFileSync(join(src, ".orchestrator", "capture.json"), JSON.stringify({ screens, terminals }));
       rmSync(outDir, { recursive: true, force: true });
       const run = await captureEvidence({
         source: src,
@@ -244,7 +253,7 @@ export class EnvironmentImport implements ImportRunner {
       // The capture keys its files by item (bi-1/…); the import keys them by part (<artifactId>/…).
       const parts = run.items.map((x, i): ImportPartCapture => {
         const p = job.parts[i];
-        if (x.status !== "captured") return { artifactId: p.artifactId, version: p.version, status: "none", reason: x.reason, detail: x.detail, ...(x.log ? { log: x.log } : {}) };
+        if (x.status !== "captured") return { artifactId: p.artifactId, version: p.version, status: "none", reason: x.reason, detail: p.kind === "screen" && !p.page ? NO_PAGE : x.detail, ...(x.log ? { log: x.log } : {}) };
         if (existsSync(join(outDir, x.itemId))) renameSync(join(outDir, x.itemId), join(outDir, p.artifactId));
         return { artifactId: p.artifactId, version: p.version, status: "captured", files: x.files.map((f) => ({ ...f, path: `${p.artifactId}/${f.path.split("/").slice(1).join("/")}` })), ...(x.warnings?.length ? { warnings: x.warnings } : {}) };
       });
@@ -260,7 +269,8 @@ export const NO_ENVIRONMENT = "The project has no environment, so nothing of the
 
 /**
  * The fake runtime's runner: nothing runs. The checks read the bundled tally report (22 tests, all pass), and the
- * capture gives each terminal demo the bundled cast of its folder's name, else none. Every record says simulated.
+ * capture gives each terminal demo the bundled cast of its folder's name, and each screen the web sample's screenshots
+ * of its page's name, else none. Every record says simulated.
  */
 export class SimulatedImport implements ImportRunner {
   readonly simulated = true;
@@ -272,7 +282,20 @@ export class SimulatedImport implements ImportRunner {
   }
 
   async capture(job: ImportCaptureJob): Promise<I.ImportCaptureInput> {
+    const keep = (p: CapturePart, name: string, type: "cast" | "txt" | "png", body: Buffer, device?: CaptureDevice) => {
+      mkdirSync(join(job.outDir, p.artifactId), { recursive: true, mode: 0o700 });
+      writeFileSync(join(job.outDir, p.artifactId, name), body, { mode: 0o600 });
+      return { path: `${p.artifactId}/${name}`, type, bytes: body.length, sha256: sha256(body), ...(device ? { device } : {}) };
+    };
     const parts = job.parts.map((p): ImportPartCapture => {
+      if (p.kind === "screen") {
+        // A screen of the bundled web sample: its screenshot on each device, recorded once in Docker.
+        if (!p.page) return { artifactId: p.artifactId, version: p.version, status: "none", reason: "not-in-plan", detail: NO_PAGE };
+        const key = basename(p.page).replace(/\.html?$/, "");
+        const shots = CAPTURE_DEVICES.filter((d) => p.devices?.includes(d)).map((d) => ({ d, file: join(WEB_FIXTURE, "shots", `${key}-${d}.png`) }));
+        if (!/^[a-z]+$/.test(key) || !shots.length || !shots.every((x) => existsSync(x.file))) return { artifactId: p.artifactId, version: p.version, status: "none", reason: "unavailable", detail: "Simulated: the fake runtime records only the bundled samples' parts." };
+        return { artifactId: p.artifactId, version: p.version, status: "captured", files: shots.map((x) => keep(p, `${x.d}.png`, "png", readFileSync(x.file), x.d)) };
+      }
       const key = p.tape ? basename(dirname(p.tape.path)) : "";
       const cast = join(TALLY_FIXTURE, "casts", `${key}.cast`);
       if (!p.tape || !/^[a-z]+$/.test(key) || !existsSync(cast)) return { artifactId: p.artifactId, version: p.version, status: "none", reason: "unavailable", detail: "Simulated: the fake runtime records only tally's terminal demos." };
@@ -287,17 +310,7 @@ export class SimulatedImport implements ImportRunner {
           .join("")
           .replace(/\r/g, ""),
       );
-      mkdirSync(join(job.outDir, p.artifactId), { recursive: true, mode: 0o700 });
-      const files = (
-        [
-          ["demo.cast", "cast", data],
-          ["demo.txt", "txt", text],
-        ] as const
-      ).map(([name, type, body]) => {
-        writeFileSync(join(job.outDir, p.artifactId, name), body, { mode: 0o600 });
-        return { path: `${p.artifactId}/${name}`, type, bytes: body.length, sha256: sha256(body) };
-      });
-      return { artifactId: p.artifactId, version: p.version, status: "captured", files };
+      return { artifactId: p.artifactId, version: p.version, status: "captured", files: [keep(p, "demo.cast", "cast", data), keep(p, "demo.txt", "txt", text)] };
     });
     return { parts, simulated: true };
   }
@@ -432,7 +445,8 @@ export function captureParts(s: State, studioDir: string | undefined): CapturePa
           /* not readable: the capture says it has nothing to type */
         }
       }
-      return { artifactId: a.id, version: a.version, kind: a.kind as CapturedKind, title: a.title, ...(tape ? { tape } : {}) };
+      const page = a.kind === "screen" ? a.provenance?.page : undefined;
+      return { artifactId: a.id, version: a.version, kind: a.kind as CapturedKind, title: a.title, ...(tape ? { tape } : {}), ...(page ? { page, devices: a.devices } : {}) };
     });
 }
 

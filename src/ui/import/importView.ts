@@ -5,6 +5,7 @@
 
 import type { ImportStartInfo } from "../../api";
 import { PRICES, estimateUsd, fmtUsd, importSpend, importStop } from "../../domain/spend";
+import { PREVIEW_PORTS } from "../../domain/studio/evidence";
 import {
   answerEffect,
   changeRequests,
@@ -66,9 +67,20 @@ export interface StartDraft {
   /** The test command, as one line; "" for none. */
   testCommand: string;
   testReport: string;
+  /** For a screen product on a desktop or a phone: what serves the app, as one line, and its port ("" for none). */
+  preview: string;
+  port: string;
   budget: string;
   helpers: boolean;
   helperCap: number;
+}
+
+/** Whether the product has screens the capture opens in a browser: a screen product on a desktop or a phone. */
+export const hasPages = (d: Pick<StartDraft, "domains" | "devices">) => d.domains.includes("screen") && d.devices.some((x) => x !== "terminal");
+
+/** The preview setting Start sends (setPreview), or undefined when it has no command or the product has no pages. */
+export function previewSetting(d: StartDraft): { preview: string[]; port: number } | undefined {
+  return hasPages(d) && d.preview.trim() ? { preview: splitLine(d.preview), port: Number(d.port) } : undefined;
 }
 
 /** The form as Start fills it from what the repository shows: each kind, device and how-it-runs value that was found. */
@@ -83,6 +95,8 @@ export function startDraft(info: FoundRepository): StartDraft {
     environment: dc?.sha256 && !dc.refused ? { devcontainer: { file: dc.file, sha256: dc.sha256 } } : p ? { image: p.image, prepare: p.prepare } : null,
     testCommand: test ? argvLine(test.argv) : "",
     testReport: info.testReport?.path ?? "",
+    preview: "",
+    port: "",
     budget: "3",
     helpers: false,
     helperCap: 2,
@@ -115,6 +129,8 @@ export function startBlocker(d: StartDraft): string | undefined {
   if (!d.devices.length) return "Choose at least one device.";
   const usd = Number(d.budget);
   if (!d.budget.trim() || !Number.isFinite(usd) || usd <= 0) return "The import budget is a positive number of dollars.";
+  const p = previewSetting(d);
+  if (p && !(Number.isInteger(p.port) && p.port >= PREVIEW_PORTS.min && p.port <= PREVIEW_PORTS.max)) return `The preview's port is a number from ${PREVIEW_PORTS.min} to ${PREVIEW_PORTS.max}.`;
   return undefined;
 }
 

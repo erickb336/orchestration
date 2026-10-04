@@ -4,9 +4,9 @@
 // Gated on Docker: skipped, with the reason, when it is not running. Pulls the official Python image by digest the
 // first time.
 
-import { mkdtempSync, readFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { IMAGE_TABLE, environmentPlan, environmentSource } from "../../src/domain/environment";
 import { PreparedEnvironments } from "../environment/prepared";
@@ -17,6 +17,7 @@ import { EnvironmentImport, TALLY_FIXTURE, reportCases, tallyRepo, type CaptureP
 const docker = findDocker(process.env);
 const up = docker ? await runDocker(docker, ["version", "--format", "{{.Server.Version}}"], { env: dockerEnv(process.env), timeoutMs: 20_000 }) : undefined;
 const ready = !!up && up.code === 0 && !!up.stdout.trim();
+const WEB_FIXTURE = resolve(__dirname, "fixtures", "import-web", "repo");
 const skipReason = ready ? "" : ` (skipped: ${docker ? "Docker is not running" : "Docker is not installed"})`;
 
 /** The test's project, so its prepared images (orc-env-<project>:<key>) are removed afterwards, and only its. */
@@ -83,5 +84,34 @@ describe(`the import of tally, in Docker${skipReason}`, () => {
     expect(transcript(1)).toContain("cy pays ana 23.00");
     expect(transcript(2)).toContain("2026-10-01,ana,42.00,Dinner");
     expect(capture.parts.every((p) => p.status === "captured" && p.files.some((f) => f.type === "cast" && f.path.startsWith(`${p.artifactId}/`)))).toBe(true);
+  }, 900_000);
+
+  it.skipIf(!ready)("records a screen product's page on each of its devices, from the preview the owner set (U2-F2)", async () => {
+    // A small screen product: one static page, served by Python's standard library in the project's image.
+    const src = join(scratch, "web");
+    cpSync(WEB_FIXTURE, src, { recursive: true });
+    const setting = { rev: 1, image: IMAGE_TABLE.find((r) => r.markers.includes("requirements.txt"))!.image, prepare: [], hosts: [] };
+    const out = join(scratch, "web-capture");
+    const parts: CapturePart[] = [
+      { artifactId: "art-board", version: 1, kind: "screen", title: "Trip board", page: "/board.html", devices: ["desktop", "mobile"] },
+      { artifactId: "art-none", version: 1, kind: "screen", title: "No page", devices: ["desktop"] },
+    ];
+    const capture = await runner.capture({ source: src, commit: "0".repeat(40), parts, preview: { rev: 1, preview: ["python3", "-m", "http.server", "8000", "--bind", "127.0.0.1"], port: 8000 }, environment: { plan: environmentPlan(environmentSource(undefined, setting).source!, setting), project: PROJECT }, outDir: out, signal: new AbortController().signal });
+    const [board, none] = capture.parts;
+    if (board.status !== "captured") throw new Error(JSON.stringify(board));
+    expect(board.files.map((f) => [f.path, f.type, f.device])).toEqual([
+      ["art-board/desktop.png", "png", "desktop"],
+      ["art-board/mobile.png", "png", "mobile"],
+    ]);
+    const size = (rel: string) => {
+      const b = readFileSync(join(out, rel));
+      return [b.readUInt32BE(16), b.readUInt32BE(20)];
+    };
+    // Desktop at 1280×800; mobile at 390×844, three pixels to each point.
+    expect([size("art-board/desktop.png"), size("art-board/mobile.png")]).toEqual([
+      [1280, 800],
+      [1170, 2532],
+    ]);
+    expect(none).toMatchObject({ artifactId: "art-none", status: "none", reason: "not-in-plan", detail: "The designer gave no page for this screen, so the capture cannot open it." });
   }, 900_000);
 });

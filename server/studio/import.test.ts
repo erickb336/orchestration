@@ -152,8 +152,30 @@ describe("the runners", () => {
     expect(capture.simulated).toBe(true);
     expect(capture.parts[0]).toMatchObject({ artifactId: "art-1", status: "captured", files: [{ path: "art-1/demo.cast", type: "cast" }, { path: "art-1/demo.txt", type: "txt" }] });
     expect(readFileSync(join(out, "art-1", "demo.txt"), "utf8")).toContain("> tally add 42 Dinner --by ana\nAdded 42.00 EUR for Dinner");
-    expect(capture.parts[1]).toMatchObject({ status: "none", reason: "unavailable" });
+    expect(capture.parts[1]).toMatchObject({ status: "none", reason: "not-in-plan" });
     expect(readdirSync(join(out, "art-1")).sort()).toEqual(["demo.cast", "demo.txt"]);
+  });
+
+  it("the simulated runner gives a screen of the bundled web sample its bundled screenshots, one for each device (U2-F2)", async () => {
+    const out = join(dir, "import");
+    const capture = await new SimulatedImport().capture({
+      commit: TALLY_COMMIT,
+      parts: [
+        { artifactId: "art-1", version: 1, kind: "screen", title: "Trip board", page: "/board.html", devices: ["desktop", "mobile"] },
+        { artifactId: "art-2", version: 1, kind: "screen", title: "No page", devices: ["desktop"] },
+      ],
+      outDir: out,
+      signal: new AbortController().signal,
+    });
+    expect(capture.parts[0]).toMatchObject({
+      status: "captured",
+      files: [
+        { path: "art-1/desktop.png", type: "png", device: "desktop", bytes: readFileSync(join(TALLY_FIXTURE, "..", "import-web", "shots", "board-desktop.png")).length },
+        { path: "art-1/mobile.png", type: "png", device: "mobile" },
+      ],
+    });
+    expect(readFileSync(join(out, "art-1", "desktop.png")).subarray(1, 4).toString()).toBe("PNG");
+    expect(capture.parts[1]).toMatchObject({ status: "none", detail: "The designer gave no page for this screen, so the capture cannot open it." });
   });
 
   it("the service's runner runs nothing without an environment, and says why", async () => {
