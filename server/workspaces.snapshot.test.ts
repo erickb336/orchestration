@@ -13,17 +13,26 @@ import { SNAPSHOT_CAPS, WorkspaceManager } from "./workspaces";
 
 let dir: string;
 let repo: string;
-let home: string | undefined;
+// This computer's git config (a CI runner's git-lfs, for one) stays out: the test sets every config git reads.
+const CONFIG_ENV = ["HOME", "XDG_CONFIG_HOME", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL"] as const;
+let saved: Record<string, string | undefined>;
 const git = (...args: string[]) => execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgSign=false", "-c", "core.hooksPath=/dev/null", ...args], { encoding: "utf8" }).trim();
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "orc032-snapshot-"));
   repo = join(dir, "repo");
-  home = process.env.HOME;
+  saved = Object.fromEntries(CONFIG_ENV.map((k) => [k, process.env[k]]));
+  delete process.env.GIT_CONFIG_GLOBAL;
+  process.env.HOME = dir;
+  process.env.XDG_CONFIG_HOME = dir;
+  process.env.GIT_CONFIG_NOSYSTEM = "1";
   execFileSync("git", ["init", "-q", "-b", "main", repo]);
 });
 afterEach(() => {
-  process.env.HOME = home;
+  for (const k of CONFIG_ENV) {
+    if (saved[k] === undefined) delete process.env[k];
+    else process.env[k] = saved[k];
+  }
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -48,7 +57,6 @@ function hostileRepository(): { marker: string; lfsSeen: string; commit: string 
   git("config", "--local", "include.path", "hostile.cfg");
   const smudge = join(dir, "lfs-smudge.sh");
   writeFileSync(smudge, `#!/bin/sh\ntouch "${lfsSeen}"\ncat\n`, { mode: 0o755 });
-  process.env.HOME = dir;
   writeFileSync(join(dir, ".gitconfig"), `[filter "lfs"]\n\tsmudge = ${smudge}\n\tclean = cat\n`);
   return { marker, lfsSeen, commit: git("rev-parse", "HEAD") };
 }
