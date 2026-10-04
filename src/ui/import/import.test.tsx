@@ -303,21 +303,32 @@ describe("3 · Review (C5, C8, C9, C15)", () => {
     const kept = new Map<string, string>();
     const g = globalThis as { window?: unknown };
     const prev = g.window;
-    g.window = { localStorage: { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v), removeItem: (k: string) => void kept.delete(k) } };
+    g.window = { localStorage: { get length() { return kept.size; }, key: (i: number) => [...kept.keys()][i] ?? null, getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v), removeItem: (k: string) => void kept.delete(k) } };
+    const pid = s.project.id;
+    const iid = s.studio.import!.id;
     try {
       expect(text(<ImportReview />, s)).toContain("0 of 5 answered.");
-      saveReviewDraft(s.studio.import!.id, { draft: { "rule:R15": { option: "confirm" } }, note: "Check the rounding." });
+      saveReviewDraft(pid, iid, { draft: { "rule:R15": { option: "confirm" } }, note: "Check the rounding." });
       const t = text(<ImportReview />, s);
       expect(t).toContain("1 of 5 answered. 4 stay open if you send now.");
       expect(t).toContain("Confirmed. It goes into the baseline as it is.");
       expect(renderScreen(<ImportReview />, s, svc)).toContain("Check the rounding.</textarea>");
       // What another import kept, or what is not an answer, is not shown.
-      expect(loadReviewDraft("another-import")).toEqual({ draft: {}, note: "" });
       kept.set([...kept.keys()][0], '{"draft":{"rule:R15":{"option":7},"x":{"option":"confirm"}},"note":3}');
-      expect(loadReviewDraft(s.studio.import!.id)).toEqual({ draft: {}, note: "" });
+      expect(loadReviewDraft(pid, iid)).toEqual({ draft: {}, note: "" });
       // Once sent, nothing is kept.
-      saveReviewDraft(s.studio.import!.id, { draft: {}, note: "" });
+      saveReviewDraft(pid, iid, { draft: {}, note: "" });
       expect(kept.size).toBe(0);
+      // A fresh data folder on the same address repeats the import id, but not the project id (UX26-1): the second
+      // demo's review starts empty, and opening it forgets what the first demo kept.
+      saveReviewDraft(pid, iid, { draft: { "rule:R15": { option: "confirm" } }, note: "Check the rounding." });
+      kept.set("orchestration.import.p-old.import-9.review", '{"draft":{},"note":"old"}');
+      kept.set("orchestration.other", "stays");
+      const second: State = { ...s, project: { ...s.project, id: "p-second-demo" } };
+      const t2 = text(<ImportReview />, second);
+      expect(t2).toContain("0 of 5 answered.");
+      expect(renderScreen(<ImportReview />, second, svc)).not.toContain("Check the rounding.");
+      expect([...kept.keys()]).toEqual(["orchestration.other"]);
     } finally {
       g.window = prev;
     }

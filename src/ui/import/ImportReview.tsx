@@ -38,8 +38,12 @@ import {
 } from "./importView";
 import "./import.css";
 
-/** Where this browser keeps the review's answers and note until Send (QA3-F2): one key per import. */
-const keptKey = (importId: string) => `orchestration.import.${importId}.review`;
+/**
+ * Where this browser keeps the review's answers and note until Send (QA3-F2): one key per project and import. The import
+ * id alone repeats in a fresh data folder on the same address; the project id does not (UX26-1).
+ */
+const keptKey = (projectId: string, importId: string) => `orchestration.import.${projectId}.${importId}.review`;
+const KEPT_KEY = /^orchestration\.import\..+\.review$/;
 type Kept = { draft: ReviewDraft; note: string };
 const isAnswer = (a: unknown): a is DraftAnswer => {
   if (!a || typeof a !== "object") return false;
@@ -47,10 +51,21 @@ const isAnswer = (a: unknown): a is DraftAnswer => {
   return typeof x.option === "string" && (x.correction === undefined || x.correction === "change" || x.correction === "misread") && (x.text === undefined || typeof x.text === "string");
 };
 
-/** The answers and the note this browser kept for the import; none when storage is blocked or holds anything else. */
-export function loadReviewDraft(importId: string): Kept {
+/**
+ * The answers and the note this browser kept for the import; none when storage is blocked or holds anything else. It
+ * forgets what this browser kept for any other review.
+ */
+export function loadReviewDraft(projectId: string, importId: string): Kept {
+  const key = keptKey(projectId, importId);
   try {
-    const raw: unknown = JSON.parse(window.localStorage.getItem(keptKey(importId)) ?? "null");
+    const store = window.localStorage;
+    const others = Array.from({ length: store.length }, (_, i) => store.key(i)).filter((k): k is string => !!k && k !== key && KEPT_KEY.test(k));
+    for (const k of others) store.removeItem(k);
+  } catch {
+    /* storage blocked: nothing is kept to forget */
+  }
+  try {
+    const raw: unknown = JSON.parse(window.localStorage.getItem(key) ?? "null");
     if (!raw || typeof raw !== "object") return { draft: {}, note: "" };
     const { draft, note } = raw as Record<string, unknown>;
     const entries = draft && typeof draft === "object" ? Object.entries(draft) : [];
@@ -62,10 +77,10 @@ export function loadReviewDraft(importId: string): Kept {
 }
 
 /** Keep the answers and the note in this browser, or forget them when there are none. A blocked storage keeps nothing. */
-export function saveReviewDraft(importId: string, kept: Kept) {
+export function saveReviewDraft(projectId: string, importId: string, kept: Kept) {
   try {
-    if (!Object.keys(kept.draft).length && !kept.note) window.localStorage.removeItem(keptKey(importId));
-    else window.localStorage.setItem(keptKey(importId), JSON.stringify(kept));
+    if (!Object.keys(kept.draft).length && !kept.note) window.localStorage.removeItem(keptKey(projectId, importId));
+    else window.localStorage.setItem(keptKey(projectId, importId), JSON.stringify(kept));
   } catch {
     /* storage blocked: the answers last for this page only */
   }
@@ -75,11 +90,12 @@ export function ImportReview() {
   const { state, send, disabled } = useStore();
   const imp = state.studio.import!;
   // The answers you have not sent survive a reload (QA3-F2).
-  const [restored] = useState(() => loadReviewDraft(imp.id));
+  const projectId = state.project.id;
+  const [restored] = useState(() => loadReviewDraft(projectId, imp.id));
   const [draft, setDraft] = useState<ReviewDraft>(restored.draft);
   const [note, setNote] = useState(restored.note);
   const [sending, setSending] = useState(false);
-  useEffect(() => saveReviewDraft(imp.id, { draft, note }), [imp.id, draft, note]);
+  useEffect(() => saveReviewDraft(projectId, imp.id, { draft, note }), [projectId, imp.id, draft, note]);
   const name = productName(state);
   const qs = importQuestions(imp).asked;
   const c = reviewCounts(state, draft);
@@ -113,7 +129,7 @@ export function ImportReview() {
     const ok = (await send("answerImport", { answers })).ok && (!note.trim() || (await send("postMessage", { text: note.trim() })).ok);
     setSending(false);
     if (!ok) return;
-    saveReviewDraft(imp.id, { draft: {}, note: "" });
+    saveReviewDraft(projectId, imp.id, { draft: {}, note: "" });
     setDraft({});
     setNote("");
     location.hash = BASELINE_HASH;
