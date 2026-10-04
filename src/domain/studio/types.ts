@@ -177,7 +177,8 @@ export interface StudioArtifact {
  * - no-revision: the designer's runs revising it ended without a new version, twice;
  * - no-review: the PE's runs on it ended without a verdict, twice;
  * - no-provider: no enabled provider could run the next step (the PE or the designer's revision);
- * - earlier-rule: the PE reviewed it under pass 3's rule, one pass and no revision (recorded at the upgrade).
+ * - earlier-rule: the PE reviewed it under an earlier rule, one pass and no revision: pass 3's (recorded at the
+ *   upgrade), or pass 4's "as is" reproduction in a project with no import, which no designer may revise (derived).
  */
 export type LoopEnd = "passes" | "round-closed" | "no-revision" | "no-review" | "no-provider" | "earlier-rule";
 /** The ends the service records on the version (`reviewEnd`), because no other record shows them. */

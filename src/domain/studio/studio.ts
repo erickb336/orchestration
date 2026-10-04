@@ -169,6 +169,9 @@ const FOCUS_WORDS: Record<RoundFocus, string> = { material: "what you brought", 
 export function closeRound(state: State, n: number, summary: string | undefined, now: string): State {
   const r = getRound(state, n);
   if (r.closedAt) throw new ControlError(`Round ${n} is already closed.`);
+  // An import's round 0 closes only with its baseline (lockInBaseline): until then the import's runs work in it, and
+  // no later round can open (ORC-032, CR-3).
+  if (n === 0 && state.studio.import && !state.studio.import.lockedInAt) throw new ControlError("Round 0 is the import's: it closes with the baseline Lock in.");
   const text = summary === undefined ? undefined : capped(agentText(summary), 2000, "The round's summary");
   const s = draft(state);
   const round = getRound(s, n);
@@ -504,6 +507,8 @@ export const LOOP_END_WORDS: Record<LoopEnd, string> = {
  */
 function loopEnd(s: State, a: StudioArtifact, pass: number): LoopEnd | undefined {
   if (a.reviewEnd) return a.reviewEnd.reason;
+  // A stored pass-4 reproduction (a project with no import, CR-8): no designer may revise it, so it gets one pass.
+  if (pass && a.provenance) return "earlier-rule";
   if (pass >= MAX_PE_PASSES) return "passes";
   const round = s.studio.rounds.find((r) => r.n === a.round);
   if (!round || round.closedAt) return "round-closed";

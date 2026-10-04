@@ -24,8 +24,8 @@
 // A baseline item (ORC-032, 2.4): the version in force reproduces the code as it is today, and the import's baseline
 // Lock in put it there. The repository at the import's commit built it, so after the draft (3) it is built: verified
 // when every rule has a passing test (the import's baseline run, or later landed checks) and, for a screen, a
-// terminal demo or a TUI, the import's capture recorded it with no failure. Once a newer version is in force, the
-// rules above apply to it.
+// terminal demo or a TUI, the import's capture recorded this version with no failure (a version a designer's fix made
+// after the capture is not verified by it). Once a newer version is in force, the rules above apply to it.
 //
 // Which version a task builds: the spec it builds from (the current spec, or for landed work the spec in force when it
 // landed) was written at or after this version of the item came into force, or before it, for an earlier version.
@@ -313,6 +313,8 @@ function baselineGap(s: State, item: BlueprintItem, rules: ItemRuleResults | und
   if (r || TESTED_KINDS.includes(item.kind)) return r;
   if (!isCapturedKind(item.kind)) return rules ? undefined : { why: "kind-not-checked" };
   if (!cap) return { why: "no-evidence", reason: "no-run" };
+  // A designer's fix after the capture made a newer version: the capture shows the one before (CR-7).
+  if (cap.version !== item.version) return { why: "evidence-older-design", version: cap.version };
   if (cap.status === "none") return { why: "no-evidence", reason: cap.reason, detail: cap.detail, ...(cap.log ? { log: cap.log } : {}) };
   if (item.kind === "screen") {
     const missing = screenDevices(s, item).filter((d) => !cap.files.some((f) => f.type === "png" && f.device === d));
@@ -321,7 +323,10 @@ function baselineGap(s: State, item: BlueprintItem, rules: ItemRuleResults | und
   return cap.warnings?.length ? { why: "evidence-warning", warning: cap.warnings[0] } : undefined;
 }
 
-/** The import that put this item's version into force as the baseline, with its capture of the part; else undefined. */
+/**
+ * The import that put this item's version into force as the baseline, with its capture of the part (of the version it
+ * recorded, which a later fix may have replaced); else undefined.
+ */
 function baselineOf(s: State, item: BlueprintItem): ItemFactoryView["baseline"] {
   const imp = s.studio.import;
   if (!imp?.lockedInAt || !isAsIs(s, item)) return undefined;
