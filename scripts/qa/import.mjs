@@ -79,13 +79,15 @@ const reloadKeeps = async (j, page, where, ready) => {
   await ready();
   await page.waitForTimeout(500);
   const f = await focused(page);
-  j.check(y > 0 && f.tag === "BODY", `${where}: a reload moves no focus (QA36-2)`, JSON.stringify({ ...f, yBefore: y }));
+  j.check(y > 0 && f.tag === "BODY", `${where}: a reload moves no focus (QA36-2; ${y} px down before it, ${f.scrollY} after)`, JSON.stringify({ ...f, yBefore: y }));
 };
 
 await runJourney(
   "import",
   () => buildDemo(Date.now()),
   async (j, page, service, width) => {
+    /** How far the reading was scrolled when the lead drawer opened (R33-1). */
+    let readingY = 0;
     const tally = join(service.dataDir, "import-demo", "tally");
     let commit = "";
 
@@ -178,11 +180,15 @@ await runJourney(
       await j.pageChecks("Reading");
       await reloadKeeps(j, page, "Reading", () => page.getByText("4 of 5 steps done").waitFor({ timeout: 10_000 }));
       // A message half typed in the lead drawer as the reading ends by itself (R33-1); step 3 types the rest.
-      await page.evaluate(() => window.scrollTo(0, 0));
       await page.getByRole("button", { name: "Message the lead" }).click();
       const box = page.locator("aside[aria-label=Lead] textarea").first();
       await box.click();
       await page.keyboard.type("Half a sente");
+      // The page stays down a little behind the drawer: the move to the review must not send it to its top.
+      readingY = await page.evaluate(() => {
+        window.scrollTo(0, 60);
+        return Math.round(window.scrollY);
+      });
     });
 
     await j.step("3 Review", async () => {
@@ -198,6 +204,7 @@ await runJourney(
         const f = await focused(page);
         const draft = await box.inputValue();
         j.check(f.tag === "TEXTAREA" && draft === "Half a sentence.", "Review: when the reading ends by itself, the lead drawer keeps focus and every keystroke (R33-1)", `${JSON.stringify(f)} | ${JSON.stringify(draft)}`);
+        j.check(readingY > 0 && f.scrollY === readingY, `Review: when the reading ends by itself, the page does not scroll (${readingY} px down)`, JSON.stringify(f));
         await box.fill("");
         await page.keyboard.press("Escape");
         await page.locator("aside[aria-label=Lead]").waitFor({ state: "detached", timeout: 5_000 });
