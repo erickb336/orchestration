@@ -187,8 +187,9 @@ await runJourney(
       j.check(true, "Home: it says the import waits at its budget (QA-F1)");
       {
         const nav = flat(await page.getByRole("navigation", { name: "Main" }).innerText());
-        const card = flat(await page.locator("section, article, div").filter({ has: page.getByRole("heading", { name: "Needs you" }) }).last().innerText());
-        j.check(card.startsWith("Needs you 1") && card.includes("The import's review") && (width < 600 || nav.includes("1 needs you")), "Home: the header and Needs you count the same, and Needs you lists the import's review (UX-R2-1)", `${nav} | ${card.slice(0, 120)}`);
+        const main = flat(await page.locator("main").innerText());
+        const card = main.slice(main.indexOf("Needs you 1"));
+        j.check(main.includes("Needs you 1 The import's review") && (width < 600 || nav.includes("1 needs you")), "Home: the header and Needs you count the same, and Needs you lists the import's review (UX-R2-1)", `${nav} | ${card.slice(0, 120)}`);
       }
       await j.shot("3-home-budget-stop", { full: false });
       await page.goto(`${service.origin}/#/vision`);
