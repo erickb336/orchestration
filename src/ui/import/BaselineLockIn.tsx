@@ -7,11 +7,11 @@
 import { useEffect, useState, type ReactNode } from "react";
 import * as M from "../../domain/model";
 import { summaryDigest, type SummarySeen } from "../../domain/studio/blueprint";
-import { baselineSummary, importStatus } from "../../domain/studio/import";
-import { fmtUsd } from "../../domain/spend";
+import { baselineBlocker, baselineSummary, importStatus } from "../../domain/studio/import";
+import { fmtUsd, importSpend } from "../../domain/spend";
 import { Banner, Button, ButtonLink, Card, Checkbox, Chip, EmptyState, SimulatedChip } from "../kit";
 import { useStore } from "../store";
-import { STATUS_WORDS, baselineFacts, baselineRows, changeLine, changeRequests, importSpend, keptRules, openQuestions, productName } from "./importView";
+import { baselineFacts, baselineRows, changeLine, keptRules, openChanges, openQuestions, productName } from "./importView";
 import "./import.css";
 
 /** The summary the screen shows, as the Lock in names it. */
@@ -84,7 +84,7 @@ export function BaselineLockIn() {
     if (r.ok) setDone(true);
     setBusy(false);
   };
-  return <BaselineSummary header={header} stale={stale} agreed={agreed} onAgree={(v) => (setAgreed(v), setStale(false))} busy={busy} blocker={disabled ? "The service is offline." : undefined} onLockIn={() => void submit()} />;
+  return <BaselineSummary header={header} stale={stale} agreed={agreed} onAgree={(v) => (setAgreed(v), setStale(false))} busy={busy} blocker={disabled ? "The service is offline." : baselineBlocker(state)} onLockIn={() => void submit()} />;
 }
 
 function BaselineSummary({ header, stale, agreed, onAgree, busy, blocker, onLockIn }: { header: (t: string) => ReactNode; stale: boolean; agreed: boolean; onAgree: (v: boolean) => void; busy: boolean; blocker: string | undefined; onLockIn: () => void }) {
@@ -94,7 +94,7 @@ function BaselineSummary({ header, stale, agreed, onAgree, busy, blocker, onLock
   const rows = baselineRows(state);
   const facts = baselineFacts(state);
   const kept = keptRules(state);
-  const changes = changeRequests(state);
+  const changes = openChanges(state);
   const open = openQuestions(state);
   const sp = importSpend(state);
   const simulated = state.studio.runs.some((r) => r.importStep && r.simulated);
@@ -110,7 +110,7 @@ function BaselineSummary({ header, stale, agreed, onAgree, busy, blocker, onLock
         </Banner>
       )}
       <div className="imp-cols">
-        <Card title={`${rows.length} parts become the baseline: in force and built`}>
+        <Card title={`${rows.length} parts become the baseline: in force and built`} className="imp-bcard">
           <ul className="imp-facts">
             {facts.map((f) => (
               <li key={f.bold}>
@@ -131,10 +131,7 @@ function BaselineSummary({ header, stale, agreed, onAgree, busy, blocker, onLock
                     <b>
                       {r.title} v{r.version}
                     </b>{" "}
-                    <span className="muted">
-                      ({r.kind}; {STATUS_WORDS[r.status]}
-                      {r.tests ? `: tests ${r.tests}` : ""})
-                    </span>
+                    <span className="muted">({r.facts})</span>
                   </span>
                 </li>
               ))}
@@ -174,10 +171,10 @@ function BaselineSummary({ header, stale, agreed, onAgree, busy, blocker, onLock
             <h3 id="imp-b-open">What stays open</h3>
             {open.length ? (
               <ul className="imp-lockrows" aria-label="What stays open">
-                {open.map((q) => (
-                  <li key={q.rule.id}>
+                {open.map((rule) => (
+                  <li key={rule.id}>
                     <Chip tone="you">Open</Chip>
-                    <span>{q.rule.area}: not answered. It goes in as the code has it, marked "not confirmed". The question stays in Vision.</span>
+                    <span>{rule.area}: not answered. It goes in as the code has it, marked "not confirmed". The question stays in Vision.</span>
                   </li>
                 ))}
               </ul>

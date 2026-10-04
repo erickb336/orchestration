@@ -11,6 +11,7 @@ import { canAllowSubagents } from "../../domain/subagents";
 import { DEFAULT_CHECKS, MAX_SUBAGENT_CAP, type Device, type ProjectDomain } from "../../domain/types";
 import { Banner, Button, Card, Checkbox, Chip, Field, Input, SimulatedChip, useConfirm } from "../kit";
 import { DEVICE_CHOICES, toggleDevice } from "../settings/budgets";
+import { shortImage } from "../settings/environment";
 import { sendInOrder } from "../settings/draft";
 import { confirmNewProject } from "../settingsText";
 import { initProjectConfirm } from "../stageChoice";
@@ -256,7 +257,7 @@ function HowItRunsFields({ info, d, set }: { info: ImportStartInfo; d: StartDraf
             onChange={(e) => set({ environment: e.target.checked ? { devcontainer: { file: dc.file, sha256: dc.sha256! } } : p ? { image: p.image, prepare: p.prepare } : null })}
           />
         ) : p ? (
-          <Checkbox label={`Use the image ${p.label}`} hint={`${p.because} ${p.image}`} checked={!!env && "image" in env} onChange={(e) => set({ environment: e.target.checked ? { image: p.image, prepare: p.prepare } : null })} />
+          <Checkbox label={`Use the image ${p.label}`} hint={`${p.because} ${shortImage(p.image)}`} checked={!!env && "image" in env} onChange={(e) => set({ environment: e.target.checked ? { image: p.image, prepare: p.prepare } : null })} />
         ) : (
           <p className="micro muted no-margin">{dc?.refused ?? info.environment.reason ?? "The repository proposes no environment. Set one in Settings › How your project runs after the start."}</p>
         )}

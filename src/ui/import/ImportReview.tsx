@@ -4,8 +4,8 @@
 // records them together (answerImport) and opens the baseline. Words: importView.ts.
 
 import { useState } from "react";
-import { fmtUsd } from "../../domain/spend";
-import { importParts } from "../../domain/studio/import";
+import { fmtUsd, importSpend } from "../../domain/spend";
+import { importParts, importQuestions, ruleConfidence, type ImportQuestion } from "../../domain/studio/import";
 import type { ImportRule, StudioArtifact } from "../../domain/studio/types";
 import { Banner, Button, ButtonLink, Card, Chip, Disclosure, Field, Meter, SimulatedChip, Textarea } from "../kit";
 import { cx } from "../kit/cx";
@@ -18,27 +18,24 @@ import {
   UNANSWERED_TEXT,
   answeredLine,
   effectSentence,
-  importQuestions,
-  importSpend,
   needLine,
   optionWords,
   partKey,
   partLine,
   productName,
   reviewCounts,
-  ruleConfidence,
   ruleKey,
+  ruleOf,
   shownAnswer,
   shownEffect,
   sourceRow,
+  spendByStep,
+  targetOf,
   testsTag,
   type DraftAnswer,
-  type ImportQuestion,
   type ReviewDraft,
 } from "./importView";
 import "./import.css";
-
-const onOf = (key: string) => (key.startsWith("rule:") ? { rule: key.slice(5) } : { part: key.slice(5) });
 
 export function ImportReview() {
   const { state, send, disabled } = useStore();
@@ -47,12 +44,12 @@ export function ImportReview() {
   const [sending, setSending] = useState(false);
   const imp = state.studio.import!;
   const name = productName(state);
-  const qs = importQuestions(state);
+  const qs = importQuestions(imp).asked;
   const c = reviewCounts(state, draft);
   const need = needLine(c);
   const left = answeredLine(c);
   const rules = imp.reading?.rules ?? [];
-  const confirmed = rules.filter((r) => ruleConfidence(state, r) === "confirmed");
+  const confirmed = rules.filter((r) => ruleConfidence(imp, r).level === "confirmed");
   const parts = importParts(state);
   const simulated = state.studio.runs.some((r) => r.importStep && r.simulated);
 
@@ -71,7 +68,7 @@ export function ImportReview() {
   const sendAll = async () => {
     if (blocker || sending) return;
     setSending(true);
-    const answers = entries.map(([key, a]) => ({ on: onOf(key), option: a.option!, ...(a.option === "correct" ? { correction: a.correction ?? "change" } : {}), ...(a.text?.trim() ? { text: a.text.trim() } : {}) }));
+    const answers = entries.map(([key, a]) => ({ on: targetOf(key), option: a.option!, ...(a.option === "correct" ? { correction: a.correction ?? "change" } : {}), ...(a.text?.trim() ? { text: a.text.trim() } : {}) }));
     const ok = (!answers.length || (await send("answerImport", { answers })).ok) && (!note.trim() || (await send("postMessage", { text: note.trim() })).ok);
     setSending(false);
     if (!ok) return;
@@ -124,7 +121,7 @@ export function ImportReview() {
               </h2>
               <p className="small muted no-margin">Two sources disagree, or a test fails. Which is right?</p>
               {conflicts.map((q) => (
-                <Question key={q.rule.id} q={q} answer={shownAnswer(state, draft, ruleKey(q.rule.id))} onAnswer={(a) => set(ruleKey(q.rule.id), a)} />
+                <Question key={q.ruleId} q={q} answer={shownAnswer(state, draft, ruleKey(q.ruleId))} onAnswer={(a) => set(ruleKey(q.ruleId), a)} />
               ))}
             </section>
           )}
@@ -136,7 +133,7 @@ export function ImportReview() {
               </h2>
               <p className="small muted no-margin">The reader read these from the code. No test proves them, and each changes what {name} does. Is each right?</p>
               {guesses.map((q) => (
-                <Question key={q.rule.id} q={q} answer={shownAnswer(state, draft, ruleKey(q.rule.id))} onAnswer={(a) => set(ruleKey(q.rule.id), a)} />
+                <Question key={q.ruleId} q={q} answer={shownAnswer(state, draft, ruleKey(q.ruleId))} onAnswer={(a) => set(ruleKey(q.ruleId), a)} />
               ))}
             </section>
           )}
@@ -195,11 +192,11 @@ export function ImportReview() {
 /** One question: its sources, its options, and what your answer does. */
 function Question({ q, answer, onAnswer }: { q: ImportQuestion; answer: DraftAnswer | undefined; onAnswer: (a: DraftAnswer | undefined) => void }) {
   const { state } = useStore();
-  const rule = q.rule;
-  const opts = optionWords(state, q);
-  const effect = shownEffect(state, { [ruleKey(rule.id)]: answer ?? {} }, ruleKey(rule.id));
-  const sentence = effectSentence(state, q, answer, effect);
-  const conf = CONFIDENCE_WORDS[ruleConfidence(state, rule)];
+  const rule = ruleOf(state, q.ruleId)!;
+  const opts = optionWords(state, q.options);
+  const effect = shownEffect(state, answer);
+  const sentence = effectSentence(state, q.options, answer);
+  const conf = CONFIDENCE_WORDS[q.confidence.level];
   const choose = (id: string) => onAnswer(answer?.option === id ? undefined : { option: id, ...(id === "correct" ? { correction: "change" as const } : {}) });
   return (
     <article className={cx("imp-q", effect !== "open" && "imp-q--answered")} aria-labelledby={`imp-q-${rule.id}`}>
@@ -291,14 +288,14 @@ function Correction({ name, answer, onAnswer }: { name: string; answer: DraftAns
 function CorrectToggle({ id, answer, onAnswer }: { id: string; answer: DraftAnswer | undefined; onAnswer: (a: DraftAnswer | undefined) => void }) {
   const { state } = useStore();
   const open = answer?.option === "correct";
-  const effect = shownEffect(state, { [id]: answer ?? {} }, id);
+  const effect = shownEffect(state, answer);
   return (
     <div className="k-stack k-stack--tight">
       <button type="button" className="imp-link" aria-expanded={open} onClick={() => onAnswer(open ? undefined : { option: "correct", correction: "change" })}>
         {open ? "Close" : "Correct"}
       </button>
       {open && <Correction name={`k-${id}`} answer={answer!} onAnswer={onAnswer} />}
-      {open && <p className={cx("imp-qstate small no-margin", effect === "change" && "imp-qstate--change")}>{effectSentence(state, undefined, answer, effect)}</p>}
+      {open && <p className={cx("imp-qstate small no-margin", effect === "change" && "imp-qstate--change")}>{effectSentence(state, [], answer)}</p>}
     </div>
   );
 }
@@ -338,13 +335,14 @@ function ReviewSide() {
   const imp = state.studio.import!;
   const lead = roundLead(state.studio.rounds.find((r) => r.n === 0));
   const sp = importSpend(state);
+  const by = new Map(spendByStep(state).map((x) => [x.step, x.usd]));
   const rows: [string, number | undefined][] = [
     ["The tests and the recording · the service", 0],
-    ["The rules · the reader", sp.byStep.rules],
-    ["The parts · the designer", sp.byStep.parts],
-    ["The words · the designer", sp.byStep.words],
-    ["Fixes · the designer", sp.byStep.fix],
-    ["The lead", sp.byStep.lead],
+    ["The rules · the reader", by.get("rules")],
+    ["The parts · the designer", by.get("parts")],
+    ["The words · the designer", by.get("words")],
+    ["Fixes · the designer", by.get("fix")],
+    ["The lead", by.get("lead")],
   ];
   return (
     <aside className="k-stack imp-side" aria-label="The lead and the import's spend">
@@ -373,7 +371,7 @@ function ReviewSide() {
             <span className="num">{fmtUsd(sp.usd)}</span>
           </li>
         </ul>
-        {sp.unknown > 0 && <p className="micro muted no-margin">{sp.unknown} runs recorded no cost, so the spend can be higher.</p>}
+        {sp.unknown.length > 0 && <p className="micro muted no-margin">{sp.unknown.length} runs recorded no cost, so the spend can be higher.</p>}
       </Card>
     </aside>
   );

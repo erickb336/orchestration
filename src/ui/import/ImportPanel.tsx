@@ -8,7 +8,7 @@ import { importParts } from "../../domain/studio/import";
 import { projectPause } from "../../domain/places";
 import { Banner, Button, Card, Field, Input, SimulatedChip, StatePill, StepList } from "../kit";
 import { useStore } from "../store";
-import { importSpend, productName, readingSteps, spendWords } from "./importView";
+import { productName, readingSteps, spendWords } from "./importView";
 import "./import.css";
 
 /** The spend as a bar: what is spent, over the estimate's band, against the budget. */
@@ -51,7 +51,7 @@ export function ImportPanel() {
           Nothing more runs for it. To import again, start a new project in Settings › Project.
         </Banner>
       )}
-      {!imp.stopped && sw.atBudget && <BudgetStop />}
+      {!imp.stopped && sw.stop && <BudgetStop why={sw.stop} />}
 
       <Card title="The import" actions={<StatePill tone={imp.stopped ? "fail" : pause ? "neutral" : "work"} pulse={!imp.stopped && !pause} paused={!!pause}>{imp.stopped ? "stopped" : pause ? (pause.state === "paused" ? "paused by you" : "pausing") : `reading · ${done} of ${steps.length} steps done`}</StatePill>}>
         <p className="no-margin">
@@ -161,13 +161,13 @@ export function ImportPanel() {
 }
 
 /** At the import budget, the import's runs wait: raise the budget to go on. */
-function BudgetStop() {
+function BudgetStop({ why }: { why: string }) {
   const { state, send, disabled } = useStore();
   const imp = state.studio.import!;
   const [usd, setUsd] = useState(String(Math.ceil(imp.budgetUsd * 2)));
   const n = Number(usd);
   return (
-    <Banner tone="you" title={`The import waits at its budget: ${fmtUsd(importSpend(state).usd)} of ${fmtUsd(imp.budgetUsd)}.`}>
+    <Banner tone="you" title={`The import waits at its budget. ${why}.`}>
       <p className="no-margin">Nothing new starts for it until you raise the import budget. The building budget stays apart.</p>
       <form
         className="imp-path"

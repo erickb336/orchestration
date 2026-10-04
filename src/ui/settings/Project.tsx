@@ -120,7 +120,7 @@ export function ProjectSection({ current, onDirty }: { current: boolean; onDirty
 function TryImportCard() {
   const [open, setOpen] = useState(false);
   return (
-    <SettingsCard id="new-project" title="Import an existing repository" help="The import reads a repository and shows what the product does today, in Vision. In the demo it reads tally, an invented command-line tool, and every run is simulated.">
+    <SettingsCard id="new-project" title="Import an existing repository" help="In the demo, the import reads tally, an invented command-line tool, and every run is simulated. It replaces the sample project.">
       {open ? (
         <StartImport sample onCancel={() => setOpen(false)} />
       ) : (

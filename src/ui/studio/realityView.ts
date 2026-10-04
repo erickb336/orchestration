@@ -5,11 +5,7 @@
 import type { CaptureDevice, EvidenceFile, ItemEvidence, NoEvidence, NoRunYet } from "../../domain/studio/evidence";
 import type { CitingTask, ItemFactoryStatus, ItemFactoryView, NotVerified, UxDifference } from "../../domain/studio/itemStatus";
 import type { RuleResult, RuleStatus } from "../../domain/studio/ruleResults";
-import { isAsIsItem } from "../../domain/studio/import";
-import type { BlueprintItem, StudioArtifact } from "../../domain/studio/types";
-import type { State } from "../../domain/types";
 import { fmtTime } from "../common";
-import { baselineStatus, type BaselineGap, type BaselineStatus } from "../import/importView";
 import type { Tone } from "../kit";
 
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -107,8 +103,17 @@ const DEVICE_WORD: Record<CaptureDevice, string> = { desktop: "desktop", mobile:
 
 const openOf = (v: ItemFactoryView): UxDifference[] => (v.uxReview?.ofLandedWork ? v.uxReview.differences.filter((d) => d.state === "open") : []);
 
-/** Why the item stands where it does, in one or two sentences. */
+/**
+ * Why the item stands where it does, in one or two sentences. A part of an import's baseline (ORC-032; phase B gives
+ * the view its `baseline`) says that the repository at the import's commit built it, and what proves it.
+ */
 export function statusWhy(v: ItemFactoryView): string {
+  if (v.baseline && v.status !== "in-force" && v.status !== "in-the-draft") {
+    const at = `From the import, at commit ${shortSha(v.baseline.commit)}.`;
+    if (v.status === "fails-a-check") return `${at} ${count(v.rules?.counts.failed ?? 0, "rule")} ${v.rules?.counts.failed === 1 ? "has" : "have"} a failing test in the import's run of your tests.`;
+    if (v.status === "built-not-verified") return `${at} The checks do not prove it yet: ${gapWords(v.notVerified!, v.item.kind)}.`;
+    return `${at} ${v.rules ? "Every rule has a passing test" : "Its recording shows it"}${v.rules && ["screen", "terminal-demo", "tui"].includes(v.item.kind) ? ", and the running code was recorded" : ""}.`;
+  }
   const inProgress = v.tasks.filter((t) => t.state === "running" || t.state === "finished");
   const running = inProgress.filter((t) => t.thisVersion);
   const runningBefore = inProgress.filter((t) => !t.thisVersion);
@@ -214,16 +219,4 @@ export function differenceState(d: UxDifference): string {
     case "superseded":
       return "open: a later run replaced the review";
   }
-}
-
-// ---------- a part of an import's baseline (ORC-032) ----------
-
-/**
- * The part of the import's baseline an item stands for, with its status (plan 2.4), while the version in force is
- * the import's "as is" version; undefined for every other item (the factory's rules apply).
- */
-export function baselineOf(s: State, item: BlueprintItem): { part: StudioArtifact; status: BaselineStatus; gap?: BaselineGap } | undefined {
-  if (!s.studio.import?.lockedInAt || !isAsIsItem(s, item)) return undefined;
-  const part = s.studio.artifacts.find((a) => a.id === item.artifactId && a.version === item.version);
-  return part && { part, ...baselineStatus(s, part) };
 }

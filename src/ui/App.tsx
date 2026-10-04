@@ -29,6 +29,7 @@ import { ChangeOrderPage } from "./changeOrder/ChangeOrder";
 import { PreflightPage } from "./preflight/Preflight";
 import { LockInPage } from "./studio/LockIn";
 import { BaselineLockIn } from "./import/BaselineLockIn";
+import { importScreen } from "./import/importView";
 import { Reality } from "./studio/Reality";
 import { Studio } from "./studio/Studio";
 import { waitingForYourMark } from "./studio/studioView";
@@ -300,7 +301,8 @@ export function ResultsBadge() {
 /** The Vision badge counts the artifacts the PE has passed to you that you have not marked yet. Persistent, like Results'. */
 export function VisionBadge() {
   const { state } = useStore();
-  const n = waitingForYourMark(state).length;
+  // While the import reads or waits for its review (ORC-032), its parts are answered there, not marked.
+  const n = importScreen(state) === "none" ? waitingForYourMark(state).length : 0;
   if (n === 0) return null;
   const text = `${n} artifact${n === 1 ? "" : "s"} waiting for your mark`;
   return (

@@ -23,6 +23,13 @@ import { StartForm } from "./StartImport";
 const svc = testService({ prototypePort: 5320 });
 const text = (node: React.ReactElement, s: State) => visible(renderScreen(node, s, svc));
 const stage = (st: Parameters<typeof tallyImport>[0], o?: ImportOptions) => tallyImport(st, o).s;
+/** The prototype's example without the misreading: Currency is a change, and nothing waits for a fix. */
+const CHANGE = [
+  { on: { rule: "R13" }, option: "source-2" },
+  { on: { rule: "R14" }, option: "keep" },
+  { on: { rule: "R15" }, option: "confirm" },
+  { on: { rule: "R16" }, option: "confirm" },
+];
 /** Every answer keeps the code: nothing to change. */
 const KEEP_ALL = [
   { on: { rule: "R13" }, option: "keep" },
@@ -117,7 +124,7 @@ describe("3 · Review (C5, C8, C9, C15)", () => {
 
   it("each conflict offers the code, the source that differs, and Neither, each with what it does", () => {
     const t = text(<ImportReview />, stage("review"));
-    expect(t).toContain("Which is right? The code: --format csv tally stays as it is, and this goes into the baseline. README.md: --csv tally must change. The baseline keeps what tally does today, and this becomes a change to design. Neither Write what is right. It becomes a change to design.");
+    expect(t).toContain("Which is right? The code: --format csv tally stays as it is, and this goes into the baseline. The docs: --csv tally must change. The baseline keeps what tally does today, and this becomes a change to design. Neither Write what is right. It becomes a change to design.");
     expect(t).toContain("The test: one currency per group tally stays as it is");
   });
 
@@ -132,7 +139,7 @@ describe("3 · Review (C5, C8, C9, C15)", () => {
   it("the counts and the effects follow the answers: kept, a change to design, a fix of the reading, and open", () => {
     const t = text(<ImportReview />, stage("answered"));
     expect(t).toContain("4 of 5 answered");
-    expect(t).toContain("Your answer: README.md: a currency on each expense. The baseline keeps what tally does today. Your change becomes a change to design.");
+    expect(t).toContain("Your answer: The docs: a currency on each expense. The baseline keeps what tally does today. Your change becomes a change to design.");
     expect(t).toContain("Your answer: The code: --format csv. tally stays as it is, and this goes into the baseline.");
     expect(t).toContain("Confirmed. It goes into the baseline as it is.");
     expect(t).toContain("Your answer: tally does something else today. A designer fixes the part from your words, and it goes into the baseline as you wrote.");
@@ -144,7 +151,7 @@ describe("3 · Review (C5, C8, C9, C15)", () => {
     const t = text(<ImportReview />, stage("review", { checks: { failing: ["test_add.py::test_unknown_payer"] } }));
     expect(t).toContain("3 conflicts and 3 guesses need you; 11 rules are confirmed.");
     expect(t).toContain('The test, test_add.py::test_unknown_payer If the payer is not in the group, then the CLI shall stop with "Unknown person". · fails');
-    expect(t).toContain("The code, as it is tally stays as it is, and this goes into the baseline.");
+    expect(t).toContain("The code: as it is today tally stays as it is, and this goes into the baseline. The test: test_add.py::test_unknown_payer tally must change.");
   });
 
   it("Correct on a confirmed rule offers the two choices, and says what each does (C15)", () => {
@@ -160,12 +167,26 @@ describe("4 · Baseline (C4, C5, C10)", () => {
     const t = text(<BaselineLockIn />, stage("answered"));
     expect(t).toContain("Lock in 1 · the baseline");
     expect(t).toContain("6 parts and their 17 rules go into force as tally is today. They count as built. 13 rules are verified: their tests pass. 4 rules have no test: 3 you confirmed, 1 not answered. They go in as tally does them today. The factory has nothing to build now. Your 1 change to design waits for the lead's next round.");
-    expect(t).toContain("Baseline tally report v1 (terminal demo; built, not verified: tests 2 of 3 pass · 1 no test)");
     expect(t).toContain("you corrected If the amount is below zero, then the CLI shall record a refund. (R16 · was inferred · no test)");
     expect(t).toContain("Changes to design, not the baseline");
-    expect(t).toContain("Change tally add: a currency on each expense, as README.md says");
+    expect(t).toContain("Change tally add: The docs: a currency on each expense");
     expect(t).toContain('Open the ledger: not answered. It goes in as the code has it, marked "not confirmed". The question stays in Vision.');
     expect(t).toContain("Import: $0.00 spent of $3.00. The estimate was $0.43–$2.07.");
+  });
+
+  it("each part says its kind, its rules' tests and whether the import recorded it", () => {
+    const t = text(<BaselineLockIn />, stage("answered"));
+    expect(t).toContain("Baseline tally add v1 (terminal demo; tests 5 of 5 pass; recorded)");
+    expect(t).toContain("Baseline tally report v1 (terminal demo; tests 2 of 3 pass · 1 no test; recorded)");
+    expect(t).toContain("Baseline Splitting v1 (algorithm; tests 1 of 2 pass · 1 no test)");
+    expect(t).toContain("Baseline Words v1 (dictionary)");
+    expect(text(<BaselineLockIn />, stage("answered", { checks: { failing: ["test_add.py::test_unknown_payer"] } }))).toContain("Baseline tally add v1 (terminal demo; tests 4 of 5 pass · 1 fails; recorded)");
+  });
+
+  it("a part you said the reader misread waits for its fix: the Lock in says so and waits", () => {
+    const html = renderScreen(<BaselineLockIn />, stage("answered"), svc);
+    expect(html).toMatch(/<button[^>]*aria-disabled="true"[^>]*title="A part waits for its fix: The ledger\. The baseline holds the fixed version\."[^>]*>Lock in the baseline<\/button>/);
+    expect(visible(html)).toContain("A part waits for its fix: The ledger. The baseline holds the fixed version.");
   });
 
   it("with every answer keeping the code, nothing changes and nothing stays open", () => {
@@ -176,13 +197,13 @@ describe("4 · Baseline (C4, C5, C10)", () => {
   });
 
   it("the agreement gates the Lock in: the button waits for the box, with the reason", () => {
-    const html = renderScreen(<BaselineLockIn />, stage("answered"), svc);
+    const html = renderScreen(<BaselineLockIn />, stage("answered", { answers: CHANGE }), svc);
     expect(html).toMatch(/<button[^>]*aria-disabled="true"[^>]*title="Tick the box first: your agreement is recorded with this summary\."[^>]*>Lock in the baseline<\/button>/);
     expect(visible(html)).toContain("I have reviewed the baseline. It is what tally does today, with my answers.");
   });
 
   it("a stale summary is refused: the Lock in names the summary the screen showed, and a change since then fails it", () => {
-    const sc = tallyImport("answered");
+    const sc = tallyImport("answered", { answers: CHANGE });
     const seen = baselineArgs(sc.s);
     // Another tab sets a building budget, so the summary changes.
     const changed = run(sc.s, "setBudgets", { buildingUsd: 25, maintenanceUsdPerMonth: 5 }, at(110)).state;
@@ -205,7 +226,8 @@ describe("5 · After (Design and reality, Home)", () => {
     expect(t).toContain("Lock in 1, the baseline · 6 parts.");
     expect(t).toContain("tally add v1 terminal-demo built and verified from the import Tests: 5 of 5 pass");
     expect(t).toContain("tally report v1 terminal-demo built, not verified from the import Tests: 2 of 3 pass · 1 no test");
-    expect(t).toContain("The ledger v1 contract built, not verified from the import Tests: 3 of 5 pass · 2 no test");
+    // The ledger is v2: the designer's fix of what the reader misread.
+    expect(t).toContain("The ledger v2 contract built, not verified from the import Tests: 3 of 5 pass · 2 no test");
     expect(t).toContain("Words v1 dictionary in force from the import");
   });
 
@@ -213,14 +235,14 @@ describe("5 · After (Design and reality, Home)", () => {
     const sc = tallyImport("baseline");
     const id = item(sc.s, sc.parts.ledger!);
     const t = text(<ItemDetail view={itemFactoryStatus(sc.s, id)!} />, sc.s);
-    expect(t).toContain("From the import, at commit c0ffee0. The checks do not prove it yet: 2 rules have no test.");
-    expect(t).toContain("R5 The ledger shall keep money in whole cents. test_money.py::test_whole_cents +1 passes");
-    expect(t).toContain("R16 If the amount is below zero, then the CLI shall record a refund. no test as you corrected it");
-    expect(t).toContain("R17 The ledger shall live in .tally.json in the folder where you run tally. no test not confirmed");
+    expect(t).toContain("From the import, at commit c0ffee0. The checks do not prove it yet: 2 rules or examples have no test.");
+    expect(t).toContain("R5 The ledger shall keep money in whole cents. passes test_money.py::test_whole_cents +1");
+    expect(t).toContain("R16 If the amount is below zero, then the CLI shall record a refund. No test as you corrected it");
+    expect(t).toContain("R17 The ledger shall live in .tally.json in the folder where you run tally. No test not confirmed");
     const add = text(<ItemDetail view={itemFactoryStatus(sc.s, item(sc.s, sc.parts.add!))!} />, sc.s);
     expect(add).toContain("From the import, at commit c0ffee0. Every rule has a passing test, and the running code was recorded.");
-    expect(add).toContain("Recorded at commit c0ffee0 · simulated");
-    expect(add).toContain("R13 The ledger shall keep one currency per group, set in .tally.json. test_add.py::test_rejects_other_currency passes a change to design");
+    expect(add).toContain("Recorded at commit c0ffee0 simulated");
+    expect(add).toContain("R13 The ledger shall keep one currency per group, set in .tally.json. passes test_add.py::test_rejects_other_currency a change to design");
   });
 
   it("a part whose test fails reads fails a check", () => {
