@@ -6,7 +6,7 @@ import type { ImportQuestion } from "../../domain/studio/import";
 import { Field, Textarea, Chip } from "../kit";
 import { cx } from "../kit/cx";
 import { useStore } from "../store";
-import { CONFIDENCE_WORDS, CORRECTIONS, effectSentence, optionWords, productName, ruleOf, shownEffect, sourceRow, type DraftAnswer } from "./importView";
+import { CONFIDENCE_WORDS, CORRECTIONS, effectSentence, optionWords, productName, ruleOf, shownEffect, sourceRows, type DraftAnswer } from "./importView";
 
 /** One question: its sources, its options, and what your answer does. In the review, and in Vision after the baseline. */
 export function Question({ q, answer, onAnswer }: { q: ImportQuestion; answer: DraftAnswer | undefined; onAnswer: (a: DraftAnswer | undefined) => void }) {
@@ -29,21 +29,12 @@ export function Question({ q, answer, onAnswer }: { q: ImportQuestion; answer: D
       <p className="no-margin">{rule.text}</p>
       {rule.important && <p className="small muted no-margin">{rule.important}</p>}
       <ul className="imp-src" aria-label="Its sources">
-        {rule.sources.map((x, i) => {
-          const row = sourceRow(state, rule, x);
-          return (
-            <li key={i}>
-              <span className="imp-src__where">{row.where}</span>
-              <span>{row.says}</span>
-            </li>
-          );
-        })}
-        {!rule.tests.length && (
-          <li>
-            <span className="imp-src__where">Tests</span>
-            <span>No test covers it.</span>
+        {sourceRows(state, rule).map((row, i) => (
+          <li key={i}>
+            <span className="imp-src__where">{row.where}</span>
+            <span>{row.says}</span>
           </li>
-        )}
+        ))}
       </ul>
       {q.kind === "conflict" ? (
         <>

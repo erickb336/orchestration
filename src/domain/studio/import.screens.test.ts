@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import * as M from "../model";
-import { at, baselineArgs, tallyImport, tallyReading } from "../testing/import";
+import { at, baselineArgs, tallyImport } from "../testing/import";
 import { run } from "../testing/studio";
 import type { State } from "../types";
 import * as I from "./import";
@@ -141,6 +141,5 @@ describe("when the tests did not run, no conflict cites a test (UX-10)", () => {
     // With a baseline run, the test is cited as before.
     const ran = tallyImport("review").s.studio.import!;
     expect(I.importQuestions(ran).asked.find((q) => q.ruleId === "R13")!.options[0].label).toBe("The test: one currency per group");
-    expect(tallyReading({ noTests: true }).rules.every((r) => r.sources.every((x) => x.from !== "test"))).toBe(true);
   });
 });

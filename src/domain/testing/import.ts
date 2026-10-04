@@ -73,7 +73,8 @@ const AREA: Record<PartKey, string> = { add: "tally add", split: "tally split", 
 
 /**
  * The rules as the reader hands them in, each with its sources (a test's, else the code's), and the cases they name.
- * `failing`: these tests fail. `noTests`: the tests did not run, so no rule names one and the code is each rule's source.
+ * `failing`: these tests fail. `noTests`: the tests did not run, so no rule names one; the code is a source of each
+ * rule, and a test the reader read stays a source (the review does not cite it).
  */
 export function tallyReading(o: { failing?: string[]; noTests?: boolean } = {}) {
   const code = (r: RuleDef) => ({ from: "code" as const, ref: "tally/cli.py", says: r.text });
@@ -86,7 +87,7 @@ export function tallyReading(o: { failing?: string[]; noTests?: boolean } = {}) 
         title: r.title,
         text: r.text,
         tests: o.noTests ? [] : r.tests,
-        sources: o.noTests ? [code(r), ...sources.filter((x) => x.from === "docs")] : sources,
+        sources: o.noTests && !sources.some((x) => x.from === "code") ? [...sources, code(r)] : sources,
         ...(r.important ? { important: r.important } : {}),
       };
     }),

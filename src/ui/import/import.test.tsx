@@ -424,6 +424,22 @@ describe("5 · After (Design and reality, Home)", () => {
     expect(after).not.toMatch(/Tests: 0 of/);
   });
 
+  it("with the tests not run, no question cites a test, and none says no test: the tests did not run (QA3-F1)", () => {
+    const review = text(<ImportReview />, stage("review", { checks: "not-run" }));
+    expect(review).toContain("conflict Currency R13");
+    expect(review).not.toContain("The test, test_add.py");
+    expect(review).not.toContain("No test covers it.");
+    expect(review.match(/Tests The tests did not run\./g)).toHaveLength(5);
+    // With the tests run, a rule that names no test still says so, and a test source is cited.
+    const ran = text(<ImportReview />, stage("review"));
+    expect(ran).toContain("The test, test_add.py::test_rejects_other_currency one currency per group · passes");
+    expect(ran).toContain("Tests No test covers it.");
+    const lockIn = text(<BaselineLockIn />, stage("answered", { checks: "not-run" }));
+    expect(lockIn).not.toMatch(/have no test:|· no test\)/);
+    expect(lockIn).toContain("The tests did not run: Docker is not available on this computer, so the tests did not run. Every rule is read from the code, and no part is recorded. 17 rules have no test result:");
+    expect(lockIn).toContain("(R16 · was inferred · tests not run)");
+  });
+
   it("an imported terminal demo says it was recorded in the project's container, not with VHS from the designer's tape (INT-F2)", () => {
     const sc = tallyImport("baseline");
     const s = structuredClone(sc.s);

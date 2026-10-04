@@ -10,6 +10,7 @@ import { PREVIEW_PORTS } from "../../domain/studio/evidence";
 import {
   answerEffect,
   changeRequests,
+  citedSources,
   importHold,
   importParts,
   importQuestions,
@@ -361,11 +362,18 @@ function ruleCases(s: State, rule: ImportRule): TestCaseResult[] {
 
 const FROM_WORD: Record<ImportSource["from"], string> = { test: "The test", code: "The code", docs: "The docs" };
 
-/** A source as the question's table shows it: where, and what it says (with a test's result). */
-export function sourceRow(s: State, rule: ImportRule, x: ImportSource): { where: string; says: string } {
-  const c = x.from === "test" ? ruleCases(s, rule).find((k) => testId(k) === x.ref) : undefined;
-  const result = c ? ` · ${c.status === "passed" ? "passes" : c.status === "skipped" ? "skipped" : "fails"}` : "";
-  return { where: x.from === "docs" ? x.ref : `${FROM_WORD[x.from]}, ${x.ref}`, says: `${x.says}${result}` };
+/**
+ * A question's sources as its table shows them: where, and what each says (with a test's result), then a line on its
+ * tests when it names none. With the tests not run, it cites no test (UX-10) and says the tests did not run (QA3-F1).
+ */
+export function sourceRows(s: State, rule: ImportRule): { where: string; says: string }[] {
+  const rows = citedSources(s.studio.import!, rule).map(({ source: x }) => {
+    const c = x.from === "test" ? ruleCases(s, rule).find((k) => testId(k) === x.ref) : undefined;
+    const result = c ? ` · ${c.status === "passed" ? "passes" : c.status === "skipped" ? "skipped" : "fails"}` : "";
+    return { where: x.from === "docs" ? x.ref : `${FROM_WORD[x.from]}, ${x.ref}`, says: `${x.says}${result}` };
+  });
+  if (testsNotRun(s)) return [...rows, { where: "Tests", says: "The tests did not run." }];
+  return rule.tests.length ? rows : [...rows, { where: "Tests", says: "No test covers it." }];
 }
 
 /** An option with its label (the domain's) and what it does. */
@@ -563,7 +571,9 @@ export function baselineFacts(s: State): { bold: string; rest: string }[] {
   if (failing) facts.push({ bold: `${count(failing, "rule")} ${failing === 1 ? "fails its test" : "fail their tests"}:`, rest: ` the part reads "fails a check".` });
   if (noTest.length) {
     const split = [kept ? `${kept} you confirmed` : "", by("change") ? `${by("change")} you want changed` : "", by("open") ? `${by("open")} not answered` : ""].filter(Boolean);
-    facts.push({ bold: `${count(noTest.length, "rule")} ${noTest.length === 1 ? "has" : "have"} no test:`, rest: ` ${split.join(", ")}. They go in as ${name} does them today.` });
+    // With the tests not run, a rule may name a test that did not run: it has no result, not "no test" (QA3-F1).
+    const none = imp.checks.status === "not-run" ? "no test result" : "no test";
+    facts.push({ bold: `${count(noTest.length, "rule")} ${noTest.length === 1 ? "has" : "have"} ${none}:`, rest: ` ${split.join(", ")}. They go in as ${name} does them today.` });
   }
   const changes = openChanges(s).length;
   facts.push(
@@ -599,7 +609,7 @@ export function keptRules(s: State): { rule: ImportRule; chip: string; was: stri
   return (imp.reading?.rules ?? [])
     .map((r) => ({ r, c: ruleConfidence(imp, r), e: itemAnswerEffect(imp, { rule: r.id }) }))
     .filter(({ r, c, e }) => (!ruleCases(s, r).length || c.level === "conflict") && (e === "kept" || e === "fixed"))
-    .map(({ r, c, e }) => ({ rule: r, chip: e === "fixed" ? "you corrected" : "you confirmed", was: `${r.id} · was ${c.level === "conflict" ? "a conflict" : "inferred"}${ruleCases(s, r).length ? "" : " · no test"}` }));
+    .map(({ r, c, e }) => ({ rule: r, chip: e === "fixed" ? "you corrected" : "you confirmed", was: `${r.id} · was ${c.level === "conflict" ? "a conflict" : "inferred"}${testsNotRun(s) ? " · tests not run" : ruleCases(s, r).length ? "" : " · no test"}` }));
 }
 
 /** The questions not answered: they go in as the code has them, and stay open in Vision. */

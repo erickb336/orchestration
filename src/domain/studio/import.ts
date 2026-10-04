@@ -440,7 +440,7 @@ export function stopImport(state: State, input: { importId: string; reason: stri
  * The sources of a rule that the review cites, each with its number in the rule (its option is `source-<n>`): every
  * one, but no test's when the tests did not run (UX-10): a test that did not run proves and contradicts nothing.
  */
-function citedSources(imp: ProjectImport, rule: ImportRule): { source: ImportSource; n: number }[] {
+export function citedSources(imp: ProjectImport, rule: ImportRule): { source: ImportSource; n: number }[] {
   return rule.sources.flatMap((source, i) => (source.from === "test" && imp.checks.status !== "read" ? [] : [{ source, n: i + 1 }]));
 }
 
