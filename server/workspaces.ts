@@ -8,8 +8,8 @@
 
 import { execFile, execFileSync, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { basename, isAbsolute, join, resolve, sep } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { MAX_SCOPE_PATHS } from "../src/domain/coverage";
 import { PR_BRANCH_REF, matchGlob, prBaseRef, prBranch } from "../src/domain/delivery";
 import type { PrDelivery } from "../src/domain/types";
@@ -105,6 +105,15 @@ const MAX_REVIEW_DIFF_BYTES = 60 * 1024;
 /** Largest diff returned to the changes viewer. */
 export const MAX_CHANGE_DIFF_BYTES = 512 * 1024;
 
+/** A commit's files written from git's object store (`snapshot`): its folder, and the commit. */
+export interface RepoSnapshot {
+  path: string;
+  base: string;
+}
+
+/** What one snapshot may hold: files and bytes (the capture's copy has the same caps). */
+export const SNAPSHOT_CAPS = { files: 20_000, bytes: 512 * 1024 * 1024 };
+
 interface CommitResult {
   sha: string;
   branch?: string;
@@ -117,13 +126,13 @@ interface CommitResult {
 
 /**
  * Environment for the service's own git calls: no inherited GIT_* variables (GIT_DIR, GIT_WORK_TREE,
- * GIT_CONFIG_* …) that could redirect them, and no prompts. A global git-lfs downloads nothing at a checkout: it
- * follows the repository's own .lfsconfig, and an imported repository may be someone else's (ORC-032).
+ * GIT_CONFIG_* …) that could redirect them, and no prompts. (The import of a repository that may be someone else's
+ * runs no checkout at all: `snapshot`.)
  */
 export function gitEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(process.env)) if (!k.startsWith("GIT_")) env[k] = v;
-  return { ...env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_LFS_SKIP_SMUDGE: "1" };
+  return { ...env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_NOSYSTEM: "1" };
 }
 
 /**
@@ -319,6 +328,85 @@ export class WorkspaceManager {
       }
     }
     return ws;
+  }
+
+  /**
+   * The files of `commit`, written from git's object store into a new folder: `git ls-tree` lists them and `git
+   * cat-file --batch` gives their bytes, as the commit holds them (ORC-032, SR-2). No checkout runs, so nothing that
+   * any git config of the repository sets runs either: no filter or smudge (its own config, an include.path, an
+   * includeIf, a config.worktree), no git-lfs, no hook, no fsmonitor. No `.git` is written: the folder is no repository.
+   * Paths with an empty, ".", ".." or ".git" part are refused. Regular files are written first, each new (O_EXCL), then
+   * the symbolic links, so no file is ever written through a link. Within SNAPSHOT_CAPS. `remove` removes it.
+   */
+  snapshot(o: { repoPath: string; projectId: string; attemptId: string; commit: string }): RepoSnapshot {
+    const check = this.check(o.repoPath);
+    if (!check.ok) throw new Error(check.reason);
+    const repo = this.repoDir(o.repoPath);
+    const base = this.git(repo, ["rev-parse", "--verify", "--end-of-options", `${o.commit}^{commit}`]);
+    if (base !== o.commit) throw new Error(`the repository has no commit ${o.commit.slice(0, 12)}`);
+    const path = this.pathFor(o.repoPath, o.attemptId, o.projectId);
+    if (existsSync(path)) throw new Error(`Workspace ${path} already exists; refusing to reuse another run's files.`);
+    // "<mode> <type> <object> <size>\t<path>", one per entry, the path as git holds it.
+    const listed = this.status(["-C", repo, "ls-tree", "-r", "-l", "-z", "--full-tree", "--end-of-options", base]);
+    if (listed.status !== 0) throw new Error(`could not list commit ${base.slice(0, 12)}`);
+    const entries = listed.stdout.split("\0").filter(Boolean).map((row) => {
+      const tab = row.indexOf("\t");
+      const [mode, type, oid, size] = row.slice(0, tab).split(/\s+/);
+      const rel = row.slice(tab + 1);
+      if (tab < 0 || rel.split("/").some((p) => !p || p === "." || p === ".." || p.toLowerCase() === ".git")) throw new Error(`the commit names a path the service does not write: ${JSON.stringify(rel.slice(0, 120))}`);
+      return { mode, type, oid, size: Number(size) || 0, rel };
+    });
+    // Each path once, and none under another entry's path, in any case or Unicode form (as this computer's file system
+    // may compare them): so no entry is ever written into a link another entry made.
+    const key = (p: string) => p.normalize("NFC").toLowerCase();
+    const names = new Set<string>();
+    const folders = new Set<string>();
+    for (const e of entries) {
+      const parts = key(e.rel).split("/");
+      const above = parts.slice(1).map((_, i) => parts.slice(0, i + 1).join("/"));
+      const k = parts.join("/");
+      if (names.has(k) || folders.has(k) || above.some((a) => names.has(a))) throw new Error(`the commit names ${JSON.stringify(e.rel.slice(0, 120))} twice, or a file and a folder alike`);
+      names.add(k);
+      for (const a of above) folders.add(a);
+    }
+    const blobs = entries.filter((e) => e.type === "blob");
+    const bytes = blobs.reduce((n, e) => n + e.size, 0);
+    if (blobs.length > SNAPSHOT_CAPS.files) throw new Error(`the commit has more than ${SNAPSHOT_CAPS.files} files`);
+    if (bytes > SNAPSHOT_CAPS.bytes) throw new Error(`the commit holds more than ${SNAPSHOT_CAPS.bytes / 1024 / 1024} MB`);
+    // Every blob's bytes in one call: "<object> blob <size>\n<bytes>\n" each, in the order asked.
+    const cat = spawnSync(this.gitBin, [...this.safeFlags(), "-C", repo, "cat-file", "--batch"], { input: blobs.map((e) => e.oid).join("\n") + "\n", env: gitEnv(), stdio: ["pipe", "pipe", "pipe"], maxBuffer: bytes + blobs.length * 128 + 4096 });
+    if (cat.error || cat.status !== 0) throw new Error(`could not read the files of commit ${base.slice(0, 12)}`);
+    const out = cat.stdout as Buffer;
+    let at = 0;
+    const content = new Map<string, Buffer>();
+    for (const e of blobs) {
+      const nl = out.indexOf(10, at);
+      const [oid, type, size] = out.subarray(at, nl).toString("utf8").split(" ");
+      if (oid !== e.oid || type !== "blob") throw new Error(`git gave another object than ${e.oid.slice(0, 12)}`);
+      const n = Number(size);
+      content.set(e.rel, out.subarray(nl + 1, nl + 1 + n));
+      at = nl + 1 + n + 1;
+    }
+    mkdirSync(path, { recursive: true, mode: 0o755 });
+    try {
+      for (const e of entries) {
+        const to = join(path, e.rel);
+        if (e.type === "commit") mkdirSync(to, { recursive: true }); // a submodule: an empty folder, as a checkout leaves it
+        else if (e.type === "blob" && e.mode !== "120000") {
+          mkdirSync(dirname(to), { recursive: true });
+          writeFileSync(to, content.get(e.rel)!, { flag: "wx", mode: e.mode === "100755" ? 0o755 : 0o644 });
+        }
+      }
+      for (const e of entries) {
+        if (e.type !== "blob" || e.mode !== "120000") continue;
+        mkdirSync(dirname(join(path, e.rel)), { recursive: true });
+        symlinkSync(content.get(e.rel)!.toString("utf8"), join(path, e.rel));
+      }
+    } catch (err) {
+      rmSync(path, { recursive: true, force: true });
+      throw new Error(`could not write the files of commit ${base.slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return { path, base };
   }
 
   /** Prepare a merge, a revert or a carry in a fresh writer worktree, as Orchestration, without committing. */
@@ -1022,11 +1110,13 @@ export class WorkspaceManager {
     return log.stdout.split("\n").filter((l) => l === ORCHESTRATION_AUTHOR).length;
   }
 
-  /** Remove one run's worktree (and private temp dir). Its branch, if any, is kept. */
+  /** Remove one run's worktree or snapshot (and private temp dir). Its branch, if any, is kept. */
   remove(repoPath: string, path: string) {
     const repo = resolve(repoPath.replace(/^~(?=\/|$)/, process.env.HOME ?? "~"));
     if (!resolve(path).startsWith(this.root + sep)) return;
     try {
+      // A snapshot has no .git: it is only files, and git has no record of it.
+      if (!existsSync(join(path, ".git"))) throw new Error("not a worktree");
       this.git(repo, ["worktree", "remove", "--force", path]);
     } catch {
       rmSync(path, { recursive: true, force: true });
@@ -1091,9 +1181,10 @@ export class WorkspaceManager {
       }
       // Never destroy work that exists only in a worktree (for example a run stopped at its time limit),
       // unless the worktree is a throwaway one (a check run's build output).
-      let dirty = true;
+      // A snapshot (no .git) holds no work of a run's: git status would read another repository above it.
+      let dirty = existsSync(join(path, ".git"));
       try {
-        dirty = this.git(path, ["status", "--porcelain"]) !== "";
+        if (dirty) dirty = this.git(path, ["status", "--porcelain"]) !== "";
       } catch {
         dirty = false;
       }

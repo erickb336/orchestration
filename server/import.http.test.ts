@@ -2,7 +2,7 @@
 // bundled sample for the demo (the fake runtime only), and the capture's files, served like a capture of evidence.
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -92,13 +92,17 @@ describe("the Start screen's facts (GET /api/import/start)", () => {
     expect(store!.read().state.project.repoPath).toBe("");
   });
 
-  it("refuses a path that is not a repository, and a repository whose own config defines filter drivers", async () => {
+  it("refuses a path that is not a repository; reads one whose git config sets a filter, and runs no filter (SR-2)", async () => {
     await serve(buildEmptyProject(Date.now()), "real");
     expect(await json(`/api/import/start?path=${encodeURIComponent(join(dir, "nothing"))}`)).toEqual({ ok: false, reason: `Repository path ${join(dir, "nothing")} does not exist.` });
     const repo = tallyRepo(join(dir, "tally"));
-    execFileSync("git", ["-C", repo, "config", "--local", "filter.evil.smudge", "touch /tmp/pwned"]);
-    const refused = await json(`/api/import/start?path=${encodeURIComponent(repo)}`);
-    expect(refused).toEqual({ ok: false, reason: "The repository's own git config defines filter drivers (evil). A checkout would run them on this computer, so the import does not read it. Import a fresh clone, or remove them from its .git/config." });
+    const marker = join(dir, "the-filter-ran");
+    writeFileSync(join(repo, ".gitattributes"), "* filter=evil\n");
+    writeFileSync(join(dir, "evil.sh"), `#!/bin/sh\ntouch "${marker}"\ncat\n`, { mode: 0o755 });
+    execFileSync("git", ["-C", repo, "config", "--local", "filter.evil.smudge", join(dir, "evil.sh")]);
+    execFileSync("git", ["-C", repo, "config", "--local", "filter.evil.clean", join(dir, "evil.sh")]);
+    expect(await json(`/api/import/start?path=${encodeURIComponent(repo)}`)).toMatchObject({ ok: true, path: repo });
+    expect(existsSync(marker)).toBe(false);
   });
 
   it("with the simulated runtime, reads no repository of yours", async () => {

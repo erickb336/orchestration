@@ -111,6 +111,8 @@ interface Launched {
   provider: Runner;
   access: "write" | "read";
   workspace?: PreparedWorkspace;
+  /** A lead or studio run: its read-only copy of the repository (a checkout or a snapshot), removed when the run ends. */
+  folder?: string;
   stepId: string;
   taskId: string;
   /** A check run: the protected inputs its change touched, computed at launch, recorded with the result. */
@@ -658,7 +660,8 @@ export class Scheduler {
       const info = this.launched.get(e.attemptId);
       // Lead and studio checkouts are only for reading the repository during the run: remove them afterwards.
       // A check run's throwaway copy of the change goes too, pass or fail.
-      if ((info?.taskId === "LEAD" || info?.taskId === "STUDIO" || info?.provider === "service") && info.workspace && this.workspaces) this.workspaces.remove(state.project.repoPath, info.workspace.path);
+      const read = info?.folder ?? (info?.provider === "service" ? info.workspace?.path : undefined);
+      if (read && this.workspaces) this.workspaces.remove(state.project.repoPath, read);
       // A studio run's staging folder goes once what it handed in is imported; a failed or stopped run's stays, to look at.
       if (info?.staging && R.getStudioRun(after, e.attemptId)?.status === "completed") rmSync(info.staging, { recursive: true, force: true });
       if (info?.tmp) rmSync(info.tmp, { recursive: true, force: true });
@@ -859,12 +862,9 @@ export class Scheduler {
     const adapter = this.adapterFor(run.provider);
     const limits = state.project.runLimits;
     try {
-      let workspace: PreparedWorkspace | undefined;
-      if (this.workspaces) {
-        workspace = this.workspaces.prepare({ repoPath: state.project.repoPath, projectId: state.project.id, attemptId: runId, taskId: "LEAD", stepId: "plan", access: "read" });
-      }
+      const folder = this.workspaces ? this.readRepo(state, runId, "LEAD", "plan") : undefined;
       const conventions = this.conventionsFor(state, Date.now());
-      this.launched.set(runId, { provider: run.provider, access: "read", workspace, stepId: "LEAD", taskId: "LEAD" });
+      this.launched.set(runId, { provider: run.provider, access: "read", ...(folder ? { folder } : {}), stepId: "LEAD", taskId: "LEAD" });
       adapter.start({
         attemptId: runId,
         taskId: "LEAD",
@@ -872,7 +872,7 @@ export class Scheduler {
         role: "lead",
         provider: run.provider,
         model: run.model,
-        workspace: { path: workspace?.path ?? "", access: "read" },
+        workspace: { path: folder ?? "", access: "read" },
         environment: state.project.workerEnvironment[run.provider],
         connections: state.project.workerConnections[run.provider],
         // In Vision the lead's studio brief says whether the repository has code (an "as it is today" first round).
@@ -985,12 +985,12 @@ export class Scheduler {
         return `Could not start the PE run: ${e instanceof Error ? e.message : String(e)}`;
       }
     }
-    let checkout: PreparedWorkspace | undefined;
+    let checkout: string | undefined;
     try {
       const staging = prepareStaging(state, run, studioRoot(this.dataDir, state.project.id));
       // An import's designer reads the repository at the import's commit (C11), whatever HEAD is now.
-      if (this.workspaces) checkout = this.readCheckout(state, run);
-      this.launched.set(runId, { provider: run.provider, access: "write", workspace: checkout, stepId: run.kind, taskId: "STUDIO", staging });
+      if (this.workspaces) checkout = this.readRepo(state, run.id, "STUDIO", run.kind);
+      this.launched.set(runId, { provider: run.provider, access: "write", ...(checkout ? { folder: checkout } : {}), stepId: run.kind, taskId: "STUDIO", staging });
       adapter.start({
         attemptId: runId,
         taskId: "STUDIO",
@@ -998,18 +998,18 @@ export class Scheduler {
         role: "designer",
         provider: run.provider,
         model: run.model,
-        workspace: { path: staging, access: "write", ...(checkout ? { readRoots: [checkout.path] } : {}) },
+        workspace: { path: staging, access: "write", ...(checkout ? { readRoots: [checkout] } : {}) },
         studio: true,
         environment: "isolated",
         connections: [],
-        prompt: designerEnvelope(state, run, { staging, checkout: checkout?.path }),
+        prompt: designerEnvelope(state, run, { staging, checkout }),
         outputs: [],
         limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
       });
       return undefined;
     } catch (e) {
       this.launched.delete(runId);
-      if (checkout && this.workspaces) this.workspaces.remove(state.project.repoPath, checkout.path);
+      if (checkout && this.workspaces) this.workspaces.remove(state.project.repoPath, checkout);
       return `Could not start the studio run: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
@@ -1022,17 +1022,17 @@ export class Scheduler {
   private launchNewWorkPe(state: State, run: ReturnType<typeof R.getStudioRun> & object): string | undefined {
     const adapter = this.adapterFor(run.provider);
     const limits = state.project.runLimits;
-    let checkout: PreparedWorkspace | undefined;
+    let checkout: string | undefined;
     try {
       const root = studioRoot(this.dataDir!, state.project.id);
       const tmp = join(root, run.workspace);
       rmSync(tmp, { recursive: true, force: true });
       mkdirSync(tmp, { recursive: true });
-      if (this.workspaces) checkout = this.workspaces.prepare({ repoPath: state.project.repoPath, projectId: state.project.id, attemptId: run.id, taskId: "STUDIO", stepId: "pe", access: "read" });
+      if (this.workspaces) checkout = this.readRepo(state, run.id, "STUDIO", "pe");
       const task = state.tasks.find((t) => t.id === run.review!.taskId)!;
       const protos = prototypeFolders(state, task, root);
-      this.launched.set(run.id, { provider: run.provider, access: "read", workspace: checkout, stepId: "pe", taskId: "STUDIO", tmp });
-      const folder = checkout?.path ?? tmp;
+      this.launched.set(run.id, { provider: run.provider, access: "read", ...(checkout ? { folder: checkout } : {}), stepId: "pe", taskId: "STUDIO", tmp });
+      const folder = checkout ?? tmp;
       adapter.start({
         attemptId: run.id,
         taskId: "STUDIO",
@@ -1044,7 +1044,7 @@ export class Scheduler {
         studio: true,
         environment: "isolated",
         connections: [],
-        prompt: newWorkPeEnvelope(state, run, { folder, checkout: checkout?.path, studioDir: root }),
+        prompt: newWorkPeEnvelope(state, run, { folder, checkout, studioDir: root }),
         outputs: [],
         limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
       });
@@ -1052,7 +1052,7 @@ export class Scheduler {
     } catch (e) {
       const info = this.launched.get(run.id);
       if (info?.tmp) rmSync(info.tmp, { recursive: true, force: true });
-      if (checkout && this.workspaces) this.workspaces.remove(state.project.repoPath, checkout.path);
+      if (checkout && this.workspaces) this.workspaces.remove(state.project.repoPath, checkout);
       this.launched.delete(run.id);
       return `Could not start the PE run: ${e instanceof Error ? e.message : String(e)}`;
     }
@@ -1068,17 +1068,15 @@ export class Scheduler {
   }
 
   /**
-   * A read-only checkout for a studio run: at the import's commit for a run of the import (C11), else at HEAD. A
-   * checkout that is not at the import's commit is removed and refused.
+   * The folder a lead or studio run reads the repository in, read-only. While the project's import has no baseline
+   * (ORC-032), the repository may be someone else's: the files of the import's commit (C11), written from git's object
+   * store, so nothing its git config sets runs (SR-2). Else a read-only checkout at HEAD, as for every project.
    */
-  private readCheckout(state: State, run: { id: string; kind: string; importStep?: string }): PreparedWorkspace {
-    const commit = run.importStep ? state.studio.import?.commit : undefined;
-    const ws = this.workspaces!.prepare({ repoPath: state.project.repoPath, projectId: state.project.id, attemptId: run.id, taskId: "STUDIO", stepId: run.kind, access: "read", ...(commit ? { baseRef: commit } : {}) });
-    if (commit && ws.base !== commit) {
-      this.workspaces!.remove(state.project.repoPath, ws.path);
-      throw new Error(`the checkout is not at the import's commit ${commit.slice(0, 7)}`);
-    }
-    return ws;
+  private readRepo(state: State, attemptId: string, taskId: string, stepId: string): string {
+    const imp = state.studio.import;
+    const { repoPath, id: projectId } = state.project;
+    if (imp && !imp.lockedInAt) return this.workspaces!.snapshot({ repoPath, projectId, attemptId, commit: imp.commit }).path;
+    return this.workspaces!.prepare({ repoPath, projectId, attemptId, taskId, stepId, access: "read" }).path;
   }
 
   /**
@@ -1092,16 +1090,16 @@ export class Scheduler {
     const limits = state.project.runLimits;
     const imp = state.studio.import;
     if (!imp) return "This project has no import to read";
-    let checkout: PreparedWorkspace | undefined;
+    let checkout: string | undefined;
     try {
       const root = studioRoot(this.dataDir!, state.project.id);
       const tmp = join(root, run.workspace);
       rmSync(tmp, { recursive: true, force: true });
       mkdirSync(tmp, { recursive: true });
-      if (this.workspaces) checkout = this.readCheckout(state, run);
+      if (this.workspaces) checkout = this.readRepo(state, run.id, "STUDIO", run.kind);
       const cases = imp.checks.status === "read" ? reportCases(importDir(this.dataDir!, state.project.id, imp.id)) : [];
-      this.launched.set(run.id, { provider: run.provider, access: "read", workspace: checkout, stepId: "reader", taskId: "STUDIO", tmp });
-      const folder = checkout?.path ?? tmp;
+      this.launched.set(run.id, { provider: run.provider, access: "read", ...(checkout ? { folder: checkout } : {}), stepId: "reader", taskId: "STUDIO", tmp });
+      const folder = checkout ?? tmp;
       adapter.start({
         attemptId: run.id,
         taskId: "STUDIO",
@@ -1114,7 +1112,7 @@ export class Scheduler {
         studio: true,
         environment: "isolated",
         connections: [],
-        prompt: readerEnvelope(state, run, { folder, checkout: checkout?.path, cases }),
+        prompt: readerEnvelope(state, run, { folder, checkout, cases }),
         outputs: [],
         limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
         ...(run.allowSubagents ? { allowSubagents: { ...run.allowSubagents } } : {}),
@@ -1123,7 +1121,7 @@ export class Scheduler {
     } catch (e) {
       const info = this.launched.get(run.id);
       if (info?.tmp) rmSync(info.tmp, { recursive: true, force: true });
-      if (checkout && this.workspaces) this.workspaces.remove(state.project.repoPath, checkout.path);
+      if (checkout && this.workspaces) this.workspaces.remove(state.project.repoPath, checkout);
       this.launched.delete(run.id);
       return `Could not start the import's reader: ${e instanceof Error ? e.message : String(e)}`;
     }

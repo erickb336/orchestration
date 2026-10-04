@@ -41,7 +41,7 @@ import type { StagedArtifact } from "./artifacts";
 import { captureEvidence, copyChange, evidenceDir, type EnvironmentLender } from "./evidence";
 import { sharedEnvironments } from "../environment/prepared";
 import { readDevcontainer, type ReadAtBase } from "../environment/devcontainer";
-import { localFilterDrivers, repoAt, repoFiles } from "./existing";
+import { repoAt, repoFiles } from "./existing";
 import { PROPOSAL_MARKERS, proposeImage } from "../../src/domain/environment";
 import { suggestChecks } from "../../src/domain/checks";
 import type { ImportStartInfo } from "../../src/api";
@@ -525,11 +525,8 @@ export class ImportDriver {
     let checkout: string | undefined;
     const run = async () => {
       try {
-        if (needsCopy && this.o.workspaces) {
-          const ws = this.o.workspaces.prepare({ repoPath: s.project.repoPath, projectId: s.project.id, attemptId: `${imp.id}-${kind}-${randomBytes(3).toString("hex")}`, taskId: "IMPORT", stepId: kind, access: "read", baseRef: imp.commit });
-          checkout = ws.path;
-          if (ws.base !== imp.commit) throw new Error(`the copy is not at the import's commit ${short(imp.commit)}`);
-        }
+        // The commit's files from git's object store: no checkout of the repository runs (SR-2).
+        if (needsCopy && this.o.workspaces) checkout = this.o.workspaces.snapshot({ repoPath: s.project.repoPath, projectId: s.project.id, attemptId: `${imp.id}-${kind}-${randomBytes(3).toString("hex")}`, commit: imp.commit }).path;
         mkdirSync(outDir, { recursive: true, mode: 0o700 });
         const common = { source: checkout, commit: imp.commit, ...(env.environment ? { environment: env.environment } : { noEnvironment: env.reason ?? NO_ENVIRONMENT }), outDir, signal: abort.signal, ...(log ? { log } : {}) };
         const done: Done =
@@ -599,15 +596,13 @@ const CHECK_FILES = ["package.json", "package-lock.json", "pnpm-lock.yaml", "yar
 /**
  * What the import's Start screen shows for the repository at `path`, read without changing it (git's own records, never
  * `git status`): its commit and branch, its size, the estimate, the kinds of product it shows, and how it runs (C1).
- * Refused, with the reason, when it cannot be read or its own config defines filter drivers, which a checkout runs.
+ * Refused, with the reason, when it cannot be read. The import never checks the repository out (`snapshot`), so its git config runs nothing.
  * `read` reads a file at the commit (the workspace manager's, read-only); without it nothing is read but names.
  */
 export function importStartInfo(path: string, read?: ReadAtBase): ImportStartInfo {
   if (!path.trim()) return { ok: false, reason: "Give the repository's path." };
   const at = repoAt(path);
   if (!at) return { ok: false, reason: `${path} is not a git repository with a commit.` };
-  const filters = localFilterDrivers(path);
-  if (filters.length) return { ok: false, reason: `The repository's own git config defines filter drivers (${filters.join(", ")}). A checkout would run them on this computer, so the import does not read it. Import a fresh clone, or remove them from its .git/config.` };
   const files = repoFiles(path) ?? [];
   const domains = DOMAIN_TABLE.flatMap((row) => {
     const file = files.find((f) => row.test.test(f));
