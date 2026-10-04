@@ -5,7 +5,7 @@ import { undeliveredTasks } from "../delivery";
 import * as F from "../findings";
 import { revisionsDueForLead, showRevisionsInto } from "../peReview";
 import { budgetStop, importStop } from "../spend";
-import { importReviewWaits, importStatus } from "../studio/import";
+import { importReviewWaits } from "../studio/import";
 import {
   type Attempt,
   type Autonomy,
@@ -160,16 +160,6 @@ export function leadDue(s: State, nowMs: number, localMinutes: number): LeadTrig
   if (nowMs - last >= a.planningIntervalMinutes * 60_000 || (completedSince && nowMs - last >= wakeGap)) return "planning";
   return null;
 }
-
-/**
- * Whether a lead run is the import's review reply (ORC-032): a reply in Vision that answers no message of the user's,
- * once the import is in review (only the review starts one), also when it ends after the baseline Lock in. It writes
- * round 0's message and a vision draft of the product as it is today.
- */
-export const isImportReviewRun = (s: State, r: Pick<LeadRun, "trigger" | "messageIds">) => {
-  const status = importStatus(s);
-  return r.trigger === "message" && !r.messageIds.length && s.project.stage === "shaping" && (status === "review" || status === "locked-in");
-};
 
 export function startLeadRun(state: State, init: { provider: ProviderId; model: string; trigger: LeadTrigger }, now: string): { state: State; runId: string } {
   if (activeLeadRun(state)) throw new ControlError("A lead run is already active.");

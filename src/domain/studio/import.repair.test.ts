@@ -80,3 +80,18 @@ describe("CR-8: a stored pass-4 reproduction, from a project with no import, is 
     expect(S.readyForOwner(s, v1)).toBe(true);
   });
 });
+
+describe("R2-1: an owner's message in the review is not the lead's review reply", () => {
+  it("after the lead answers the message, the review reply is still due, and it writes round 0's message", () => {
+    let s = run(tallyImport("review").s, "postMessage", { text: "What does R16 mean?" }, at(200)).state;
+    const asked = M.startLeadRun(s, { provider: "claude", model: "claude-sample-large", trigger: "message" }, at(201));
+    s = M.completeLeadRun(asked.state, asked.runId, { reply: "R16 is the refund rule.", proposals: [] }, at(202));
+    expect(s.studio.rounds[0].lead).toBeUndefined();
+    expect(I.importReviewWaits(s)).toBe(true);
+    expect(M.leadDue(s, Date.parse(at(203)), 600)).toBe("message");
+    const review = M.startLeadRun(s, { provider: "claude", model: "claude-sample-large", trigger: "message" }, at(204));
+    s = M.completeLeadRun(review.state, review.runId, { reply: "tally splits shared costs; 17 rules.", proposals: [] }, at(205));
+    expect(s.studio.rounds[0].lead).toEqual({ message: "tally splits shared costs; 17 rules.", questions: [] });
+    expect(I.importReviewWaits(s)).toBe(false);
+  });
+});

@@ -16,7 +16,7 @@ import { draft, event, nextId } from "../model/core";
 import { CONTROL_RE, oneLine } from "../model/textSafety";
 import { PRICES, fmtUsd, importStop, type BudgetStop } from "../spend";
 import { canAllowSubagents } from "../subagents";
-import { ControlError, MAX_SUBAGENT_CAP, type ProviderId, type State, type TestCaseResult } from "../types";
+import { ControlError, MAX_SUBAGENT_CAP, type LeadRun, type ProviderId, type State, type TestCaseResult } from "../types";
 import { blueprintItems, draftItems, lockInSummary, putDraftInForce, assertSummarySeen, type SummarySeen } from "./blueprint";
 import { NO_EVIDENCE, isCapturedKind, type EvidenceFile, type EvidencePath } from "./evidence";
 import { isInsidePath, latestArtifacts, latestVersion } from "./studio";
@@ -187,15 +187,25 @@ export function startImport(state: State, input: ImportStart, now: string): Stat
 }
 
 /**
+ * Whether a lead run is the import's review reply (ORC-032): a reply in Vision that answers no message of the user's,
+ * once the import is in review (only the review starts one), also when it ends after the baseline Lock in. It writes
+ * round 0's message and a vision draft of the product as it is today.
+ */
+export const isImportReviewRun = (s: State, r: Pick<LeadRun, "trigger" | "messageIds">) => {
+  const status = importStatus(s);
+  return r.trigger === "message" && !r.messageIds.length && s.project.stage === "shaping" && (status === "review" || status === "locked-in");
+};
+
+/**
  * Whether the import waits for the lead's review reply (round 0's message and a vision draft): it is in review, and no
- * reply has completed since it reached review (the end of its last reading run or its capture, whichever is later).
- * The lead's trigger holds it at the import's stop.
+ * review reply has completed since it reached review (the end of its last reading run or its capture, whichever is
+ * later). A reply to the owner's message is not one (R2-1). The lead's trigger holds it at the import's stop.
  */
 export function importReviewWaits(s: State): boolean {
   const imp = s.studio.import;
   if (!imp?.capture || importStatus(s) !== "review") return false;
   const since = [imp.capture.at, ...importRuns(s).flatMap((r) => (r.importStep !== "fix" && r.endedAt ? [r.endedAt] : []))].sort().at(-1)!;
-  return !s.leadRuns.some((r) => r.outcome === "completed" && r.startedAt >= since);
+  return !s.leadRuns.some((r) => r.outcome === "completed" && r.startedAt >= since && isImportReviewRun(s, r));
 }
 
 /** Work the import's stop holds: a run of a step, queued (a fix names its part), or the lead's review reply. */

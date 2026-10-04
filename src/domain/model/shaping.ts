@@ -31,7 +31,8 @@ import {
   StaleWriteError,
 } from "../types";
 import { currentVision, draft, event, touch } from "./core";
-import { autonomyMode, autopilotAutonomy, isImportReviewRun, setAutonomy } from "./lead";
+import { isImportReviewRun } from "../studio/import";
+import { autonomyMode, autopilotAutonomy, setAutonomy } from "./lead";
 import { CONTROL_RE, oneLine, stripInvisible, visibleOrEmpty } from "./textSafety";
 import { draftVisionText, pushVision, setDraftVisionInto } from "./vision";
 

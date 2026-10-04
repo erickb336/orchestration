@@ -13,7 +13,7 @@ import { LEAD_PRINCIPLE_IDS, orderPrinciples, principle, wordCount } from "../sr
 import { buildingSpend, committedBuildUsd, countedSpend, fmtUsd, maintenanceEstimate } from "../src/domain/spend";
 import * as B from "../src/domain/studio/blueprint";
 import * as I from "../src/domain/studio/import";
-import { isImportReviewRun } from "../src/domain/model/lead";
+import { isImportReviewRun } from "../src/domain/studio/import";
 import { domainLines } from "../src/domain/studio/domains";
 import { MAX_DESIGNER_RUNS, MAX_RUN_VARIANTS } from "../src/domain/studio/lead";
 import { captureItems, notSetUpReason } from "../src/domain/studio/evidence";
