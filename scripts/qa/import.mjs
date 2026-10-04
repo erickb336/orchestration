@@ -451,6 +451,7 @@ await runJourney(
         await page.getByText("The import did not start.").waitFor({ timeout: 10_000 });
         const refused = flat(await page.locator(".imp-start").innerText());
         j.check(/not a path inside the repository/.test(refused) && refused.includes(`Nothing changed: "${before}" stays as it was.`) && real.state().project.name === before && !real.state().studio.import, "real mode: a refused start shows its reason on Start, and the project stays as it was (QA-F3)", refused.match(/The import did not start\.[^]*?stays as it was\./)?.[0]);
+        j.check((await page.locator(".k-toast-region").innerText()).trim() === "", "real mode: a refused start shows its reason in the card only, with no toast over the fields (UX57-4)");
         await page.getByText("The import did not start.").scrollIntoViewIfNeeded();
         await j.shot("6-start-real-refused", { full: false });
         await page.locator(".imp-start").scrollIntoViewIfNeeded();

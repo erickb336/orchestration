@@ -114,7 +114,11 @@ export function StartForm({ info, onCancel }: { info: FoundRepository; onCancel?
     const r = await send("startImport", startArgs(info, d));
     setBusy(false);
     if (r.ok) before.current = key;
-    else setRefusal(r.error ?? "The service did not answer.");
+    else {
+      // The card shows the reason; a toast would say it again and cover the fields (UX57-4).
+      setNotice(null);
+      setRefusal(r.error ?? "The service did not answer.");
+    }
   };
 
   return (
