@@ -10,7 +10,7 @@ import { summaryDigest, type SummarySeen } from "../../domain/studio/blueprint";
 import { baselineBlocker, baselineSummary, importStatus, ruleTitle } from "../../domain/studio/import";
 import { fmtUsd, importSpend } from "../../domain/spend";
 import { Banner, Button, ButtonLink, Card, Checkbox, Chip, EmptyState, SimulatedChip } from "../kit";
-import { useScreenHeading } from "../common";
+import { arrive, useArrival } from "../common";
 import { useStore } from "../store";
 import { ImportBudgetStop } from "./ImportPanel";
 import { baselineFacts, baselineRows, changeLine, keptRules, openChanges, openQuestions, productName, summaryChanged } from "./importView";
@@ -33,7 +33,7 @@ export function BaselineLockIn() {
   const [done, setDone] = useState(false);
   /** You pressed Accept the vision here: the next change of the summary is yours. */
   const own = useRef(false);
-  const heading = useScreenHeading();
+  const heading = useArrival();
   // The summary changed: show the new one, and clear the agreement, with why (summaryChanged).
   useEffect(() => {
     if (!now || busy || done) return;
@@ -235,7 +235,7 @@ function BaselineSummary({ header, note, agreed, onAgree, busy, blocker, onLockI
           <Button variant="primary" disabled={!agreed || !!blocker} disabledReason={blocker ?? (!agreed ? "Tick the box first: your agreement is recorded with this summary." : undefined)} showReason loading={busy} onClick={onLockIn}>
             {busy ? "Locking in…" : "Lock in the baseline"}
           </Button>
-          <ButtonLink variant="quiet" href="#/vision">
+          <ButtonLink variant="quiet" href="#/vision" onClick={arrive}>
             Not yet
           </ButtonLink>
         </div>

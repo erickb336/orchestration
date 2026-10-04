@@ -9,7 +9,7 @@ import { importParts, importQuestions, ruleConfidence, ruleTitle } from "../../d
 import type { ImportRule, StudioArtifact } from "../../domain/studio/types";
 import { Banner, Button, ButtonLink, Card, Chip, Disclosure, Field, Meter, SimulatedChip, Textarea } from "../kit";
 import { cx } from "../kit/cx";
-import { useScreenHeading } from "../common";
+import { arrive, goTo, useArrival } from "../common";
 import { useStore } from "../store";
 import { TerminalWindow, useServiceText } from "../studio/Frames";
 import { documentFiles, documentType, kindWord, roundLead, serviceFileUrl, showKind, variantDemo } from "../studio/studioView";
@@ -133,12 +133,12 @@ export function ImportReview() {
     saveReviewDraft(projectId, imp.id, { draft: {}, note: "" });
     setDraft({});
     setNote("");
-    location.hash = BASELINE_HASH;
+    goTo(BASELINE_HASH);
   };
 
   const conflicts = qs.filter((q) => q.kind === "conflict");
   const guesses = qs.filter((q) => q.kind === "guess");
-  const heading = useScreenHeading();
+  const heading = useArrival();
   return (
     <div className="k-stack imp-page">
       <header className="st-head">
@@ -242,7 +242,7 @@ export function ImportReview() {
             </Button>
           </div>
           {imp.sentAt && (
-            <Banner tone="done" title={imp.answers.length ? `${imp.answers.length} answer${imp.answers.length === 1 ? " is" : "s are"} recorded.` : "You sent the review with every question open."} actions={<ButtonLink size="small" variant="primary" href={BASELINE_HASH}>Lock in the baseline…</ButtonLink>}>
+            <Banner tone="done" title={imp.answers.length ? `${imp.answers.length} answer${imp.answers.length === 1 ? " is" : "s are"} recorded.` : "You sent the review with every question open."} actions={<ButtonLink size="small" variant="primary" href={BASELINE_HASH} onClick={arrive}>Lock in the baseline…</ButtonLink>}>
               The baseline follows your answers. You can change an answer here until you lock it in.
             </Banner>
           )}

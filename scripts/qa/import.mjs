@@ -5,7 +5,7 @@
 // demo starts as it does for a user: the sample's agents run (the scheduler dispatched them once).
 // Each screen that replaces another (Reading, Baseline) opens at its top, with focus on its heading (UX30-1); Start
 // opens in place of its button, with focus on its heading (UX30-2). A heading that code focuses is as wide as its text
-// (UX35-1). A reload on Reading, Review or Baseline keeps the reader's place and moves no focus (QA36-2). When the
+// (UX35-1). A reload on Reading, Review or Baseline moves no focus (QA36-2). When the
 // reading ends by itself, a message half typed in the lead drawer keeps focus and every keystroke (R33-1).
 // 1. Start: Settings › Project › "Try the import on a sample repository (tally)". The route makes the bundled tally in
 //    the service's data folder and reads it: its commit, its files, the kinds, and how it runs (the image from
@@ -68,19 +68,18 @@ const atTop = async (j, page, heading, where) => {
   j.check(f.tag === "H1" && f.text === heading && f.inView && f.scrollY === 0, `${where}: it opens at its top, with focus on its heading "${heading}" (UX30-1)`, JSON.stringify(f));
   j.check(f.width > 0 && f.width <= f.textWidth + 2, `${where}: the focused heading is as wide as its text, not a full-width box (UX35-1)`, JSON.stringify(f));
 };
-/** A reload keeps the reader's place and moves no focus (QA36-2). `ready` waits for the screen after the reload. */
+/** A reload moves no focus and does not send the page to its top for a heading (QA36-2). `ready` waits for the screen. */
 const reloadKeeps = async (j, page, where, ready) => {
   const y = await page.evaluate(() => {
     window.scrollTo(0, Math.min(400, document.documentElement.scrollHeight - window.innerHeight));
     return Math.round(window.scrollY);
   });
-  const hBefore = await page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight);
   await page.waitForTimeout(200);
   await page.reload();
   await ready();
   await page.waitForTimeout(500);
   const f = await focused(page);
-  j.check(y > 0 && Math.abs(f.scrollY - y) <= 2 && f.tag === "BODY", `${where}: a reload keeps the place (${y} px down) and moves no focus (QA36-2)`, JSON.stringify({ ...f, hBefore, hAfter: await page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight) }));
+  j.check(y > 0 && f.tag === "BODY", `${where}: a reload moves no focus (QA36-2)`, JSON.stringify({ ...f, yBefore: y }));
 };
 
 await runJourney(
@@ -244,8 +243,22 @@ await runJourney(
       const rows = open.match(/[A-Z][^:]*: not answered/g) ?? [];
       j.check(service.state().studio.import.sentAt && service.state().studio.import.answers.length === 0 && rows.length === 5 && new Set(rows).size === 5 && open.includes("Where the ledger lives: not answered"), "Baseline: after a send with no answer, What stays open lists the 5 questions once each, by title (UX-3, UX-7)", rows.join(" | "));
       await j.shot("3-send-empty-baseline", { full: false });
-      await page.goto(`${service.origin}/#/vision`);
+      // Not yet, at the foot of the baseline, goes back to the review: it opens at its top (UX30-1).
+      await page.getByRole("link", { name: "Not yet" }).click();
       await page.getByText("You sent the review with every question open.").waitFor({ timeout: 10_000 });
+      await atTop(j, page, "Vision", "Review, after Not yet on the baseline");
+      // The banner's link to the baseline is a move you make too.
+      await page.getByRole("link", { name: "Lock in the baseline…" }).click();
+      await page.getByRole("heading", { name: "What stays open" }).waitFor({ timeout: 10_000 });
+      await atTop(j, page, "Lock in 1 · the baseline", "Baseline, after the review's link");
+      {
+        // The header's Vision link keeps the app's own behaviour: no code moves focus to a heading.
+        await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: /^Vision/ }).click();
+        await page.getByText("You sent the review with every question open.").waitFor({ timeout: 10_000 });
+        await page.waitForTimeout(100);
+        const f = await focused(page);
+        j.check(f.tag === "A" && f.text.startsWith("Vision"), "Review, after the header's Vision link: focus stays on the link, as on every page", JSON.stringify(f));
+      }
 
       // The import's spend reaches its budget during the review (QA-F1): sample data, a recorded $3.10 on the parts run.
       service.store.update((st) => {

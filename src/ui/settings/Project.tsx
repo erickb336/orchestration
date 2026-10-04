@@ -120,7 +120,8 @@ export function ProjectSection({ current, onDirty }: { current: boolean; onDirty
  */
 function TryImportCard() {
   const [open, setOpen] = useState(false);
-  // Start opens in place of the button: focus goes to the card's heading (the kit's Card names it `<id>-title`), UX30-2.
+  // Only the click on the button opens Start in its place: focus goes to the card's heading (the kit's Card names it
+  // `<id>-title`), UX30-2. It stays in Settings, so the page does not go to its top.
   useEffect(() => {
     if (open) focusHeading(document.getElementById("new-project-title"), false);
   }, [open]);

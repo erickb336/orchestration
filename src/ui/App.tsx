@@ -14,7 +14,7 @@ import { Overview } from "./Overview";
 import { Activity } from "./Activity";
 import { Review } from "./Review";
 import { Settings } from "./Settings";
-import { PREF_LEAD_SEEN, relTime, usePageShown, usePref } from "./common";
+import { PREF_LEAD_SEEN, endArrival, relTime, usePref } from "./common";
 import { LeadDrawer, LeadDrawerContext, type LeadContext } from "./LeadDrawer";
 import { messageStatusText } from "./notes";
 import { useBrowserNotifications } from "./notifications";
@@ -59,6 +59,8 @@ function useRoute() {
     window.addEventListener("hashchange", on);
     return () => window.removeEventListener("hashchange", on);
   }, []);
+  // After the new route's screens took their effects (children first): a move that none took ends here.
+  useEffect(endArrival, [route]);
   return route;
 }
 
@@ -110,12 +112,11 @@ function Gate() {
 
 function Shell() {
   const route = useRoute();
-  const { notice, setNotice, service, status } = useStore();
+  const { notice, setNotice, service } = useStore();
   // A task page belongs to Tasks.
   const tab = tabOf(route);
   const demo = service.runtime === "fake";
   useBrowserNotifications();
-  usePageShown(status === "online");
   // The first-run tour, demo only, once per browser.
   useFirstRunTour(demo, route.page === "overview");
 

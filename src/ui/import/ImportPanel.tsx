@@ -6,7 +6,7 @@ import { useState } from "react";
 import { fmtUsd } from "../../domain/spend";
 import { importParts } from "../../domain/studio/import";
 import { Banner, Button, Card, Field, Input, SimulatedChip, StatePill, StepList } from "../kit";
-import { useScreenHeading } from "../common";
+import { useArrival } from "../common";
 import { useStore } from "../store";
 import { kindWord } from "../studio/studioView";
 import { heldLine, importHalt, importPill, productName, readingCards, readingSteps, roundZeroLine, spendWords } from "./importView";
@@ -40,7 +40,7 @@ export function ImportPanel() {
   const words = importParts(state).find((a) => a.kind === "dictionary");
   const parts = importParts(state).filter((a) => a.kind !== "dictionary");
   const example = reading?.rules.find((r) => r.tests.length) ?? reading?.rules[0];
-  const heading = useScreenHeading();
+  const heading = useArrival();
   return (
     <div className="k-stack imp-page">
       <header className="st-head">

@@ -20,6 +20,7 @@ import { useStore } from "../store";
 import { DOMAIN_CHOICES, toggleDomain } from "../studio/studioView";
 import { SpendBar } from "./ImportPanel";
 import type { ImportStartInfo } from "../../api";
+import { goTo } from "../common";
 import { READS_ON, argvLine, foundBecause, foundLine, hasPages, howItRuns, startArgs, startBlocker, startDraft, startInfoRequest, type FoundRepository, type StartDraft } from "./importView";
 import "./import.css";
 
@@ -100,7 +101,7 @@ export function StartForm({ info, onCancel }: { info: FoundRepository; onCancel?
     if (!started) return;
     before.current = undefined;
     setNotice({ kind: "info", message: `The import of "${state.project.name}" started. Vision shows the reading.` });
-    location.hash = "#/vision";
+    goTo("#/vision");
   }, [started]);
 
   const start = async () => {
