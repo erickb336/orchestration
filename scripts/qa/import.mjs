@@ -56,6 +56,9 @@ await runJourney(
     await j.step("1 Start", async () => {
       const running = M.activeAttempts(service.state()).length;
       j.check(running > 0, "the demo's default state: the sample's agents run", `${running} running`);
+      await page.goto(`${service.origin}/#/overview`);
+      await page.getByText("This is the sample project.").waitFor({ timeout: 10_000 });
+      j.check(true, "Home before the import: This is the sample project (UX26-2)");
       await page.goto(`${service.origin}/#/settings/project/new-project`);
       const tryIt = page.getByRole("button", { name: "Try the import on a sample repository (tally)" });
       await tryIt.waitFor({ timeout: 10_000 });
@@ -154,6 +157,19 @@ await runJourney(
       await j.shot("3-review");
       await j.pageChecks("Review");
 
+      // A data folder before this one, on the same address, kept a first demo's unsent answers under the same import id
+      // (sample data). This review starts empty and forgets them (UX26-1).
+      const firstDemo = `orchestration.import.p-first-demo.${service.state().studio.import.id}.review`;
+      await page.evaluate((k) => localStorage.setItem(k, JSON.stringify({ draft: { "rule:R15": { option: "confirm" } }, note: "From the first demo." })), firstDemo);
+      await page.reload();
+      await page.getByText("2 conflicts and 3 guesses need you;").waitFor({ timeout: 10_000 });
+      {
+        const again = flat(await text(page));
+        const notes = await page.locator("textarea").evaluateAll((els) => els.map((e) => e.value).join("|"));
+        const kept = await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith("orchestration.import.")));
+        j.check(again.includes("0 of 5 answered.") && !notes.includes("From the first demo.") && kept.length === 0, "Review: a first demo's unsent answers on the same address do not show, and are forgotten (UX26-1)", `${kept.join(", ")} | ${notes.slice(0, 80)}`);
+      }
+
       // Send with no answer (UX-3): open, and it leads on to the baseline with every question open.
       const send = page.getByRole("button", { name: "Send to the lead" });
       j.check((await send.getAttribute("aria-disabled")) !== "true", "Review: with no answer, Send is open (UX-3)");
@@ -185,6 +201,10 @@ await runJourney(
       await page.goto(`${service.origin}/#/overview`);
       await page.getByText("The import budget is reached: $3.10 of $3.00. Raise it in Vision to go on.").first().waitFor({ timeout: 10_000 });
       j.check(true, "Home: it says the import waits at its budget (QA-F1)");
+      {
+        const home = flat(await text(page));
+        j.check(home.includes("This is the import demo: tally is a sample repository. For your own repository, start the service with ORCHESTRATION_RUNTIME=real npm start") && !home.includes("This is the sample project."), "Home after the import: This is the import demo (UX26-2)");
+      }
       {
         const nav = flat(await page.getByRole("navigation", { name: "Main" }).innerText());
         const main = flat(await page.locator("main").innerText());

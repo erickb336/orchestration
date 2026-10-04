@@ -29,11 +29,13 @@ export function Onboarding() {
   const shaping = state.project.stage === "shaping";
 
   if (service.runtime !== "real") {
-    // One line. The demo bar says what is simulated; this says how to use your own repository.
+    // One line. The demo bar says what is simulated; this says how to use your own repository. The simulated runtime
+    // imports only the bundled sample, so a project with an import is the import demo (UX26-2).
+    const demo = !!state.studio.import;
     return (
-      <p className="try-shaping" aria-label="About the sample project">
+      <p className="try-shaping" aria-label={demo ? "About the import demo" : "About the sample project"}>
         <span>
-          This is the sample project. For your own repository, start the service with <code>ORCHESTRATION_RUNTIME=real npm start</code>.
+          {demo ? "This is the import demo: tally is a sample repository." : "This is the sample project."} For your own repository, start the service with <code>ORCHESTRATION_RUNTIME=real npm start</code>.
         </span>
         {hide}
       </p>
