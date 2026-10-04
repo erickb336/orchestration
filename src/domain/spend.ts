@@ -3,7 +3,7 @@
 // budgets. Pure: derived from state only.
 
 import pricesJson from "./prices.json";
-import { covers } from "./studio/studio";
+import { covers, isAsIs } from "./studio/studio";
 import { type BlueprintItem, type BudgetEstimate, type ItemEstimate, type StudioRun, type UsdRange, KIND_RULES } from "./studio/types";
 import { type Attempt, type FindingDecision, type LeadRun, type PeCall, type ProviderId, type Runner, type State, type Subagent, isProvider } from "./types";
 
@@ -184,13 +184,33 @@ export interface Spend {
   unknown: UnknownCost[];
 }
 
+/** When a run was asked for: a studio run's request, else its start. */
+const askedAt = (r: Run) => ("askedAt" in r ? r.askedAt : r.startedAt);
+
+/**
+ * Whether a run is the import's (ORC-032, 2.5): the project has an import, and the run was asked for before its
+ * baseline Lock in (or there is none yet). The split uses time, so no run needs a tag of its own.
+ */
+const ofImport = (s: State, r: Run) => !!s.studio.import && (!s.studio.import.lockedInAt || askedAt(r) < s.studio.import.lockedInAt);
+
 /**
  * The building spend: every finished agent run of the project, the lead's and the studio's included (a new
  * project starts with none, so this is everything since its first Vision round, and Vision's work counts: spec
  * r5). Check runs are the service's own and cost nothing; running work is counted when it finishes, and a
- * studio run still queued has not run.
+ * studio run still queued has not run. In an imported project, the runs asked for before the baseline Lock in are the
+ * import's (`importSpend`), apart.
  */
 export function buildingSpend(s: State, prices: readonly ModelPrice[] = PRICES): Spend {
+  return spendOf(s, (r) => !ofImport(s, r), prices);
+}
+
+/** The import's spend (ORC-032, 2.5): the finished runs asked for before the baseline Lock in. None without an import. */
+export function importSpend(s: State, prices: readonly ModelPrice[] = PRICES): Spend {
+  return spendOf(s, (r) => ofImport(s, r), prices);
+}
+
+/** The spend of the finished runs that `counts` keeps. An unknown cost is estimated from every finished run. */
+function spendOf(s: State, counts: (r: Run) => boolean, prices: readonly ModelPrice[]): Spend {
   const out: Spend = { usd: 0, runs: 0, unknown: [] };
   const finished: Run[] = [...s.attempts.filter((a) => isProvider(a.snapshot.provider)), ...s.leadRuns, ...s.studio.runs].filter((r) => !["running", "stopping", "queued"].includes(outcomeOf(r)));
   const costs = finished.map((r) => estimateUsd(r, prices));
@@ -212,6 +232,7 @@ export function buildingSpend(s: State, prices: readonly ModelPrice[] = PRICES):
     return on.provider === "claude" ? s.project.runLimits.maxBudgetUsd : null;
   };
   finished.forEach((r, i) => {
+    if (!counts(r)) return;
     out.runs++;
     const c = costs[i];
     if (c.basis !== "unknown") out.usd += c.usd;
@@ -283,16 +304,31 @@ const runs = (n: number) => `${n} run${n === 1 ? "" : "s"}`;
 export function budgetStop(s: State, prices: readonly ModelPrice[] = PRICES): BudgetStop | undefined {
   const budgetUsd = s.project.budgets.buildingUsd;
   if (budgetUsd === null || s.project.budgetContinued?.buildingUsd === budgetUsd) return undefined;
-  const spend = buildingSpend(s, prices);
+  return stopAt(buildingSpend(s, prices), budgetUsd, { spend: "The building spend", budget: "The building budget" });
+}
+
+/**
+ * The import budget is reached, or the import's spend cannot be checked against it (ORC-032, 2.5): the import's runs
+ * wait until the owner raises it. Only while the import goes on: never after its baseline Lock in or its stop. The
+ * building budget plays no part. Unknown costs count as for the building budget.
+ */
+export function importStop(s: State, prices: readonly ModelPrice[] = PRICES): BudgetStop | undefined {
+  const imp = s.studio.import;
+  if (!imp || imp.stopped || imp.lockedInAt) return undefined;
+  return stopAt(importSpend(s, prices), imp.budgetUsd, { spend: "The import's spend", budget: "The import budget" });
+}
+
+/** The stop at a budget for a spend, in the owner's words; undefined below it. */
+function stopAt(spend: Spend, budgetUsd: number, words: { spend: string; budget: string }): BudgetStop | undefined {
   const countedUsd = countedSpend(spend);
   if (countedUsd === null) {
     const n = spend.unknown.filter((u) => u.countedUsd === null).length;
-    return { budgetUsd, spend, countedUsd, why: `The building spend cannot be checked against the ${fmtUsd(budgetUsd)} budget: ${runs(n)} with no recorded cost ${n === 1 ? "has" : "have"} no spend limit` };
+    return { budgetUsd, spend, countedUsd, why: `${words.spend} cannot be checked against the ${fmtUsd(budgetUsd)} budget: ${runs(n)} with no recorded cost ${n === 1 ? "has" : "have"} no spend limit` };
   }
   if (countedUsd < budgetUsd) return undefined;
   const n = spend.unknown.length;
   const estimate = n ? `, of which ${fmtUsd(estimatedUsd(spend))} is an estimate for ${n} unrecorded cost${n === 1 ? "" : "s"}` : "";
-  return { budgetUsd, spend, countedUsd, why: `The building budget is reached: ${fmtUsd(countedUsd)} of ${fmtUsd(budgetUsd)}${estimate}` };
+  return { budgetUsd, spend, countedUsd, why: `${words.budget} is reached: ${fmtUsd(countedUsd)} of ${fmtUsd(budgetUsd)}${estimate}` };
 }
 
 /**
@@ -348,8 +384,7 @@ export function itemEstimate(s: State, item: BlueprintItem): ItemEstimate {
  * review one) and not a reproduction of the code as it is today (it exists already).
  */
 export function estimatedParts(s: State): BlueprintItem[] {
-  const asIs = (i: BlueprintItem) => s.studio.artifacts.some((a) => a.id === i.artifactId && a.version === i.version && a.provenance);
-  return (s.blueprint.revisions.at(-1)?.items ?? []).filter((i) => i.status === "approved" && KIND_RULES[i.kind].peReviews && !asIs(i));
+  return (s.blueprint.revisions.at(-1)?.items ?? []).filter((i) => i.status === "approved" && KIND_RULES[i.kind].peReviews && !isAsIs(s, i));
 }
 
 /** One range of the PE's estimates summed over some parts: null while a part has no figure for it (`missing`). */

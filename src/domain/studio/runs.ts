@@ -1,6 +1,10 @@
 // Studio runs (ORC-029 pass 3): the agent runs of Vision, the designer's and the PE's (probes' come in pass 4).
 // Pure: each operation returns a new State; the service's scheduler dispatches, launches and reports them.
 //
+// The import's runs (ORC-032) work in round 0 and name their step (`importStep`): the rules reader (a research run,
+// read-only, with the helpers the owner allowed on the import), and designers for the words, the parts and a fix. They
+// run on the provider the owner chose to read the repository, Claude by default, and wait at the import budget.
+//
 // One kind runs in the factory instead (pass 5): a PE run on new work (`review`), which has no round. It is asked
 // for by askForNewWorkReviews (src/domain/peReview.ts) and dispatched only while building; everything below about
 // Vision applies to the other runs.
@@ -22,7 +26,7 @@ import { busyAgents, draft, event, nextId } from "../model/core";
 import { draftVisionText } from "../model/vision";
 import { providerLabel } from "../model/resolution";
 import { CONTROL_RE, stripInvisible, visibleOrEmpty } from "../model/textSafety";
-import { budgetStop } from "../spend";
+import { budgetStop, importStop } from "../spend";
 import { allowSubagentsForStudioRun } from "../subagents";
 import { ControlError, PROVIDERS, roleDefaultFor, type ModelSelection, type ProviderId, type State } from "../types";
 import { artifactName, endReview, latestArtifacts, latestVersion, peReview, peRunsOf } from "./studio";
@@ -313,7 +317,8 @@ const inItsStage = (s: State, r: StudioRun) => !r.review || s.project.stage === 
 
 export function dispatchStudioRuns(state: State, now: string, opts: StudioDispatchOptions = {}): { state: State; started: string[] } {
   if (state.project.hold || !state.studio.runs.some((r) => r.status === "queued" && inItsStage(state, r))) return { state, started: [] };
-  if (budgetStop(state)) return { state, started: [] };
+  // At the building budget, or while an import goes on, at the import budget (ORC-032): nothing new starts.
+  if (budgetStop(state) || importStop(state)) return { state, started: [] };
   const s = draft(state);
   const started: string[] = [];
   for (const r of s.studio.runs) {

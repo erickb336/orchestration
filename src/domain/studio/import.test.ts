@@ -6,11 +6,17 @@ import { describe, expect, it } from "vitest";
 import { InvalidCommandError, SERVICE_COMMANDS, runCommand } from "../commands";
 import * as M from "../model";
 import { buildSeed } from "../seed";
+import { budgetStop, buildingSpend, importSpend, importStop } from "../spend";
+import { PROBE_KEY, setResearchHelpers, setSubagentProviders } from "../subagents";
+import { startFactoryAsOwner } from "../testing/factory";
 import { TALLY_COMMIT, TALLY_SIZE, at, T0, tallyCases, tallyImport, tallyReading } from "../testing/import";
-import { run } from "../testing/studio";
+import { peAgrees, run } from "../testing/studio";
 import { ControlError, type State } from "../types";
 import * as B from "./blueprint";
 import * as I from "./import";
+import { itemFactoryStatus, restOfBuild } from "./itemStatus";
+import { ruleResults } from "./ruleResults";
+import * as R from "./runs";
 import * as S from "./studio";
 
 const failure = (fn: () => unknown): Error => {
@@ -107,7 +113,8 @@ describe("the import's commands (phase A)", () => {
       ["tally split", 1, "approved"],
       ["tally report", 1, "approved"],
       ["Splitting", 1, "approved"],
-      ["The ledger", 1, "approved"],
+      // The owner said the reader misread R16: the designer's fix made v2, which the baseline holds.
+      ["The ledger", 2, "approved"],
     ]);
     expect(base.s.studio.rounds[0].closedAt).toBe(at(120));
     expect(base.s.project.stage).toBe("shaping");
@@ -136,6 +143,19 @@ describe("the import's commands (phase A)", () => {
     // A reading that fits no pattern, or names no source, is refused at the boundary with every problem named.
     const bad = { rules: [{ id: "R1", area: "x", text: "tally adds things", tests: [], sources: [] }], cases: [] };
     expect(failure(() => run(checked.s, "recordImportRules", { importId: checked.importId, ...bad }, at(25))).message).toBe('the reading: rule R1 fits no pattern: "tally adds things"; rule R1: "sources" is a list of 1 to 5 { "from", "ref", "says" }');
+  });
+
+  it("the capture says for each screen, terminal demo and TUI what it recorded, or why nothing, and which way it ran", () => {
+    const sc = tallyImport("parts");
+    const cast = (id: string) => ({ artifactId: id, version: 1, status: "captured", files: [{ path: `${id}/demo.cast`, type: "cast", bytes: 10, sha256: "c".repeat(64) }] });
+    const capture = (parts: object[], path?: object) => run(sc.s, "recordImportCapture", { importId: sc.importId, capture: { parts, ...(path ? { path } : {}) } }, at(60));
+    const all = [cast(sc.parts.add!), cast(sc.parts.split!), cast(sc.parts.report!)];
+    expect(failure(() => capture(all.slice(0, 2))).message).toBe("The capture leaves out tally report: it says for each part what it recorded, or why nothing.");
+    expect(failure(() => capture([...all, cast(sc.parts.splitting!)])).message).toBe(`${sc.parts.splitting} is not a screen, terminal demo or TUI of the import.`);
+    expect(failure(() => capture(all, { via: "recorder", image: "x" })).message).toBe('The capture\'s path is { "via": "environment", "from", "image" }.');
+    const ok = capture(all, { via: "environment", from: "setting", image: "python:3.13@sha256:abc", prepare: "ran" }).state;
+    expect(ok.studio.import!.capture).toMatchObject({ at: at(60), path: { via: "environment", from: "setting", image: "python:3.13@sha256:abc", prepare: "ran" } });
+    expect(I.importStatus(ok)).toBe("review");
   });
 
   it("a late or repeated report changes nothing", () => {
@@ -182,5 +202,325 @@ describe("the import's commands (phase A)", () => {
     expect(run(sc.s, "setImportBudget", { budgetUsd: 5 }, at(30)).state.studio.import!.budgetUsd).toBe(5);
     expect(failure(() => run(tallyImport("baseline").s, "setImportBudget", { budgetUsd: 5 }, at(130))).message).toBe("The import is locked in: it is the baseline.");
     expect(failure(() => runCommand(sc.s, "setImportBudget", { budgetUsd: -1 }, at(30)))).toBeInstanceOf(ControlError);
+  });
+});
+
+// ---------- phase B: the derivations ----------
+
+/** The import of a scene, cloned, for a pure derivation's input. */
+const importOf = (s: State) => structuredClone(s.studio.import!);
+const ruleOf = (s: State, id: string) => s.studio.import!.reading!.rules.find((r) => r.id === id)!;
+const itemOf = (s: State, title: string) => B.blueprintItems(s).find((i) => i.title === title)!;
+/** The baseline Lock in's arguments for the summary as it stands. */
+const baselineArgsOf = (s: State) => ({ draftRev: I.baselineSummary(s).draftRev, summaryDigest: B.summaryDigest(I.baselineSummary(s)) });
+
+describe("a rule's confidence (2.3), derived from the baseline run and the sources, never the reader's claim", () => {
+  it("row 1: a test the rule names failed or ended with an error: a conflict, and it wins over every other row", () => {
+    const sc = tallyImport("review", { checks: { failing: ["test_split.py::test_even", "test_add.py::test_rejects_other_currency"] } });
+    expect(I.ruleConfidence(importOf(sc.s), ruleOf(sc.s, "R8"))).toEqual({ level: "conflict", why: "test-fails", test: { suite: "test_split.py", name: "test_even", status: "failed", message: "AssertionError: the output differs" } });
+    // R13's README differs too; the failing test decides.
+    expect(I.ruleConfidence(importOf(sc.s), ruleOf(sc.s, "R13"))).toMatchObject({ level: "conflict", why: "test-fails" });
+    const errored = importOf(sc.s);
+    errored.reading!.cases = errored.reading!.cases.map((c) => (c.name === "test_unknown_payer" ? { ...c, status: "error" as const } : c));
+    expect(I.ruleConfidence(errored, ruleOf(sc.s, "R3"))).toMatchObject({ level: "conflict", why: "test-fails", test: { name: "test_unknown_payer", status: "error" } });
+  });
+
+  it("row 2: two sources say different things: a conflict, with the source that differs", () => {
+    const { s } = tallyImport("review");
+    expect(I.ruleConfidence(importOf(s), ruleOf(s, "R13"))).toEqual({ level: "conflict", why: "sources-differ", source: { from: "docs", ref: "README.md, Currency", says: "a currency on each expense", differs: true } });
+    expect(I.ruleConfidence(importOf(s), ruleOf(s, "R14"))).toMatchObject({ level: "conflict", why: "sources-differ", source: { says: "--csv" } });
+  });
+
+  it("row 3: it names at least one test, and every one passed: confirmed", () => {
+    const { s } = tallyImport("review");
+    expect(I.ruleConfidence(importOf(s), ruleOf(s, "R1"))).toEqual({ level: "confirmed", tests: 2 });
+    expect(I.ruleConfidence(importOf(s), ruleOf(s, "R2"))).toEqual({ level: "confirmed", tests: 3 });
+  });
+
+  it("row 4: no test, only skipped tests, or no baseline run: inferred", () => {
+    const { s } = tallyImport("review");
+    expect(I.ruleConfidence(importOf(s), ruleOf(s, "R15"))).toEqual({ level: "inferred", why: "no-test" });
+    const skipped = importOf(s);
+    skipped.reading!.cases = skipped.reading!.cases.map((c) => (c.suite === "test_ledger.py" ? { ...c, status: "skipped" as const } : c));
+    expect(I.ruleConfidence(skipped, ruleOf(s, "R11"))).toEqual({ level: "inferred", why: "skipped" });
+    const notRun = tallyImport("review", { checks: "not-run" }).s;
+    expect(I.ruleConfidence(importOf(notRun), ruleOf(notRun, "R1"))).toEqual({ level: "inferred", why: "no-baseline-run" });
+  });
+});
+
+describe("the review's questions: every conflict, then every important guess, at most 10, conflicts first (Q4)", () => {
+  it("tally asks about its 2 conflicts and 3 important guesses, in the rules' order; confirmed rules are listed, not asked", () => {
+    const { s } = tallyImport("review");
+    const q = I.importQuestions(importOf(s));
+    expect(q.asked.map((x) => [x.ruleId, x.kind])).toEqual([
+      ["R13", "conflict"],
+      ["R14", "conflict"],
+      ["R15", "guess"],
+      ["R16", "guess"],
+      ["R17", "guess"],
+    ]);
+    expect(q.notAsked).toEqual([]);
+  });
+
+  it("past 10, the rest are not asked: they go in as the code has them and stay open; the order is stable and conflicts come first", () => {
+    const { s } = tallyImport("review");
+    const many = importOf(s);
+    // 12 more important guesses before the conflicts in the rules' order: R1–R12 lose their tests.
+    many.reading!.rules = many.reading!.rules.map((r) => (Number(r.id.slice(1)) <= 12 ? { ...r, tests: [], important: "It matters." } : r));
+    const q = I.importQuestions(many);
+    expect(q.asked.map((x) => x.ruleId)).toEqual(["R13", "R14", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8"]);
+    expect(q.notAsked.map((x) => x.ruleId)).toEqual(["R9", "R10", "R11", "R12", "R15", "R16", "R17"]);
+    expect(I.importQuestions(structuredClone(many))).toEqual(q);
+  });
+
+  it("each question's options: a conflict keeps the code or takes the source that differs, or neither; a guess is confirmed or corrected", () => {
+    const { s } = tallyImport("review");
+    const q = I.importQuestions(importOf(s)).asked;
+    expect(q[0].options).toEqual([
+      { id: "keep", keeps: true, label: "The test: one currency per group" },
+      { id: "source-2", keeps: false, label: "The docs: a currency on each expense" },
+      { id: "neither", keeps: false, label: "Neither", needsText: true },
+    ]);
+    expect(q[1].options.map((o) => o.label)).toEqual(["The code: --format csv", "The docs: --csv", "Neither"]);
+    expect(q[2].options).toEqual([
+      { id: "confirm", keeps: true, label: "Confirm" },
+      { id: "correct", keeps: false, label: "Correct", needsText: true },
+    ]);
+    const failing = tallyImport("review", { checks: { failing: ["test_split.py::test_even"] } }).s;
+    expect(I.importQuestions(importOf(failing)).asked[0].options).toEqual([
+      { id: "keep", keeps: true, label: "The code: as it is today" },
+      { id: "test", keeps: false, label: "The test: test_split.py::test_even" },
+      { id: "neither", keeps: false, label: "Neither", needsText: true },
+    ]);
+    // C15: "Correct" on a confirmed rule or on a part offers the same two choices as on a guess.
+    expect(I.importOptions(s, { rule: "R1" }).map((o) => o.id)).toEqual(["confirm", "correct"]);
+    expect(I.importOptions(s, { part: I.importParts(s)[1].id }).map((o) => o.id)).toEqual(["confirm", "correct"]);
+  });
+
+  it("an answer names one of its item's options, and Neither and Correct come with the owner's words", () => {
+    const { s } = tallyImport("review");
+    const refusal = (a: object) => failure(() => run(s, "answerImport", { answers: [a] }, at(100))).message;
+    expect(refusal({ on: { rule: "R15" }, option: "source-2" })).toBe('R15 has no option "source-2": confirm, correct.');
+    expect(refusal({ on: { rule: "R13" }, option: "neither" })).toBe("Neither needs your words: what is right.");
+    expect(refusal({ on: { rule: "R15" }, option: "correct", correction: "change" })).toBe("Correct needs your words: what is right.");
+  });
+});
+
+describe("what an answer does (2.3)", () => {
+  it("keeps the code, asks for a change, fixes a misreading, or stays open; the newest answer on an item counts", () => {
+    const sc = tallyImport("answered");
+    const imp = sc.s.studio.import!;
+    expect(["R13", "R14", "R15", "R16", "R17"].map((id) => I.itemAnswerEffect(imp, { rule: id }))).toEqual(["change", "kept", "kept", "fixed", "open"]);
+    const later = run(sc.s, "answerImport", { answers: [{ on: { rule: "R13" }, option: "keep" }] }, at(101)).state;
+    expect(I.itemAnswerEffect(later.studio.import!, { rule: "R13" })).toBe("kept");
+  });
+
+  it("a change waits as a change request on its part, open while no newer version of the part exists; the baseline keeps what the code does", () => {
+    const sc = tallyImport("answered");
+    expect(I.changeRequests(sc.s).map((c) => [c.on, c.artifactId, c.open, c.text])).toEqual([[{ rule: "R13" }, sc.parts.add, true, "The docs: a currency on each expense"]]);
+    const base = tallyImport("baseline");
+    expect(itemOf(base.s, "tally add").version).toBe(1);
+    // The lead's round designs it: once a newer version of the part exists, the request is closed, and still listed.
+    const r1 = run<{ n: number }>(base.s, "openRound", { focus: "experience" }, at(130));
+    const v1 = S.getArtifact(r1.state, base.parts.add!, 1);
+    const designed = run(r1.state, "addStudioArtifact", { artifactId: v1.id, round: r1.result.n, kind: v1.kind, title: v1.title, devices: ["terminal"], variants: v1.variants, files: v1.files, madeBy: { role: "designer", provider: "claude", model: "m", attemptId: "run-r1" } }, at(131)).state;
+    expect(I.changeRequests(designed).map((c) => [c.on, c.open])).toEqual([[{ rule: "R13" }, false]]);
+  });
+
+  it("a misreading before the Lock in is fixed: the part's next version waits for a designer's fix, and the baseline holds that version", () => {
+    const sc = tallyImport("answered");
+    expect(I.importFixesDue(sc.s).map((f) => [f.artifactId, f.text])).toEqual([[sc.parts.ledger, "A negative amount is an error today; tally add stops."]]);
+    expect(failure(() => run(sc.s, "lockInBaseline", { draftRev: 0, summaryDigest: "x" }, at(110))).message).toBe("A part waits for its fix: The ledger. The baseline holds the fixed version.");
+    const fix = run<{ runId: string }>(sc.s, "startStudioRun", { kind: "designer", round: 0, artifactId: sc.parts.ledger, brief: "Fix R16.", importStep: "fix" }, at(105));
+    expect(I.importFixesDue(fix.state)).toEqual([]);
+    expect(I.baselineBlocker(fix.state)).toBe("A part waits for its fix: The ledger. The baseline holds the fixed version.");
+    const started = R.dispatchStudioRuns(fix.state, at(105), { simulated: ["claude"] }).state;
+    const v1 = S.getArtifact(started, sc.parts.ledger!, 1);
+    const v2 = run(started, "addStudioArtifact", { artifactId: sc.parts.ledger, round: 0, kind: v1.kind, title: v1.title, devices: [], variants: v1.variants, files: v1.files, madeBy: { role: "designer", provider: "claude", model: "m", attemptId: fix.result.runId }, provenance: { files: ["tally/ledger.py"] }, rules: [{ variant: "a", path: "ledger/rules.json", rules: [{ id: "R16", text: "If the amount is below zero, then the CLI shall stop." }] }] }, at(106)).state;
+    const done = R.completeStudioRun(v2, fix.result.runId, at(107), { summary: "fixed" });
+    expect(I.importFixesDue(done)).toEqual([]);
+    const locked = run(done, "lockInBaseline", baselineArgsOf(done), at(120)).state;
+    expect(itemOf(locked, "The ledger").version).toBe(2);
+  });
+
+  it("after the Lock in, every answer that is not a keep is a change (Q6, C15), and an open question can still be answered", () => {
+    const base = tallyImport("baseline");
+    const s = run(base.s, "answerImport", { answers: [{ on: { rule: "R17" }, option: "confirm" }, { on: { rule: "R12" }, option: "correct", correction: "change", text: "Keep a backup." }, { on: { rule: "R9" }, option: "correct", correction: "misread", text: "Newest first." }] }, at(130)).state;
+    const imp = s.studio.import!;
+    expect(["R17", "R12", "R9", "R16"].map((id) => I.itemAnswerEffect(imp, { rule: id }))).toEqual(["kept", "change", "change", "fixed"]);
+    expect(I.importFixesDue(s)).toEqual([]);
+    expect(I.changeRequests(s).map((c) => (c.on as { rule: string }).rule)).toEqual(["R13", "R12", "R9"]);
+  });
+});
+
+describe("the baseline Lock in (C4): the owner's, in Vision, once, on the summary the owner saw", () => {
+  it("is refused while the import reads, after it stopped, outside Vision, and once a revision is in force", () => {
+    const parts = tallyImport("parts").s;
+    expect(failure(() => run(parts, "lockInBaseline", baselineArgsOf(parts), at(110))).message).toBe("The import is still reading: the baseline waits for the review.");
+    const review = tallyImport("review");
+    const stopped = run(review.s, "stopImport", { importId: review.importId, reason: "The owner left." }, at(105)).state;
+    expect(failure(() => run(stopped, "lockInBaseline", baselineArgsOf(stopped), at(110))).message).toBe("The import stopped: The owner left.");
+    const building = structuredClone(review.s);
+    building.project.stage = "building";
+    expect(failure(() => run(building, "lockInBaseline", baselineArgsOf(building), at(110))).message).toBe("The baseline is your first Lock in, in Vision.");
+    const base = tallyImport("baseline").s;
+    expect(failure(() => run(base, "lockInBaseline", baselineArgsOf(base), at(130))).message).toBe("The baseline is the first Lock in, and the blueprint has one already.");
+  });
+
+  it("compares and sets: a summary shown before the draft changed is refused", () => {
+    const sc = tallyImport("review");
+    const seen = baselineArgsOf(sc.s);
+    const changed = run(sc.s, "approveArtifact", { artifactId: sc.parts.add, version: 1 }, at(105)).state;
+    expect(failure(() => run(changed, "lockInBaseline", seen, at(110))).name).toBe("StaleWriteError");
+    expect(run(changed, "lockInBaseline", baselineArgsOf(changed), at(110)).state.blueprint.revisions[0].lockIn!.baseline).toEqual({ importId: sc.importId, commit: TALLY_COMMIT });
+  });
+});
+
+describe("the summary and the rest of the build leave the baseline's items out (2.4)", () => {
+  it("the baseline summary adds every part, with no new work and no PE estimate; after it, nothing is left to build", () => {
+    const { s } = tallyImport("review");
+    const summary = I.baselineSummary(s);
+    expect(summary.changes.added.map((i) => i.title)).toEqual(["Words", "tally add", "tally split", "tally report", "Splitting", "The ledger"]);
+    expect(summary.newWork).toEqual([]);
+    expect(summary.budgets.items).toEqual([]);
+    expect(restOfBuild(tallyImport("baseline").s)).toEqual({ usd: [0, 0], parts: 0, missing: 0 });
+  });
+});
+
+describe("where a baseline item stands in Design and reality (2.4)", () => {
+  const view = (s: State, title: string) => itemFactoryStatus(s, itemOf(s, title).id)!;
+  const TITLES = ["Words", "tally add", "tally split", "tally report", "Splitting", "The ledger"];
+
+  it("in force, built and verified, or built and not verified with the first gap; built by the repository at the import's commit", () => {
+    const { s, importId, parts } = tallyImport("baseline");
+    expect(TITLES.map((t) => [t, view(s, t).status, view(s, t).notVerified])).toEqual([
+      ["Words", "in-force", undefined],
+      ["tally add", "built-and-verified", undefined],
+      ["tally split", "built-and-verified", undefined],
+      ["tally report", "built-not-verified", { why: "rules-unproved", noTest: 1, skipped: 0 }],
+      ["Splitting", "built-not-verified", { why: "rules-unproved", noTest: 1, skipped: 0 }],
+      ["The ledger", "built-not-verified", { why: "rules-unproved", noTest: 2, skipped: 0 }],
+    ]);
+    expect(view(s, "tally add").baseline).toEqual({ importId, commit: TALLY_COMMIT, capture: { artifactId: parts.add, version: 1, status: "captured", files: [{ path: `${parts.add}/demo.cast`, type: "cast", bytes: 2048, sha256: "c".repeat(64) }] } });
+    expect(view(s, "Splitting").baseline).toEqual({ importId, commit: TALLY_COMMIT });
+  });
+
+  it("fails a check when a test a rule names failed", () => {
+    const { s } = tallyImport("baseline", { checks: { failing: ["test_split.py::test_even"] } });
+    expect(view(s, "tally split").status).toBe("fails-a-check");
+    expect(view(s, "tally split").rules!.results.find((r) => r.id === "R8")).toMatchObject({ status: "failed", message: "test_even: AssertionError: the output differs" });
+  });
+
+  it("a recorded kind with no recording or with a warning is not verified, and a document with no rules is not checked", () => {
+    const { s, parts } = tallyImport("baseline");
+    const edited = structuredClone(s);
+    const cap = edited.studio.import!.capture!.parts;
+    cap[0] = { artifactId: parts.add!, version: 1, status: "none", reason: "capture-failed", detail: "The tape stopped at line 3." };
+    cap[1] = { ...(cap[1] as Extract<(typeof cap)[number], { status: "captured" }>), warnings: ["The demo printed an error."] };
+    delete edited.studio.artifacts.find((a) => a.id === parts.splitting)!.rules;
+    expect(view(edited, "tally add").notVerified).toEqual({ why: "no-evidence", reason: "capture-failed", detail: "The tape stopped at line 3." });
+    expect(view(edited, "tally split").notVerified).toEqual({ why: "evidence-warning", warning: "The demo printed an error." });
+    expect(view(edited, "Splitting").notVerified).toEqual({ why: "kind-not-checked" });
+    // Without Docker nothing ran: every rule is inferred, and nothing was recorded.
+    const notRun = tallyImport("baseline", { checks: "not-run" }).s;
+    expect(view(notRun, "tally split").notVerified).toEqual({ why: "rules-unproved", noTest: 2, skipped: 0 });
+  });
+
+  it("once a newer version of a part is in force, the factory's rules apply: designed until a task builds it", () => {
+    const sc = tallyImport("baseline");
+    let s = M.editVision(sc.s, 1, "tally splits shared costs in a group.", "", "The import's draft", at(130));
+    const r1 = run<{ n: number }>(s, "openRound", { focus: "experience" }, at(131));
+    const v1 = S.getArtifact(r1.state, sc.parts.report!, 1);
+    const v2 = run(r1.state, "addStudioArtifact", { artifactId: v1.id, round: r1.result.n, kind: v1.kind, title: v1.title, devices: ["terminal"], variants: v1.variants, files: v1.files, madeBy: { role: "designer", provider: "claude", model: "m", attemptId: "run-r1" } }, at(132)).state;
+    s = run(peAgrees(v2, v1.id, 2, ["a"], at(133)), "approveArtifact", { artifactId: v1.id, version: 2 }, at(134)).state;
+    s = startFactoryAsOwner(s, at(135));
+    const report = view(s, "tally report");
+    expect([report.item.version, report.status, report.baseline]).toEqual([2, "designed", undefined]);
+    expect(view(s, "tally add").status).toBe("built-and-verified");
+  });
+});
+
+describe("rule results: the baseline run proves a rule by the tests it names (2.4)", () => {
+  it("a test proves a line by its id, with no tag; the baseline run counts at the Lock in time; a line with no test says why", () => {
+    const { s, importId } = tallyImport("baseline");
+    const add = ruleResults(s, itemOf(s, "tally add").id)!;
+    expect(add.results.map((x) => [x.id, x.status, x.tests])).toEqual([
+      ["R1", "passed", 2],
+      ["R2", "passed", 3],
+      ["R3", "passed", 1],
+      ["R4", "passed", 2],
+      ["R13", "passed", 1],
+    ]);
+    expect(add.results[0].from).toEqual({ importId, sha: TALLY_COMMIT, at: at(120), simulated: true });
+    const report = ruleResults(s, itemOf(s, "tally report").id)!;
+    expect(report.results.find((x) => x.id === "R14")).toMatchObject({ status: "no-test", tests: 0, message: `No test proves it yet: the import's tests name none, and no landed checks carry [${itemOf(s, "tally report").id} R14].` });
+    const notRun = tallyImport("baseline", { checks: "not-run" }).s;
+    expect(ruleResults(notRun, itemOf(notRun, "tally add").id)!.results[0]).toMatchObject({ status: "no-test", message: "The import's tests did not run: Docker is not available on this computer, so the tests did not run." });
+  });
+});
+
+describe("the import's spend and its stop (2.5)", () => {
+  /** The scene with its import's runs real, not simulated, each at this reported cost (or with no usage: null). */
+  const priced = (s0: State, usd: number | null) => {
+    const s = structuredClone(s0);
+    for (const r of s.studio.runs) {
+      if (!r.importStep) continue;
+      delete r.simulated;
+      if (usd === null) delete r.usage;
+      else r.usage = { costUsd: usd };
+    }
+    return s;
+  };
+
+  it("splits at the baseline Lock in: the runs asked before it are the import's, those after it the building's", () => {
+    const base = priced(tallyImport("baseline").s, 0.5);
+    expect([importSpend(base).usd, importSpend(base).runs, buildingSpend(base).usd]).toEqual([2, 4, 0]); // the words, the rules, the parts and one fix, at $0.50 each
+    const later = structuredClone(base);
+    later.leadRuns.push({ id: "lead-after", trigger: "message", provider: "claude", model: "m", startedAt: at(130), endedAt: at(131), outcome: "completed", messageIds: [], usage: { costUsd: 0.2 } } as unknown as State["leadRuns"][number]);
+    expect([importSpend(later).usd, buildingSpend(later).usd]).toEqual([2, 0.2]);
+    // A project that started from an idea has no import spend: all of it is building.
+    expect(importSpend(buildSeed(T0, { inFlightRuns: false }))).toEqual({ usd: 0, runs: 0, unknown: [] });
+  });
+
+  it("at the import budget, the import's runs wait; raising it starts them again; the building budget plays no part", () => {
+    const s = priced(tallyImport("read").s, 1.6);
+    expect(importStop(s)).toMatchObject({ budgetUsd: 3, countedUsd: 3.2, why: "The import budget is reached: $3.20 of $3.00" });
+    const withBuilding = run(s, "setBudgets", { buildingUsd: 1, maintenanceUsdPerMonth: null }, at(39)).state;
+    expect(budgetStop(withBuilding)).toBeUndefined();
+    const asked = R.requestStudioRun(withBuilding, { kind: "designer", round: 0, brief: "The parts.", importStep: "parts" }, at(40)).state;
+    expect(R.dispatchStudioRuns(asked, at(40), { simulated: ["claude"] }).started).toEqual([]);
+    const raised = run(asked, "setImportBudget", { budgetUsd: 5 }, at(41)).state;
+    expect(R.dispatchStudioRuns(raised, at(41), { simulated: ["claude"] }).started).toHaveLength(1);
+    expect(importStop(priced(tallyImport("baseline").s, 1.6))).toBeUndefined();
+  });
+
+  it("an unknown cost counts as today: a Claude run with no recorded usage counts at the run limit, never $0", () => {
+    const s = priced(tallyImport("read").s, null);
+    expect(importSpend(s).unknown.map((u) => [u.reason, u.countedUsd])).toEqual([
+      ["no-usage", 2],
+      ["no-usage", 2],
+    ]);
+    expect(importStop(s)?.why).toBe("The import budget is reached: $4.00 of $3.00, of which $4.00 is an estimate for 2 unrecorded costs");
+  });
+});
+
+describe("the reader's helpers (ORC-031): the import's own cap, never the probes' setting", () => {
+  it("a reader run may start helpers only under the cap the owner set on the import", () => {
+    const reader = (s: State) => {
+      const r = R.requestStudioRun(s, { kind: "reader", round: 0, brief: "The rules.", importStep: "rules" }, at(20));
+      return R.dispatchStudioRuns(r.state, at(20), { simulated: ["claude"] }).state.studio.runs.find((x) => x.id === r.runId)!;
+    };
+    expect(reader(tallyImport("checked", { helpers: 2 }).s).allowSubagents).toEqual({ cap: 2 });
+    const probesOnly = setResearchHelpers(setSubagentProviders(tallyImport("checked").s, ["claude"], at(15)), PROBE_KEY, 5, at(15));
+    expect(reader(probesOnly).allowSubagents).toBeUndefined();
+  });
+});
+
+describe("no PE review of the import's parts (C6)", () => {
+  it("a part reaches the owner at once, and the service asks for no PE run on it", () => {
+    const { s, parts } = tallyImport("review");
+    const add = S.getArtifact(s, parts.add!, 1);
+    expect(S.peReview(s, add)).toEqual({ status: "not-reviewed", why: "it reproduces the code as it is today, which its tests and its recording check" });
+    expect(R.askForPeReviews(s, at(70)).studio.runs.filter((r) => r.kind === "pe")).toEqual([]);
   });
 });

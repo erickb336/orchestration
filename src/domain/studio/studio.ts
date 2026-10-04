@@ -120,6 +120,9 @@ export function getArtifact(s: State, artifactId: string, version: number): Stud
 /** "Trip plan v2" */
 export const artifactName = (a: StudioArtifact) => `${a.title} v${a.version}`;
 
+/** Whether a version (or the blueprint item that names it) reproduces the code as it is today: "as is", from round 0. */
+export const isAsIs = (s: State, v: { artifactId: string; version: number }) => !!versionsOf(s, v.artifactId).find((a) => a.version === v.version)?.provenance;
+
 /** The owner's current feedback on a version: the last record for it. */
 export function currentFeedback(s: State, artifactId: string, version: number): Feedback | undefined {
   for (let i = s.studio.feedback.length - 1; i >= 0; i--) {
@@ -524,9 +527,15 @@ export type PeReview =
   | { status: "agreed"; pass: number }
   | { status: "ended"; ended: LoopEnd; note?: string; pass: number; asks: PeVerdict[]; objections: PeVerdict[] };
 
+/** Why the PE does not review a part of an import (C6), in words that follow "The PE does not review it: ". */
+export const IMPORT_PART_WHY = "it reproduces the code as it is today, which its tests and its recording check";
+
 export function peReview(s: State, a: StudioArtifact): PeReview {
   const rule = KIND_RULES[a.kind];
   if (!rule.peReviews) return { status: "not-reviewed", why: rule.why };
+  // A part of an import (ORC-032, C6) is recorded from the running code or checked by its tests, and the factory does
+  // not build it: no PE review. (Without an import, a reproduction is pass 4's, which the PE still reviews.)
+  if (a.provenance && s.studio.import) return { status: "not-reviewed", why: IMPORT_PART_WHY };
   const mine = s.studio.verdicts.filter((v) => v.artifactId === a.id && v.version === a.version);
   const pass = Math.max(0, ...mine.map((v) => v.pass));
   const latest = mine.filter((v) => v.pass === pass);
