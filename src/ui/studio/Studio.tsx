@@ -36,6 +36,9 @@ import { DeviceFrame, NoPrototypeServer, PlainFrame, ScreenshotFallback } from "
 import { PeQuestions } from "./PeQuestions";
 import { TerminalArtifact } from "./Preview";
 import { VisionCard } from "./VisionCard";
+import { ImportPanel } from "../import/ImportPanel";
+import { ImportReview } from "../import/ImportReview";
+import { importScreen } from "../import/importView";
 import {
   AS_IS_FILES_SHOWN,
   AS_IS_LABEL,
@@ -93,7 +96,19 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 /** Whether the fake runtime made this version: its run was simulated. */
 const simulatedRun = (s: ReturnType<typeof useStore>["state"], a: StudioArtifact) => a.madeBy.role !== "user" && !!s.studio.runs.find((r) => r.id === (a.madeBy as { attemptId: string }).attemptId)?.simulated;
 
+/**
+ * Vision. While a project imports a repository (ORC-032), its round 0 is the import: the reading, then the review
+ * (src/ui/import); once locked in as the baseline, the studio shows it as any round.
+ */
 export function Studio() {
+  const { state } = useStore();
+  const screen = importScreen(state);
+  if (screen === "reading") return <ImportPanel />;
+  if (screen === "review") return <ImportReview />;
+  return <StudioCanvas />;
+}
+
+function StudioCanvas() {
   const { state, service, send, disabled } = useStore();
   const [roundChoice, setRoundChoice] = useState<number | undefined>(undefined);
   const [artifactChoice, setArtifactChoice] = useState<string | undefined>(undefined);

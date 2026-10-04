@@ -27,6 +27,20 @@ Open the task, and write a note to the step that runs. The note shows **Delivere
 - **Edit** a step's output. Later steps use your version, and the record keeps both.
 - **Rerun** a finished step. The steps after it run again on its new output.
 
+## Import an existing repository
+
+The import reads a repository you already have and shows, in Vision, what the product does today. You answer only what the code cannot. Your Lock in then makes it the baseline: in force and built.
+
+1. **Start.** Open Settings › Project › Start a new project, and choose **Import an existing repository**. Give the repository's path, and click **Read the repository**. In the demo, click **Try the import on a sample repository (tally)** instead.
+2. **Check what it found.** The import reads the last commit. Changes you have not committed are left out. The kind of product, the devices and how it runs come prefilled, each with its reason. Change any that is wrong.
+3. **How it runs.** The environment, the test command and the path of its JUnit report let the import run your tests once and record the CLI and the screens, in a container with no network. Without a test command, every rule is read from the code. Without an environment, none of your code runs.
+4. **Budget.** The import has its own budget, $3 by default, with an estimate beside it. At the budget it stops and asks you. It spends nothing from the building budget.
+5. Click **Start the import**. Vision shows the reading: the tests, then the rules, then the parts, then the recording; the words at the same time. You can leave the page, or pause the import.
+6. **Review.** Round 0, *As it is today*, asks at most 10 questions: conflicts first, then the guesses that change what the product does. Confirmed rules and the parts are listed. Click **Correct** on any item that is wrong: "should do something else" is a change to design; "does something else today" means the reader misread the code, and a designer fixes the part before the baseline. Click **Send to the lead**.
+7. **Baseline.** The Lock in screen says what goes into force, the changes to design that stay out, and what stays open. Tick your agreement, and click **Lock in the baseline**.
+
+After the baseline, Results › Design and reality shows each part with its tests and its recording. Home says "Nothing to build" until you change the design. To design the changes you asked for, click **Ask the lead for a round** on Home. Your first change starts the factory through Start the factory. No file in your repository changes, and the vision stays on this computer.
+
 ## Change what is built
 
 Vision stays open while the factory runs.
