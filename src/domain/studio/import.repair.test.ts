@@ -25,6 +25,14 @@ describe("CR-1: Start the factory waits for the import's baseline", () => {
     const base = visionWritten(tallyImport("baseline").s);
     expect(M.startFactoryBlocker(base)).toBeUndefined();
   });
+
+  it("gives a stopped import's reason, and the way to import again, not a Lock in it can never get (UX57-1)", () => {
+    const read = visionWritten(tallyImport("read").s);
+    const stopped = I.stopImport(read, { importId: read.studio.import!.id, reason: "the words run failed 2 times: no reason was given." }, at(201));
+    const why = "The import stopped: the words run failed 2 times: no reason was given. To import again, start a new project in Settings › Project.";
+    expect(M.startFactoryBlocker(stopped)).toBe(why);
+    expect(() => startFactoryAsOwner(stopped, at(202))).toThrow(why);
+  });
 });
 
 describe("CR-3: round 0 stays open until the import's baseline, so no later round opens before it", () => {

@@ -47,7 +47,10 @@ export const SHAPING_LABEL = "Vision: new work waits until you start the factory
 export function startFactoryBlocker(s: State): string | undefined {
   if (s.project.stage === "building") return "The factory is already running.";
   // An import's baseline is the first Lock in (ORC-032, CR-1): the factory builds on it, never before it.
-  if (s.studio.import && !s.studio.import.lockedInAt) return "The import is not locked in yet: lock its baseline in first, in Vision.";
+  const imp = s.studio.import;
+  // A stopped import never gets its baseline: the owner starts a new project instead (UX57-1).
+  if (imp?.stopped && !imp.lockedInAt) return `The import stopped: ${imp.stopped.reason.replace(/\.$/, "")}. To import again, start a new project in Settings › Project.`;
+  if (imp && !imp.lockedInAt) return "The import is not locked in yet: lock its baseline in first, in Vision.";
   if (!currentVision(s).text.trim()) return "Write or accept a vision first.";
   return undefined;
 }
