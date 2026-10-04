@@ -1,4 +1,5 @@
-# tally split, as the code does it today. The capture types this in a copy of the repository, at its root.
+# tally split, as the code does it today. The capture types this in a copy of the repository, at its root, after
+# the other tapes: it starts from an empty ledger.
 Output demo.gif
 Output demo.webm
 Output demo.txt
@@ -10,7 +11,9 @@ Set FontSize 16
 Set TypingSpeed 40ms
 
 Hide
-Type "alias tally='python3 -m tally' && tally join ana && tally join ben && tally join cy && tally add 42 Dinner --by ana && tally add 18 Taxi --by ben --for ben,cy && clear"
+Type "alias tally='python3 -m tally'"
+Enter
+Type "rm -f .tally.json && tally join ana >/dev/null && tally join ben >/dev/null && tally join cy >/dev/null && tally add 42 Dinner --by ana >/dev/null && tally add 18 Taxi --by ben --for ben,cy >/dev/null && clear"
 Enter
 Show
 

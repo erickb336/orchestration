@@ -89,7 +89,7 @@ function importSection(state: State, run: StudioRun, checkout: string | undefine
             "",
             "- Reproduce each key part, following the product's domains: each screen or command, the interface, each core algorithm, the topology. No dictionary: another run collects the words.",
             `- Place every rule below once, unchanged (its id, its text and its tests), in the ${RULES_FILE} beside the entry of the part it belongs to: \`{ "rules": [{ "id": "R1", "text": "…", "tests": ["…"] }] }\`. A part with no rule has no ${RULES_FILE}. The service refuses a hand-in that leaves a rule out, places one twice, or changes one.`,
-            "- A terminal demo's or TUI's entry is a tape that types the real command, from the repository's root (for example `python3 -m tally add 5 Snacks --by ana`), never a stand-in script. The service records it in a copy of the repository at the commit, in the project's container, with no network; the studio does not record it.",
+            "- A terminal demo's or TUI's entry is a tape that types the real command, from the repository's root (for example `python3 -m tally add 5 Snacks --by ana`), never a stand-in script. The service records it in a copy of the repository at the commit, in the project's container, with no network; the studio does not record it. Every tape runs in that one copy, one after another: a tape that writes files first removes what an earlier tape may have left.",
             "",
             `The rules the reader found (${rules.length}):`,
             ...rules.map((r) => `- ${r.id} (${r.area}): ${r.text}${r.tests.length ? ` [tests: ${r.tests.join(", ")}]` : ""}`),
