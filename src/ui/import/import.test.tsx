@@ -4,6 +4,7 @@
 // (parts listed, not confirmed), C9 (round 0), C10 (the vision draft), C15 (Correct on any item).
 
 import { describe, expect, it } from "vitest";
+import * as M from "../../domain/model";
 import * as B from "../../domain/studio/blueprint";
 import { itemFactoryStatus } from "../../domain/studio/itemStatus";
 import { PROTOTYPE_ANSWERS, at, baselineArgs, tallyImport, type ImportOptions } from "../../domain/testing/import";
@@ -214,6 +215,16 @@ describe("4 · Baseline (C4, C5, C10)", () => {
     expect(baselineArgs(changed).summaryDigest).not.toBe(seen.summaryDigest);
     expect(() => run(changed, "lockInBaseline", seen, at(111))).toThrow(/changed since you read it|draft/i);
     expect(run(changed, "lockInBaseline", baselineArgs(changed), at(112)).state.studio.import!.lockedInAt).toBe(at(112));
+  });
+
+  it("shows the lead's draft of the vision, what tally is today, to accept (C10)", () => {
+    let s = stage("answered", { answers: CHANGE });
+    expect(text(<BaselineLockIn />, s)).toContain("The vision: what tally is today The lead drafts it with the round's message.");
+    s = M.postMessage(s, "Draft the vision from the import.", at(101));
+    const lead = M.startLeadRun(s, { provider: "claude", model: "auto", trigger: "message" }, at(102));
+    s = M.completeLeadRun(lead.state, lead.runId, { reply: "Here is a draft.", proposals: [], vision: { text: "tally splits shared costs in a group, from the terminal.", reason: "What the import found" } }, at(103));
+    const t = text(<BaselineLockIn />, s);
+    expect(t).toContain("The vision: what tally is today tally splits shared costs in a group, from the terminal. The lead's draft. Start the factory needs a vision text. Accept the vision Edit it in Vision");
   });
 
   it("is not offered while the import reads; after the Lock in it says what is in force and where to look", () => {
