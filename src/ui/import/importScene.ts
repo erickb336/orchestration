@@ -21,7 +21,7 @@ export const TALLY_START_INFO: FoundRepository = {
     { domain: "screen", device: "terminal", because: "tally/__main__.py: a command-line entry" },
     { domain: "code", because: "pyproject.toml: a package other programs can use" },
   ],
-  proposal: { label: "Python 3.12", image: `python:3.12-slim@sha256:${"a".repeat(64)}`, prepare: [["pip", "install", "-e", ".[test]"]], because: "pyproject.toml names Python 3.12 and pytest." },
+  proposal: { label: "Python 3.12", image: `python:3.12-slim@sha256:${"a".repeat(64)}`, prepare: [["pip", "install", "-e", ".[test]"]], because: "pyproject.toml" },
   checks: [],
   testReport: { command: { id: "test", label: "Tests with a JUnit report", kind: "check", argv: ["python3", "-m", "pytest", "--junitxml=reports/junit.xml"] }, path: "reports/junit.xml", because: "conftest.py" },
 };

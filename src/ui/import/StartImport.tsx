@@ -260,7 +260,7 @@ function HowItRunsFields({ info, d, set }: { info: FoundRepository; d: StartDraf
             onChange={(e) => set({ environment: e.target.checked ? { devcontainer: { file: dc.file, sha256: dc.sha256! } } : p ? { image: p.image, prepare: p.prepare } : null })}
           />
         ) : p ? (
-          <Checkbox label={`Use the image ${p.label}`} hint={`${p.because} ${shortImage(p.image)}`} checked={!!env && "image" in env} onChange={(e) => set({ environment: e.target.checked ? { image: p.image, prepare: p.prepare } : null })} />
+          <Checkbox label={`Use the image ${p.label}`} hint={`Found: ${p.because}. It prepares with ${p.prepare.length ? p.prepare.map((c) => argvLine(c)).join(", then ") : "nothing"}. ${shortImage(p.image)}`} checked={!!env && "image" in env} onChange={(e) => set({ environment: e.target.checked ? { image: p.image, prepare: p.prepare } : null })} />
         ) : (
           <p className="micro muted no-margin">{dc?.refused ?? "The repository proposes no environment. Set one in Settings › How your project runs after the start."}</p>
         )}

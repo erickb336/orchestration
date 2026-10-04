@@ -57,6 +57,8 @@ describe("1 · Start (C1, C7)", () => {
 
   it("how it runs is complete when the environment, the test command and its report are all prefilled", () => {
     expect(start(TALLY_START_INFO)).toContain("How it runs complete");
+    // The image says why it was proposed and what its prepare runs, before anything runs.
+    expect(start(TALLY_START_INFO)).toContain("Found: pyproject.toml. It prepares with pip install -e .[test].");
     expect(startDraft(TALLY_START_INFO)).toMatchObject({ testCommand: "python3 -m pytest --junitxml=reports/junit.xml", testReport: "reports/junit.xml", domains: ["screen", "code"], devices: ["terminal"], name: "tally" });
   });
 
