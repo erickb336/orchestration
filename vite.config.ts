@@ -38,7 +38,8 @@ export default defineConfig({
       // oversubscribed the machine (load 14 on 10 cores) until timing tests missed their 5 s limit.
       { extends: true, test: { name: "unit", exclude: [...configDefaults.exclude, ".claude/**", "evidence/**", ...HEAVY_TESTS], maxWorkers: "50%" } },
       // After the unit tests, one file at a time, so they never starve the unit tests' 5 s limits (or each other).
-      { extends: true, test: { name: "heavy", include: HEAVY_TESTS, fileParallelism: false, sequence: { groupOrder: 1 } } },
+      // A lock across test runs on this computer, too: two runs' Docker tests at once overrun one Docker VM (ORC-030 B-34).
+      { extends: true, test: { name: "heavy", include: HEAVY_TESTS, fileParallelism: false, sequence: { groupOrder: 1 }, globalSetup: ["server/testing/heavyLock.ts"] } },
     ],
   },
 });
