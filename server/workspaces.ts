@@ -117,12 +117,13 @@ interface CommitResult {
 
 /**
  * Environment for the service's own git calls: no inherited GIT_* variables (GIT_DIR, GIT_WORK_TREE,
- * GIT_CONFIG_* …) that could redirect them, and no prompts.
+ * GIT_CONFIG_* …) that could redirect them, and no prompts. A global git-lfs downloads nothing at a checkout: it
+ * follows the repository's own .lfsconfig, and an imported repository may be someone else's (ORC-032).
  */
 export function gitEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(process.env)) if (!k.startsWith("GIT_")) env[k] = v;
-  return { ...env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_NOSYSTEM: "1" };
+  return { ...env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_LFS_SKIP_SMUDGE: "1" };
 }
 
 /**
