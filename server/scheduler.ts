@@ -20,6 +20,7 @@ import { reportSubagent } from "../src/domain/subagents";
 import * as R from "../src/domain/studio/runs";
 import { evidenceSummary } from "../src/domain/studio/evidence";
 import * as I from "../src/domain/studio/import";
+import { startPendingImport } from "../src/domain/studio/importStart";
 import * as S from "../src/domain/studio/studio";
 import { DESIGNER_KINDS, type ImportRule } from "../src/domain/studio/types";
 import { REVIEW_ROLES, isProvider, type Artifact, type ChecksHealth, type Integration, type ProseCheck, type ProviderId, type Runner, type State, type Step, type Task, type TestCaseResult } from "../src/domain/types";
@@ -427,6 +428,9 @@ export class Scheduler {
     // unconfigured project must never reach a real agent). Checked at most every 10 s.
     const canDispatch = !this.workspaces || (!project.sample && this.repoUsable(repoPath, nowMs));
     const workspaceFor = this.workspaces ? (_t: string, _s: string, attemptId: string) => this.workspaces!.pathFor(repoPath, attemptId, project.id) : undefined;
+
+    // 0. An import's start that waits for the sample's runs to stop (ORC-032): once none is active, it starts.
+    if (project.importPending) this.store.update((s) => startPendingImport(s, now), now, lease);
 
     // 1. Lead promotion and dispatch, committed before any process starts. If the service dies
     //    between the commit and the start, reconciliation marks the run lost.

@@ -405,7 +405,7 @@ export function createHttpServer(opts: HttpOptions): Server {
         // Once a batch commits (refused files lose their records) and once a project is replaced, copies
         // no record refers to are deleted. A batch's own copies go at once; others wait out the grace
         // period in case their batch is still uploading.
-        const sweepAfter = !!opts.visionDocs && (body.name === "attachVisionDocs" || body.name === "initProject");
+        const sweepAfter = !!opts.visionDocs && (body.name === "attachVisionDocs" || body.name === "initProject" || body.name === "startImport");
         const batchHashes = sweepAfter && body.name === "attachVisionDocs" ? stagedHashes(store.read().state, body.args) : [];
         let r: CommandResult;
         try {

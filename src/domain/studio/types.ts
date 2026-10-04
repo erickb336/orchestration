@@ -8,8 +8,9 @@
 // (rounds, artifacts, feedback, PE review, probes) and blueprint.ts (approval, the draft, Lock in and its summary,
 // open items, change orders, task specs' references). The containers exist from state format 19.
 
-import type { Device, GivenPrinciple, PeReviewState, ProseCheck, ProviderId, RunSubagents, RunUsage, SubagentAllowance, TestCaseResult } from "../types";
-import type { EvidenceFile, EvidencePath, NoEvidence } from "./evidence";
+import type { EnvironmentInput } from "../environment";
+import type { Device, GivenPrinciple, PeReviewState, ProjectDomain, ProseCheck, ProviderId, RunSubagents, RunUsage, SubagentAllowance, TestCaseResult } from "../types";
+import type { EvidenceFile, EvidencePath, NoEvidence, PreviewInput } from "./evidence";
 
 /**
  * What a round is about. Round 0 is what already exists (material): what the owner brought, and for an existing
@@ -813,6 +814,8 @@ export interface ImportSource {
 export interface ImportRule {
   id: string;
   area: string;
+  /** What its question asks, in a few words ("Refunds", "Where the ledger lives"): the reader's (UX-7). */
+  title?: string;
   text: string;
   pattern: RulePattern;
   tests: string[];
@@ -884,10 +887,37 @@ export interface ProjectImport {
   /** The capture of the parts, once recorded. */
   capture?: ImportCapture;
   answers: ImportAnswer[];
+  /** When the owner last sent the review, with answers or with everything open (UX-3). */
+  sentAt?: string;
   /** The service stopped it, and why. */
   stopped?: { at: string; reason: string };
   /** The owner's baseline Lock in (blueprint revision 1). */
   lockedInAt?: string;
+}
+
+/**
+ * Everything the Start screen sets for an import, sent as one owner command (`startImport`): the new project, the kind
+ * of product and its devices, how it runs (the environment, the preview, the test command and its JUnit report), who
+ * reads, the budget and the helpers, and the commit, branch and size the screen read. `repoPath` is the owner's
+ * repository, or the bundled sample's as the service gave it (POST /api/import/demo).
+ */
+export interface ImportProjectStart {
+  name: string;
+  repoPath: string;
+  commit: string;
+  branch?: string;
+  size: RepoSize;
+  domains: ProjectDomain[];
+  devices: Device[];
+  environment?: EnvironmentInput;
+  preview?: PreviewInput;
+  /** The test command (its argv) and where it writes its JUnit report; absent: no test command. */
+  tests?: { argv: string[]; report?: string };
+  /** Who reads the repository (Q5); absent: Claude. */
+  readsOn?: ProviderId;
+  budgetUsd: number;
+  /** The rules reader's helper cap, or null: off. */
+  helpers: number | null;
 }
 
 export const emptyStudio = (): Studio => ({ rounds: [], artifacts: [], feedback: [], verdicts: [], probes: [], runs: [] });

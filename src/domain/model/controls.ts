@@ -278,6 +278,11 @@ export function resumeProject(state: State, now: string): State {
   const s = draft(state);
   if (!s.project.hold) return s;
   s.project.hold = false;
+  // An import's start that waits for the sample's runs to stop (ORC-032) ends with the pause it waits on.
+  if (s.project.importPending) {
+    delete s.project.importPending;
+    event(s, now, "user", "control", "The import did not start: you resumed the project");
+  }
   let kept = 0;
   for (const t of s.tasks) {
     if (t.lifecycle === "done" || t.lifecycle === "cancelled") continue;

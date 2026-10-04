@@ -93,11 +93,8 @@ function service(runner: ImportRunner = new SimulatedImport()) {
 
 /** A new project on tally, a screen and code product on the terminal, and the import started at HEAD. */
 function startImport(o: { helpers?: number | null; budgetUsd?: number; setup?: (s: State) => State } = {}) {
-  cmd("initProject", { name: "tally", repoPath: repo, vision: "", focus: "" });
-  cmd("setDomains", { domains: ["screen", "code"] });
-  cmd("setDevices", { devices: ["terminal"] });
   if (o.setup) store.update(o.setup, iso());
-  cmd("startImport", { commit: git("rev-parse", "HEAD"), branch: "main", budgetUsd: o.budgetUsd ?? 3, helpers: o.helpers ?? null, size: { sourceFiles: 7, testFiles: 7, kb: 12 } });
+  cmd("startImport", { name: "tally", repoPath: repo, commit: git("rev-parse", "HEAD"), branch: "main", domains: ["screen", "code"], devices: ["terminal"], budgetUsd: o.budgetUsd ?? 3, helpers: o.helpers ?? null, size: { sourceFiles: 7, testFiles: 7, kb: 12 } });
 }
 
 beforeEach(() => {

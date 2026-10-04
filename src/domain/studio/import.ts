@@ -14,13 +14,13 @@
 
 import { draft, event, nextId } from "../model/core";
 import { CONTROL_RE, oneLine } from "../model/textSafety";
-import { PRICES, fmtUsd } from "../spend";
+import { PRICES, fmtUsd, importStop, type BudgetStop } from "../spend";
 import { canAllowSubagents } from "../subagents";
 import { ControlError, MAX_SUBAGENT_CAP, type ProviderId, type State, type TestCaseResult } from "../types";
 import { blueprintItems, draftItems, lockInSummary, putDraftInForce, assertSummarySeen, type SummarySeen } from "./blueprint";
 import { NO_EVIDENCE, isCapturedKind, type EvidenceFile, type EvidencePath } from "./evidence";
 import { isInsidePath, latestArtifacts, latestVersion } from "./studio";
-import { IMPORT_SOURCE_KINDS, isUnderWay, type ImportAnswer, type ImportCapture, type ImportChecks, type ImportEstimate, type ImportPartCapture, type ImportRule, type ImportSource, type ProjectImport, type RepoSize, type StudioArtifact, type StudioRun, type UsdRange } from "./types";
+import { IMPORT_SOURCE_KINDS, isUnderWay, type ImportAnswer, type ImportCapture, type ImportChecks, type ImportEstimate, type ImportPartCapture, type ImportRule, type ImportSource, type ImportStep, type ProjectImport, type RepoSize, type StudioArtifact, type StudioRun, type UsdRange } from "./types";
 import { MAX_RULE_TESTS, MAX_RULE_TEXT, MAX_TEST_ID, type Parsed, rulePattern } from "./words";
 
 // ---------- bounds (C14) ----------
@@ -35,6 +35,8 @@ export const MAX_IMPORT_CASES = 1000;
 export const MAX_RULE_SOURCES = 5;
 /** The most questions one review asks (Q4): conflicts first, then important guesses. */
 export const MAX_IMPORT_QUESTIONS = 10;
+/** The longest title of a rule's question, in characters. */
+export const MAX_RULE_TITLE = 60;
 const MAX_ERRORS = 8;
 
 const CONTROL_G = new RegExp(CONTROL_RE.source, "g");
@@ -125,16 +127,12 @@ export interface ImportStart {
 const COMMIT_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 /**
- * The owner starts the import of the project's repository (the new-project screen), after initProject and the kind of
- * product. It opens round 0, "As it is today", and pins the import to `commit`, the HEAD the screen showed (the
- * service checks it against the repository). Refused outside Vision, in a project with rounds or an import already,
- * before the kind of product is chosen, and with helpers while no provider tracks them.
+ * Start the import on a new project (importStart.ts makes the project; the owner's command is `startImport` there). It
+ * opens round 0, "As it is today", and pins the import to `commit`, the HEAD the Start screen showed: every read of the
+ * service is at that commit, which must be in the repository. Refused with a short commit, with helpers while no
+ * provider tracks them, and when the provider that reads is not enabled.
  */
 export function startImport(state: State, input: ImportStart, now: string): State {
-  if (state.project.stage !== "shaping") throw new ControlError("The import starts a new project, in Vision.");
-  if (state.studio.import) throw new ControlError("This project has an import already. To import again, start a new project.");
-  if (state.studio.rounds.length || state.studio.artifacts.length || state.blueprint.revisions.length || state.blueprint.draft.items.length) throw new ControlError("The import starts a new project, and this one has Vision rounds already. Start a new project in Settings.");
-  if (!state.project.domains.length) throw new ControlError("Choose the kind of product first: screen, code or infrastructure.");
   if (!COMMIT_RE.test(input.commit)) throw new ControlError("The commit is a full commit id: 40 or 64 lowercase hex characters.");
   const branch = input.branch === undefined ? undefined : line(input.branch);
   if (branch !== undefined && (!branch || branch.length > 200)) throw new ControlError("The branch is a name of 1 to 200 characters.");
@@ -165,6 +163,32 @@ export function startImport(state: State, input: ImportStart, now: string): Stat
   s.studio.rounds.push({ n: 0, focus: "material", openedAt: now, summary: `As it is today: what the repository does at ${where}.` });
   event(s, now, "user", "vision", `Import started: ${where}, with a budget of ${fmtUsd(imp.budgetUsd)} (the estimate: ${fmtUsd(imp.estimate.usd[0])}–${fmtUsd(imp.estimate.usd[1])}); round 0, As it is today, opened`);
   return s;
+}
+
+/**
+ * Whether the import waits for the lead's review reply (round 0's message and a vision draft): it is in review, and no
+ * reply has completed since it reached review (the end of its last reading run or its capture, whichever is later).
+ * The lead's trigger holds it at the import's stop.
+ */
+export function importReviewWaits(s: State): boolean {
+  const imp = s.studio.import;
+  if (!imp?.capture || importStatus(s) !== "review") return false;
+  const since = [imp.capture.at, ...importRuns(s).flatMap((r) => (r.importStep !== "fix" && r.endedAt ? [r.endedAt] : []))].sort().at(-1)!;
+  return !s.leadRuns.some((r) => r.outcome === "completed" && r.startedAt >= since);
+}
+
+/** Work the import's stop holds: a run of a step, queued (a fix names its part), or the lead's review reply. */
+export type ImportHeldWork = { step: ImportStep; artifactId?: string } | { step: "review" };
+
+/**
+ * The import's stop (QA-F1), at any stage before the baseline: its spend and budget (`importStop`), and the work it
+ * holds until the owner raises the budget. Undefined below the budget, after the baseline Lock in, and once stopped.
+ */
+export function importHold(s: State): { stop: BudgetStop; holds: ImportHeldWork[] } | undefined {
+  const stop = importStop(s);
+  if (!stop) return undefined;
+  const runs = importRuns(s).filter((r) => r.status === "queued").map((r): ImportHeldWork => ({ step: r.importStep!, ...(r.artifactId ? { artifactId: r.artifactId } : {}) }));
+  return { stop, holds: [...runs, ...(importReviewWaits(s) ? [{ step: "review" as const }] : [])] };
 }
 
 /** The owner changes the import budget, for example at its stop. Refused once the import is locked in or stopped. */
@@ -212,7 +236,8 @@ export function recordImportChecks(state: State, input: { importId: string; resu
 
 /**
  * The rules reader's output (untrusted): `{ rules, cases }`, checked at the boundary. 1 to 300 rules, each with an id
- * (letters, digits, "-" and "_", each once), what it is about, its text in one of EARS's patterns, up to 20 test ids,
+ * (letters, digits, "-" and "_", each once), what it is about, optionally a title (what its question asks, at most 60
+ * characters), its text in one of EARS's patterns, up to 20 test ids,
  * 1 to 5 sources and, for a guess that matters, why; and the cases of the baseline report that the rules name, each
  * once (at most 1,000). Every problem is named, at most 8.
  */
@@ -237,6 +262,7 @@ export function parseImportReading(raw: unknown): Parsed<{ rules: ImportRule[]; 
     else if (ids.has(id)) errors.push(`${at}: the id is used twice`);
     ids.add(id);
     const area = text(v.area, 80, `${at}: "area"`) ?? "";
+    const title = text(v.title, MAX_RULE_TITLE, `${at}: "title"`, true);
     const t = text(v.text, MAX_RULE_TEXT, `${at}: "text"`) ?? "";
     const pattern = rulePattern(t);
     if (t && !pattern) errors.push(`${at} fits no pattern: ${show(t, 120)}`);
@@ -253,7 +279,7 @@ export function parseImportReading(raw: unknown): Parsed<{ rules: ImportRule[]; 
         sources.push({ from: x.from as ImportSource["from"], ref: text(x.ref, 300, `${where}: "ref"`) ?? "", says: text(x.says, 300, `${where}: "says"`) ?? "", ...(x.differs === true ? { differs: true as const } : {}) });
       });
     const important = text(v.important, 300, `${at}: "important"`, true);
-    if (pattern) rules.push({ id, area, text: t, pattern, tests: (tests as string[] | null) ?? [], sources, ...(important ? { important } : {}) });
+    if (pattern) rules.push({ id, area, ...(title ? { title } : {}), text: t, pattern, tests: (tests as string[] | null) ?? [], sources, ...(important ? { important } : {}) });
   });
   const cases: TestCaseResult[] = [];
   const caseIds = new Set<string>();
@@ -380,6 +406,14 @@ export function stopImport(state: State, input: { importId: string; reason: stri
 // ---------- the review: each rule's confidence, the questions and their options (2.3) ----------
 
 /**
+ * The sources of a rule that the review cites, each with its number in the rule (its option is `source-<n>`): every
+ * one, but no test's when the tests did not run (UX-10): a test that did not run proves and contradicts nothing.
+ */
+function citedSources(imp: ProjectImport, rule: ImportRule): { source: ImportSource; n: number }[] {
+  return rule.sources.flatMap((source, i) => (source.from === "test" && imp.checks.status !== "read" ? [] : [{ source, n: i + 1 }]));
+}
+
+/**
  * How sure the import is of a rule, derived from the baseline run and the sources, never the reader's claim. The first
  * case that applies:
  * 1. a test the rule names failed or ended with an error: a conflict (the test says one thing, the code does another);
@@ -397,8 +431,8 @@ export function ruleConfidence(imp: ProjectImport, rule: ImportRule): Confidence
   const cases = rule.tests.flatMap((id) => imp.reading?.cases.filter((c) => testId(c) === id) ?? []);
   const bad = cases.find((c) => c.status === "failed" || c.status === "error");
   if (bad) return { level: "conflict", why: "test-fails", test: bad };
-  const differs = rule.sources.find((x) => x.differs);
-  if (differs) return { level: "conflict", why: "sources-differ", source: differs };
+  const differs = citedSources(imp, rule).find((x) => x.source.differs);
+  if (differs) return { level: "conflict", why: "sources-differ", source: differs.source };
   if (cases.length && cases.every((c) => c.status === "passed")) return { level: "confirmed", tests: cases.length };
   return { level: "inferred", why: imp.checks.status !== "read" ? "no-baseline-run" : cases.length ? "skipped" : "no-test" };
 }
@@ -411,12 +445,28 @@ export interface ImportOption {
   needsText?: true;
 }
 
-/** A question of the review: a conflict, or a guess that matters (inferred, with `important`). */
+/** A question of the review: a conflict, or a guess that matters (inferred, with `important`). `title` says what it asks. */
 export interface ImportQuestion {
   ruleId: string;
+  title: string;
   kind: "conflict" | "guess";
   confidence: Confidence;
   options: ImportOption[];
+}
+
+/**
+ * What a rule's question asks, in a few words (UX-7): the reader's title, else the rule's own condition ("If the
+ * amount is below zero"), else what it does ("Keep money in whole cents"), up to MAX_RULE_TITLE characters. Never the
+ * area alone: several rules share one.
+ */
+export function ruleTitle(rule: Pick<ImportRule, "title" | "text">): string {
+  if (rule.title) return rule.title;
+  const condition = /^(?:when|while|if|where)\s+(.+?),/i.exec(rule.text)?.[0].slice(0, -1);
+  const response = /\bshall\s+(.+?)\.?$/i.exec(rule.text)?.[1];
+  const words = condition ?? (response ? response[0].toUpperCase() + response.slice(1) : rule.text);
+  if (words.length <= MAX_RULE_TITLE) return words;
+  const cut = words.slice(0, MAX_RULE_TITLE - 1);
+  return `${cut.slice(0, cut.lastIndexOf(" ") > 20 ? cut.lastIndexOf(" ") : cut.length)}…`;
 }
 
 const FROM_WORDS: Record<ImportSource["from"], string> = { test: "The test", code: "The code", docs: "The docs" };
@@ -431,14 +481,15 @@ const CONFIRM_OR_CORRECT: ImportOption[] = [
  * A rule's options. A conflict: keep the code (named by the first source that agrees with it), or take what the failing
  * test or a source that differs says, or neither. Anything else: confirm or correct.
  */
-function ruleOptions(rule: ImportRule, c: Confidence): ImportOption[] {
+function ruleOptions(imp: ProjectImport, rule: ImportRule, c: Confidence): ImportOption[] {
   if (c.level !== "conflict") return CONFIRM_OR_CORRECT;
-  const agrees = rule.sources.find((x) => !x.differs);
+  const cited = citedSources(imp, rule);
+  const agrees = cited.find((x) => !x.source.differs)?.source;
   const keep = c.why === "test-fails" ? "The code: as it is today" : agrees ? `${FROM_WORDS[agrees.from]}: ${agrees.says}` : `The code: ${rule.text}`;
   return [
     { id: "keep", keeps: true, label: keep },
     ...(c.why === "test-fails" ? [{ id: "test", keeps: false, label: `The test: ${testId(c.test)}` }] : []),
-    ...rule.sources.flatMap((x, i) => (x.differs ? [{ id: `source-${i + 1}`, keeps: false, label: `${FROM_WORDS[x.from]}: ${x.says}` }] : [])),
+    ...cited.flatMap(({ source: x, n }) => (x.differs ? [{ id: `source-${n}`, keeps: false, label: `${FROM_WORDS[x.from]}: ${x.says}` }] : [])),
     NEITHER,
   ];
 }
@@ -450,7 +501,7 @@ function ruleOptions(rule: ImportRule, c: Confidence): ImportOption[] {
 export function importQuestions(imp: ProjectImport): { asked: ImportQuestion[]; notAsked: ImportQuestion[] } {
   const all = (imp.reading?.rules ?? []).map((rule): ImportQuestion => {
     const confidence = ruleConfidence(imp, rule);
-    return { ruleId: rule.id, kind: confidence.level === "conflict" ? "conflict" : "guess", confidence, options: ruleOptions(rule, confidence) };
+    return { ruleId: rule.id, title: ruleTitle(rule), kind: confidence.level === "conflict" ? "conflict" : "guess", confidence, options: ruleOptions(imp, rule, confidence) };
   });
   const important = new Set((imp.reading?.rules ?? []).filter((r) => r.important).map((r) => r.id));
   const ordered = [...all.filter((q) => q.confidence.level === "conflict"), ...all.filter((q) => q.confidence.level === "inferred" && important.has(q.ruleId))];
@@ -466,7 +517,7 @@ export function importOptions(s: State, on: ImportTarget): ImportOption[] {
   if (!imp) return [];
   if ("part" in on) return importParts(s).some((p) => p.id === on.part) ? CONFIRM_OR_CORRECT : [];
   const rule = imp.reading?.rules.find((r) => r.id === on.rule);
-  return rule ? ruleOptions(rule, ruleConfidence(imp, rule)) : [];
+  return rule ? ruleOptions(imp, rule, ruleConfidence(imp, rule)) : [];
 }
 
 // ---------- the owner answers ----------
@@ -474,15 +525,15 @@ export function importOptions(s: State, on: ImportTarget): ImportOption[] {
 export type ImportAnswerInput = Omit<ImportAnswer, "at">;
 
 /**
- * The owner's answers on the import's rules and parts, sent together, in the review or after the baseline. Each names
- * a rule of the reading or a part of round 0, and one of its options; Neither and Correct come with the owner's words,
- * and Correct with its kind. The newest answer on an item counts.
+ * The owner sends the review: the answers on the import's rules and parts, together, in the review or after the
+ * baseline. Each names a rule of the reading or a part of round 0, and one of its options; Neither and Correct come
+ * with the owner's words, and Correct with its kind. The newest answer on an item counts. With no answer, it records
+ * that the owner sent the review with everything open (UX-3): each item goes in "not confirmed".
  */
 export function answerImport(state: State, answers: ImportAnswerInput[], now: string): State {
   const imp = getImport(state);
   if (imp.stopped) throw new ControlError(`The import stopped: ${imp.stopped.reason}`);
   if (importStatus(state) === "reading") throw new ControlError("The import is still reading: there is nothing to answer yet.");
-  if (!answers.length) throw new ControlError("Answer at least one question first.");
   const seen = new Set<string>();
   const records = answers.map((a): ImportAnswer => {
     const on: ImportTarget = "rule" in a.on ? { rule: a.on.rule } : { part: a.on.part };
@@ -502,7 +553,8 @@ export function answerImport(state: State, answers: ImportAnswerInput[], now: st
   });
   const s = draft(state);
   s.studio.import!.answers.push(...records);
-  event(s, now, "user", "vision", `Your answers on the import: ${records.length}`);
+  s.studio.import!.sentAt = now;
+  event(s, now, "user", "vision", records.length ? `Your answers on the import: ${records.length}` : "You sent the import's review with every question open");
   return s;
 }
 

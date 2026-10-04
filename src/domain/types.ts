@@ -2,7 +2,7 @@
 
 import type { EnvironmentRunRecord, EnvironmentSetting } from "./environment";
 import type { EvidenceRun, EvidenceSnapshot, PreviewSetting } from "./studio/evidence";
-import type { AskCheck, Blueprint, BudgetEstimate, ChangeOrderLineKind, OpenCase, Studio, Verdict } from "./studio/types";
+import type { AskCheck, Blueprint, BudgetEstimate, ChangeOrderLineKind, ImportProjectStart, OpenCase, Studio, Verdict } from "./studio/types";
 
 export type ProviderId = "claude" | "codex";
 export const PROVIDERS: ProviderId[] = ["claude", "codex"];
@@ -404,6 +404,12 @@ export interface Project {
    * owner's `setEnvironment` writes it.
    */
   environment?: EnvironmentSetting;
+  /**
+   * An import's start that waits for the sample's runs to stop (ORC-032, QA-F2): the owner's `startImport`, checked in
+   * full when it was sent, while the sample is paused. The service starts the import once no run of the sample is
+   * active; `refused` says why it could not, and the sample stays. Absent otherwise.
+   */
+  importPending?: { at: string; input: ImportProjectStart; refused?: string };
   /**
    * Who decides `ask-user` findings: the lead (Autopilot's default), the PE, or the user. Until the PE runs its
    * own decisions (ORC-029), a decision routed to the PE goes to the lead's decision runs.

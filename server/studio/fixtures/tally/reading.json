@@ -3,6 +3,7 @@
     {
       "id": "R1",
       "area": "tally add",
+      "title": "What an expense records",
       "text": "When you add an expense, the CLI shall record its amount, payer, people, note and date.",
       "tests": [
         "test_add.py::test_records_expense",
@@ -19,6 +20,7 @@
     {
       "id": "R2",
       "area": "tally add",
+      "title": "An amount that is not a number",
       "text": "If the amount is not a number, then the CLI shall stop with \"Amount must be a number\".",
       "tests": [
         "test_add.py::test_rejects_text",
@@ -36,6 +38,7 @@
     {
       "id": "R3",
       "area": "tally add",
+      "title": "A payer outside the group",
       "text": "If the payer is not in the group, then the CLI shall stop with \"Unknown person\".",
       "tests": [
         "test_add.py::test_unknown_payer"
@@ -51,6 +54,7 @@
     {
       "id": "R4",
       "area": "tally add",
+      "title": "Who shares a cost by default",
       "text": "When you leave out --for, the CLI shall split the cost among everyone in the group.",
       "tests": [
         "test_add.py::test_default_everyone",
@@ -67,6 +71,7 @@
     {
       "id": "R5",
       "area": "the ledger",
+      "title": "Money in whole cents",
       "text": "The ledger shall keep money in whole cents.",
       "tests": [
         "test_money.py::test_whole_cents",
@@ -83,6 +88,7 @@
     {
       "id": "R6",
       "area": "tally split",
+      "title": "Each person's balance",
       "text": "When you run tally split, the CLI shall show each person's balance.",
       "tests": [
         "test_split.py::test_balances",
@@ -99,6 +105,7 @@
     {
       "id": "R7",
       "area": "splitting",
+      "title": "The fewest payments",
       "text": "The split shall suggest the fewest payments that settle everyone.",
       "tests": [
         "test_split.py::test_fewest_payments",
@@ -115,6 +122,7 @@
     {
       "id": "R8",
       "area": "tally split",
+      "title": "When everyone is even",
       "text": "If everyone is even, then the CLI shall say \"Everyone is even\".",
       "tests": [
         "test_split.py::test_even"
@@ -130,6 +138,7 @@
     {
       "id": "R9",
       "area": "tally report",
+      "title": "The order of the report",
       "text": "When you run tally report, the CLI shall list each expense by date, oldest first.",
       "tests": [
         "test_report.py::test_by_date"
@@ -145,6 +154,7 @@
     {
       "id": "R10",
       "area": "tally report",
+      "title": "A report from a date",
       "text": "When you give --since, the report shall show only the expenses from that date on.",
       "tests": [
         "test_report.py::test_since",
@@ -161,6 +171,7 @@
     {
       "id": "R11",
       "area": "the ledger",
+      "title": "A missing ledger",
       "text": "If the ledger file is missing, then the CLI shall start an empty ledger.",
       "tests": [
         "test_ledger.py::test_missing"
@@ -176,6 +187,7 @@
     {
       "id": "R12",
       "area": "the ledger",
+      "title": "A damaged ledger",
       "text": "If the ledger file is damaged, then the CLI shall stop and change nothing.",
       "tests": [
         "test_ledger.py::test_damaged_untouched",
@@ -192,6 +204,7 @@
     {
       "id": "R13",
       "area": "tally add",
+      "title": "Currency",
       "text": "The ledger shall keep one currency per group, set in .tally.json.",
       "tests": [
         "test_add.py::test_rejects_other_currency"
@@ -213,6 +226,7 @@
     {
       "id": "R14",
       "area": "tally report",
+      "title": "CSV reports",
       "text": "When you give --format csv, the report shall print the expenses as CSV.",
       "tests": [],
       "sources": [
@@ -232,6 +246,7 @@
     {
       "id": "R15",
       "area": "splitting",
+      "title": "Rounding",
       "text": "If a cost does not split evenly, then the split shall give the extra cent to the first person in the split.",
       "tests": [],
       "sources": [
@@ -246,6 +261,7 @@
     {
       "id": "R16",
       "area": "the ledger",
+      "title": "Refunds",
       "text": "If the amount is below zero, then the CLI shall record a refund.",
       "tests": [],
       "sources": [
@@ -260,6 +276,7 @@
     {
       "id": "R17",
       "area": "the ledger",
+      "title": "Where the ledger lives",
       "text": "The ledger shall live in .tally.json in the folder where you run tally.",
       "tests": [],
       "sources": [

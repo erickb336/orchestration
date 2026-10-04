@@ -5,7 +5,7 @@ import { undeliveredTasks } from "../delivery";
 import * as F from "../findings";
 import { revisionsDueForLead, showRevisionsInto } from "../peReview";
 import { budgetStop, importStop } from "../spend";
-import { importRuns, importStatus } from "../studio/import";
+import { importReviewWaits, importStatus } from "../studio/import";
 import {
   type Attempt,
   type Autonomy,
@@ -127,7 +127,7 @@ export function leadDue(s: State, nowMs: number, localMinutes: number): LeadTrig
   if (pendingMessages(s).length) return "message";
   // The import's review (ORC-032): one reply in Vision writes the round's message and a vision draft. It waits at the
   // import's stop, as the import's studio runs do.
-  if (importReviewDue(s)) return "message";
+  if (importReviewWaits(s) && !importStop(s)) return "message";
   // Findings routed to the lead hold work up, so a decision run needs neither autonomy,
   // operating hours nor room under the planning caps (the failure backoff above still applies). Only
   // decisions no lead run has been shown yet start one: a run that left a decision open does not
@@ -163,20 +163,13 @@ export function leadDue(s: State, nowMs: number, localMinutes: number): LeadTrig
 
 /**
  * Whether a lead run is the import's review reply (ORC-032): a reply in Vision that answers no message of the user's,
- * while the import is in review. It writes the round's message and a vision draft of the product as it is today.
+ * once the import is in review (only the review starts one), also when it ends after the baseline Lock in. It writes
+ * round 0's message and a vision draft of the product as it is today.
  */
-export const isImportReviewRun = (s: State, r: Pick<LeadRun, "trigger" | "messageIds">) => r.trigger === "message" && !r.messageIds.length && s.project.stage === "shaping" && importStatus(s) === "review";
-
-/**
- * Whether the import waits for the lead's review reply: it is in review, below its stop, and no reply has completed
- * since it reached review (the end of its last reading run or its capture, whichever is later).
- */
-function importReviewDue(s: State): boolean {
-  const imp = s.studio.import;
-  if (!imp?.capture || importStatus(s) !== "review" || importStop(s)) return false;
-  const since = [imp.capture.at, ...importRuns(s).flatMap((r) => (r.importStep !== "fix" && r.endedAt ? [r.endedAt] : []))].sort().at(-1)!;
-  return !s.leadRuns.some((r) => r.outcome === "completed" && r.startedAt >= since);
-}
+export const isImportReviewRun = (s: State, r: Pick<LeadRun, "trigger" | "messageIds">) => {
+  const status = importStatus(s);
+  return r.trigger === "message" && !r.messageIds.length && s.project.stage === "shaping" && (status === "review" || status === "locked-in");
+};
 
 export function startLeadRun(state: State, init: { provider: ProviderId; model: string; trigger: LeadTrigger }, now: string): { state: State; runId: string } {
   if (activeLeadRun(state)) throw new ControlError("A lead run is already active.");

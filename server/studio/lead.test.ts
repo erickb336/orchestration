@@ -129,10 +129,8 @@ describe("the simulated lead in Vision", () => {
   it("once the import is in review, the lead replies by itself: what it found, with a vision draft of the product today (ORC-032)", async () => {
     const r = tallyRepo(join(dir, "tally"));
     service(r);
-    cmd("setDomains", { domains: ["screen", "code"] });
-    cmd("setDevices", { devices: ["terminal"] });
     const commit = execFileSync("git", ["-C", r, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-    cmd("startImport", { commit, budgetUsd: 3, helpers: null, size: { sourceFiles: 7, testFiles: 7, kb: 12 } });
+    cmd("startImport", { name: "tally", repoPath: r, commit, domains: ["screen", "code"], devices: ["terminal"], budgetUsd: 3, helpers: null, size: { sourceFiles: 7, testFiles: 7, kb: 12 } });
     // The import's service steps end asynchronously: wait for each before the next cycle.
     for (let i = 0; i < 400 && I.importStatus(state()) !== "review"; i++) {
       tick();

@@ -422,10 +422,20 @@ async function importSample() {
   const info = await api("/api/import/demo", {});
   const tally = (...args) => execFileSync("git", ["-C", info.path, ...args], { encoding: "utf8" }).trim();
   const before = [tally("rev-parse", "HEAD"), tally("rev-parse", "HEAD^{tree}"), tally("for-each-ref", "--format=%(refname) %(objectname)")].join("\n");
-  await cmd("initProject", { name: "tally (sample)", repoPath: info.path, vision: "", focus: "" });
-  await cmd("setDomains", { domains: info.domains.map((d) => d.domain) });
-  await cmd("setDevices", { devices: info.domains.flatMap((d) => (d.device ? [d.device] : [])) });
-  await cmd("startImport", { commit: info.commit, ...(info.branch ? { branch: info.branch } : {}), budgetUsd: 3, helpers: null, size: info.size });
+  // One command, as the Start screen sends it: the project, its kind and devices, and how it runs as the screen prefills it.
+  await cmd("startImport", {
+    name: "tally (sample)",
+    repoPath: info.path,
+    commit: info.commit,
+    ...(info.branch ? { branch: info.branch } : {}),
+    size: info.size,
+    domains: info.domains.map((d) => d.domain),
+    devices: info.domains.flatMap((d) => (d.device ? [d.device] : [])),
+    environment: { image: info.proposal.image, prepare: info.proposal.prepare, hosts: [] },
+    tests: { argv: info.testReport.command.argv, report: info.testReport.path },
+    budgetUsd: 3,
+    helpers: null,
+  });
   const { s } = await until("the import in review, and the lead's message", (x) => IM.importStatus(x.state) === "review" && x.state.conversation.some((m) => m.author === "lead") && !M.activeLeadRun(x.state), 5 * 60000);
   const imp = s.state.studio.import;
   const steps = (step) => s.state.studio.runs.filter((r) => r.importStep === step).map((r) => r.status);

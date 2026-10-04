@@ -92,9 +92,20 @@ export function setCatalog(state: State, provider: ProviderId, models: CatalogMo
  * the owner's Start the factory moves it to building.
  */
 export function initProject(state: State, init: { name: string; repoPath: string; vision: string; focus: string }, now: string): State {
-  if (activeAttempts(state).length || activeLeadRun(state) || activeStudioRuns(state).length) throw new ControlError("Stop all active runs (pause the project and wait for Paused) before starting a new project.");
+  if (hasActiveRuns(state)) throw new ControlError(STOP_RUNS_FIRST);
+  return newProject(state, init, now);
+}
+
+export const STOP_RUNS_FIRST = "Stop all active runs (pause the project and wait for Paused) before starting a new project.";
+
+/** Whether any run of the project is active: a task's, the lead's or the studio's. */
+export const hasActiveRuns = (s: State) => !!(activeAttempts(s).length || activeLeadRun(s) || activeStudioRuns(s).length);
+
+/** The new project that replaces this one, whatever runs: `initProject` refuses while one is active. */
+export function newProject(state: State, init: { name: string; repoPath: string; vision: string; focus: string }, now: string): State {
   if (!init.name.trim() || !init.repoPath.trim()) throw new ControlError("Name and repository path are required.");
   const s = draft(state);
+  delete s.project.importPending;
   s.project.id = `p-${Date.parse(now).toString(36)}-${s.seq.toString(36)}`;
   s.project.sample = false;
   s.project.name = init.name.trim();

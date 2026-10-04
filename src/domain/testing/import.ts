@@ -9,13 +9,12 @@
 // README contradicts (a conflict, no test), R15–R17 read from the code, no test, each important (guesses).
 
 import { buildSeed } from "../seed";
-import * as M from "../model";
 import { baselineSummary, importFixesDue } from "../studio/import";
 import { summaryDigest } from "../studio/blueprint";
 import * as R from "../studio/runs";
 import * as S from "../studio/studio";
 import { setSubagentProviders } from "../subagents";
-import type { ImportAnswer, ImportStep } from "../studio/types";
+import type { ImportAnswer, ImportProjectStart, ImportStep } from "../studio/types";
 import type { State, TestCaseResult } from "../types";
 import { run, sha } from "./studio";
 
@@ -27,25 +26,26 @@ export const TALLY_COMMIT = "c0ffee".padEnd(40, "0");
 /** What the Start screen counted at that commit. */
 export const TALLY_SIZE = { sourceFiles: 14, testFiles: 5, kb: 38 };
 
-type RuleDef = { id: string; part: PartKey; text: string; tests: string[]; sources?: { from: "test" | "code" | "docs"; ref: string; says: string; differs?: true }[]; important?: string };
+type RuleDef = { id: string; part: PartKey; title: string; text: string; tests: string[]; sources?: { from: "test" | "code" | "docs"; ref: string; says: string; differs?: true }[]; important?: string };
 
 /** The 17 rules of tally, as the reader gives them; each test id is "file::name". */
 export const TALLY_RULES: RuleDef[] = [
-  { id: "R1", part: "add", text: "When you add an expense, the CLI shall record its amount, payer, people, note and date.", tests: ["test_add.py::test_records_expense", "test_add.py::test_records_date"] },
-  { id: "R2", part: "add", text: 'If the amount is not a number, then the CLI shall stop with "Amount must be a number".', tests: ["test_add.py::test_rejects_text", "test_add.py::test_rejects_empty", "test_add.py::test_rejects_symbols"] },
-  { id: "R3", part: "add", text: 'If the payer is not in the group, then the CLI shall stop with "Unknown person".', tests: ["test_add.py::test_unknown_payer"] },
-  { id: "R4", part: "add", text: "When you leave out --for, the CLI shall split the cost among everyone in the group.", tests: ["test_add.py::test_default_everyone", "test_add.py::test_default_after_join"] },
-  { id: "R5", part: "ledger", text: "The ledger shall keep money in whole cents.", tests: ["test_money.py::test_whole_cents", "test_money.py::test_no_floats"] },
-  { id: "R6", part: "split", text: "When you run tally split, the CLI shall show each person's balance.", tests: ["test_split.py::test_balances", "test_split.py::test_balances_sum_to_zero"] },
-  { id: "R7", part: "splitting", text: "The split shall suggest the fewest payments that settle everyone.", tests: ["test_split.py::test_fewest_payments", "test_split.py::test_settles_all"] },
-  { id: "R8", part: "split", text: 'If everyone is even, then the CLI shall say "Everyone is even".', tests: ["test_split.py::test_even"] },
-  { id: "R9", part: "report", text: "When you run tally report, the CLI shall list each expense by date, oldest first.", tests: ["test_report.py::test_by_date"] },
-  { id: "R10", part: "report", text: "When you give --since, the report shall show only the expenses from that date on.", tests: ["test_report.py::test_since", "test_report.py::test_since_empty"] },
-  { id: "R11", part: "ledger", text: "If the ledger file is missing, then the CLI shall start an empty ledger.", tests: ["test_ledger.py::test_missing"] },
-  { id: "R12", part: "ledger", text: "If the ledger file is damaged, then the CLI shall stop and change nothing.", tests: ["test_ledger.py::test_damaged_untouched", "test_ledger.py::test_damaged_message"] },
+  { id: "R1", part: "add", title: "What an expense records", text: "When you add an expense, the CLI shall record its amount, payer, people, note and date.", tests: ["test_add.py::test_records_expense", "test_add.py::test_records_date"] },
+  { id: "R2", part: "add", title: "An amount that is not a number", text: 'If the amount is not a number, then the CLI shall stop with "Amount must be a number".', tests: ["test_add.py::test_rejects_text", "test_add.py::test_rejects_empty", "test_add.py::test_rejects_symbols"] },
+  { id: "R3", part: "add", title: "A payer outside the group", text: 'If the payer is not in the group, then the CLI shall stop with "Unknown person".', tests: ["test_add.py::test_unknown_payer"] },
+  { id: "R4", part: "add", title: "Who shares a cost by default", text: "When you leave out --for, the CLI shall split the cost among everyone in the group.", tests: ["test_add.py::test_default_everyone", "test_add.py::test_default_after_join"] },
+  { id: "R5", part: "ledger", title: "Money in whole cents", text: "The ledger shall keep money in whole cents.", tests: ["test_money.py::test_whole_cents", "test_money.py::test_no_floats"] },
+  { id: "R6", part: "split", title: "Each person's balance", text: "When you run tally split, the CLI shall show each person's balance.", tests: ["test_split.py::test_balances", "test_split.py::test_balances_sum_to_zero"] },
+  { id: "R7", part: "splitting", title: "The fewest payments", text: "The split shall suggest the fewest payments that settle everyone.", tests: ["test_split.py::test_fewest_payments", "test_split.py::test_settles_all"] },
+  { id: "R8", part: "split", title: "When everyone is even", text: 'If everyone is even, then the CLI shall say "Everyone is even".', tests: ["test_split.py::test_even"] },
+  { id: "R9", part: "report", title: "The order of the report", text: "When you run tally report, the CLI shall list each expense by date, oldest first.", tests: ["test_report.py::test_by_date"] },
+  { id: "R10", part: "report", title: "A report from a date", text: "When you give --since, the report shall show only the expenses from that date on.", tests: ["test_report.py::test_since", "test_report.py::test_since_empty"] },
+  { id: "R11", part: "ledger", title: "A missing ledger", text: "If the ledger file is missing, then the CLI shall start an empty ledger.", tests: ["test_ledger.py::test_missing"] },
+  { id: "R12", part: "ledger", title: "A damaged ledger", text: "If the ledger file is damaged, then the CLI shall stop and change nothing.", tests: ["test_ledger.py::test_damaged_untouched", "test_ledger.py::test_damaged_message"] },
   {
     id: "R13",
     part: "add",
+    title: "Currency",
     text: "The ledger shall keep one currency per group, set in .tally.json.",
     tests: ["test_add.py::test_rejects_other_currency"],
     sources: [
@@ -56,6 +56,7 @@ export const TALLY_RULES: RuleDef[] = [
   {
     id: "R14",
     part: "report",
+    title: "CSV reports",
     text: "When you give --format csv, the report shall print the expenses as CSV.",
     tests: [],
     sources: [
@@ -63,9 +64,9 @@ export const TALLY_RULES: RuleDef[] = [
       { from: "docs", ref: "README.md, Reports", says: "--csv", differs: true },
     ],
   },
-  { id: "R15", part: "splitting", text: "If a cost does not split evenly, then the split shall give the extra cent to the first person in the split.", tests: [], important: "It decides who pays the extra cent." },
-  { id: "R16", part: "ledger", text: "If the amount is below zero, then the CLI shall record a refund.", tests: [], important: "It changes what a negative amount means in the ledger." },
-  { id: "R17", part: "ledger", text: "The ledger shall live in .tally.json in the folder where you run tally.", tests: [], important: "It decides which ledger each command reads and writes." },
+  { id: "R15", part: "splitting", title: "Rounding", text: "If a cost does not split evenly, then the split shall give the extra cent to the first person in the split.", tests: [], important: "It decides who pays the extra cent." },
+  { id: "R16", part: "ledger", title: "Refunds", text: "If the amount is below zero, then the CLI shall record a refund.", tests: [], important: "It changes what a negative amount means in the ledger." },
+  { id: "R17", part: "ledger", title: "Where the ledger lives", text: "The ledger shall live in .tally.json in the folder where you run tally.", tests: [], important: "It decides which ledger each command reads and writes." },
 ];
 
 const AREA: Record<PartKey, string> = { add: "tally add", split: "tally split", report: "tally report", splitting: "splitting", ledger: "the ledger" };
@@ -82,6 +83,7 @@ export function tallyReading(o: { failing?: string[]; noTests?: boolean } = {}) 
       return {
         id: r.id,
         area: AREA[r.part],
+        title: r.title,
         text: r.text,
         tests: o.noTests ? [] : r.tests,
         sources: o.noTests ? [code(r), ...sources.filter((x) => x.from === "docs")] : sources,
@@ -122,6 +124,19 @@ export const TALLY_WORDS = [
   { term: "settle up", meaning: "The payments that bring every balance to zero.", avoid: [] },
   { term: "ledger", meaning: "The file that holds a group's expenses.", avoid: [] },
 ];
+
+/** What the Start screen sends for tally: the `startImport` command's arguments, with no environment or test command. */
+export const TALLY_START: ImportProjectStart = {
+  name: "tally (sample)",
+  repoPath: "/tmp/tally",
+  commit: TALLY_COMMIT,
+  branch: "main",
+  size: TALLY_SIZE,
+  domains: ["screen", "code"],
+  devices: ["terminal"],
+  budgetUsd: 3,
+  helpers: null,
+};
 
 /** How far the import has got: started; its tests recorded; its rules read; its parts in; in review; answered; locked in. */
 export type ImportStage = "started" | "checked" | "read" | "parts" | "review" | "answered" | "baseline";
@@ -172,12 +187,10 @@ function startRun(s: State, step: ImportStep, sec: number, artifactId?: string):
  */
 export function tallyImport(stage: ImportStage = "review", o: ImportOptions = {}): ImportScene {
   const upTo = (x: ImportStage) => STAGES.indexOf(stage) >= STAGES.indexOf(x);
-  let s = M.initProject(buildSeed(T0, { inFlightRuns: false }), { name: "tally (sample)", repoPath: "/tmp/tally", vision: "", focus: "" }, at(0));
-  s = run(s, "setDomains", { domains: ["screen", "code"] }, at(0)).state;
-  s = run(s, "setDevices", { devices: ["terminal"] }, at(0)).state;
+  let s = buildSeed(T0, { inFlightRuns: false });
   // Helpers need a provider that tracks them (ORC-031): the service writes which at start.
   if (o.helpers) s = setSubagentProviders(s, ["claude"], at(0));
-  s = run(s, "startImport", { commit: TALLY_COMMIT, branch: "main", budgetUsd: 3, helpers: o.helpers ?? null, size: TALLY_SIZE }, at(1)).state;
+  s = run(s, "startImport", { ...TALLY_START, helpers: o.helpers ?? null }, at(1)).state;
   const importId = s.studio.import!.id;
   const scene: ImportScene = { s, importId, parts: {}, runs: {} };
   if (!upTo("checked")) return scene;
