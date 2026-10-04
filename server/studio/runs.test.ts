@@ -210,7 +210,9 @@ describe("a designer run at the service", () => {
     expect(a.prompt).toContain(`- Read the code, read-only, in the checkout at ${a.workspace.readRoots![0]} (commit ${commit.slice(0, 7)}). The service lets you read only that checkout and your working directory.`);
     expect(a.prompt).toContain('give every artifact `"provenance"`: the repository files it came from');
     expect(a.prompt).toContain("## The import: the words\n\n- Hand in one dictionary (kind `dictionary`)");
-    expect(execFileSync("git", ["-C", a.workspace.readRoots![0], "rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(commit);
+    // The commit's files, written from git's object store: no checkout, and no .git (SR-2).
+    expect(readFileSync(join(a.workspace.readRoots![0], "src", "index.html"), "utf8")).toBe("<h1>Trips</h1>");
+    expect(existsSync(join(a.workspace.readRoots![0], ".git"))).toBe(false);
     // On Codex (Q5: only when the owner picks it), the reads are not confined, and the envelope says so.
     await scheduler.stop();
     store.close();
