@@ -5,7 +5,11 @@
 import type { CaptureDevice, EvidenceFile, ItemEvidence, NoEvidence, NoRunYet } from "../../domain/studio/evidence";
 import type { CitingTask, ItemFactoryStatus, ItemFactoryView, NotVerified, UxDifference } from "../../domain/studio/itemStatus";
 import type { RuleResult, RuleStatus } from "../../domain/studio/ruleResults";
+import { isAsIsItem } from "../../domain/studio/import";
+import type { BlueprintItem, StudioArtifact } from "../../domain/studio/types";
+import type { State } from "../../domain/types";
 import { fmtTime } from "../common";
+import { baselineStatus, type BaselineGap, type BaselineStatus } from "../import/importView";
 import type { Tone } from "../kit";
 
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -210,4 +214,16 @@ export function differenceState(d: UxDifference): string {
     case "superseded":
       return "open: a later run replaced the review";
   }
+}
+
+// ---------- a part of an import's baseline (ORC-032) ----------
+
+/**
+ * The part of the import's baseline an item stands for, with its status (plan 2.4), while the version in force is
+ * the import's "as is" version; undefined for every other item (the factory's rules apply).
+ */
+export function baselineOf(s: State, item: BlueprintItem): { part: StudioArtifact; status: BaselineStatus; gap?: BaselineGap } | undefined {
+  if (!s.studio.import?.lockedInAt || !isAsIsItem(s, item)) return undefined;
+  const part = s.studio.artifacts.find((a) => a.id === item.artifactId && a.version === item.version);
+  return part && { part, ...baselineStatus(s, part) };
 }

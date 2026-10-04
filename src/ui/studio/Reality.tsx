@@ -16,7 +16,9 @@ import { useStore } from "../store";
 import { ScaledBox, TerminalRecording, TerminalText, TerminalWindow, useServiceText } from "./Frames";
 import { ArtifactPreview, TermsTable } from "./Preview";
 import { readCast, renderAnsi } from "./ansi";
-import { NO_EVIDENCE_CLAUSE, STATUS_TONE, STATUS_WORDS, differenceState, evidenceCaption, evidenceFileUrl, recordingOf, ruleCell, rulesLine, shortSha, shotOf, statusWhy, taskState, taskWords } from "./realityView";
+import { answerChip, baselineWhy, casesOf, partRules, testsOfPart } from "../import/importView";
+import { testId } from "../../domain/studio/import";
+import { NO_EVIDENCE_CLAUSE, STATUS_TONE, STATUS_WORDS, baselineOf, differenceState, evidenceCaption, evidenceFileUrl, recordingOf, ruleCell, rulesLine, shortSha, shotOf, statusWhy, taskState, taskWords } from "./realityView";
 import { DEVICE_LABEL, DEVICE_SIZE, serviceFileUrl, showKind, variantDemo } from "./studioView";
 import "./studio.css";
 
@@ -58,7 +60,8 @@ export function Reality() {
       ) : (
         <>
           <p className="small muted no-margin">
-            Lock in {B.blueprintRev(state)} · {views.length} part{views.length === 1 ? "" : "s"}. Each part of the design, where the factory stands on it, and the evidence beside the design. The checks decide "built and verified".
+            Lock in {B.blueprintRev(state)}
+            {state.blueprint.revisions.at(-1)?.lockIn?.baseline ? ", the baseline" : ""} · {views.length} part{views.length === 1 ? "" : "s"}. Each part of the design, where the factory stands on it, and the evidence beside the design. The checks decide "built and verified".
           </p>
           <div className="st-reality">
             <div className="k-stack k-stack--tight">
@@ -83,17 +86,21 @@ export function Reality() {
 
 /** One part of the design: its name, version and kind, its status, its tasks, its rule results, and its evidence thumbnails. */
 function ItemRow({ view: v, current, onClick }: { view: ItemFactoryView; current: boolean; onClick: () => void }) {
-  const rules = rulesLine(v);
+  const { state } = useStore();
+  // A part of the import's baseline (ORC-032): its status and tests come from the import.
+  const base = baselineOf(state, v.item);
+  const status = base?.status ?? v.status;
+  const rules = base ? testsOfPart(state, base.part) : rulesLine(v);
   return (
     <button type="button" className="st-bprow" aria-current={current ? "true" : undefined} onClick={onClick}>
       <span className="st-bprow__name">
         <b>{v.item.title}</b> <span className="muted">v{v.item.version}</span>
         <span className="st-bprow__kind">{v.item.kind}</span>
       </span>
-      <StatePill tone={STATUS_TONE[v.status]} pulse={v.status === "being-built" && v.tasks.some((t) => t.state === "running")}>
-        {STATUS_WORDS[v.status]}
+      <StatePill tone={STATUS_TONE[status]} pulse={status === "being-built" && v.tasks.some((t) => t.state === "running")}>
+        {STATUS_WORDS[status]}
       </StatePill>
-      <span className="st-bprow__tasks">{v.tasks.length ? v.tasks.map((t) => taskWords(t, v.item.version)).join(" · ") : "no task yet"}</span>
+      <span className="st-bprow__tasks">{base ? "from the import" : v.tasks.length ? v.tasks.map((t) => taskWords(t, v.item.version)).join(" · ") : "no task yet"}</span>
       {rules && <span className="st-bprow__rules">Tests: {rules}</span>}
       <Thumbs view={v} />
     </button>
@@ -143,6 +150,8 @@ function designGif(a: StudioArtifact, variant: string | undefined): string | und
 /** The chosen part, side by side: the approved design and what the factory built, or each rule with its test. */
 export function ItemDetail({ view: v }: { view: ItemFactoryView }) {
   const { state } = useStore();
+  const base = baselineOf(state, v.item);
+  if (base) return <BaselineDetail view={v} base={base} />;
   const artifact = B.citedArtifact(state, v.item);
   const kind = artifact ? showKind(artifact) : undefined;
   return (
@@ -183,6 +192,80 @@ export function ItemDetail({ view: v }: { view: ItemFactoryView }) {
                 <a href={`#/task/${encodeURIComponent(t.taskId)}`}>{t.taskId}</a> {t.title} · {taskState(t, v.item.version)}
               </li>
             ))}
+          </ul>
+        </section>
+      )}
+    </Card>
+  );
+}
+
+/**
+ * A part of the import's baseline (ORC-032): why it stands where it does, what the import recorded of it (the
+ * recording is the part's own demo, at the import's commit), and each rule with its tests and your answer.
+ */
+function BaselineDetail({ view: v, base }: { view: ItemFactoryView; base: NonNullable<ReturnType<typeof baselineOf>> }) {
+  const { state } = useStore();
+  const imp = state.studio.import!;
+  const a = base.part;
+  const rules = partRules(state, a);
+  const tests = testsOfPart(state, a);
+  const cap = imp.capture?.parts.find((p) => p.artifactId === a.id);
+  const recorded = cap?.status === "captured" ? `Recorded at commit ${shortSha(imp.commit)}${imp.capture?.simulated ? " · simulated" : ""}` : `Not recorded${cap?.status === "none" ? `: ${cap.detail}` : ""}`;
+  return (
+    <Card
+      title={
+        <>
+          {v.item.title} <span className="muted">v{v.item.version}</span>
+        </>
+      }
+      actions={<StatePill tone={STATUS_TONE[base.status]}>{STATUS_WORDS[base.status]}</StatePill>}
+      className="st-reality__card"
+    >
+      <p className="small muted no-margin">
+        {v.item.kind} · from the import, Lock in 1{tests ? ` · Tests: ${tests}` : ""}
+      </p>
+      <p className="small">{baselineWhy(state, a, base)}</p>
+      {a.kind === "dictionary" ? (
+        <TermsTable artifact={a} />
+      ) : (
+        <section className="st-beside__pane" aria-label={isCapturedKind(a.kind) ? "The recording" : "The design"}>
+          <p className="st-beside__cap">
+            <span>{isCapturedKind(a.kind) ? recorded : `The design · as it is today, at commit ${shortSha(imp.commit)}`}</span>
+          </p>
+          <DesignStage view={v} artifact={a} device="desktop" />
+        </section>
+      )}
+      {rules.length > 0 && (
+        <section aria-label="Its rules">
+          <h3 className="st-label">Its rules</h3>
+          <ul className="st-reality__baserules">
+            {rules.map((r) => {
+              const cases = casesOf(state, r);
+              const bad = cases.find((c) => c.status !== "passed");
+              const chip = answerChip(state, r);
+              return (
+                <li key={r.id}>
+                  <span className="st-rule__id">{r.id}</span>
+                  <span className="k-stack k-stack--tight">
+                    <span>{r.text}</span>
+                    <span className="imp-ruleev">
+                      {cases.length ? (
+                        <>
+                          <span className="micro muted s-mono imp-wrap">
+                            {testId(cases[0])}
+                            {cases.length > 1 ? ` +${cases.length - 1}` : ""}
+                          </span>
+                          <Chip tone={bad ? (bad.status === "skipped" ? "you" : "fail") : "done"}>{bad ? (bad.status === "skipped" ? "skipped" : "fails") : "passes"}</Chip>
+                        </>
+                      ) : (
+                        <Chip tone="you">no test</Chip>
+                      )}
+                      {chip && <Chip tone={chip.tone}>{chip.word}</Chip>}
+                    </span>
+                  </span>
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}

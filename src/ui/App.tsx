@@ -19,7 +19,7 @@ import { LeadDrawer, LeadDrawerContext, type LeadContext } from "./LeadDrawer";
 import { messageStatusText } from "./notes";
 import { useBrowserNotifications } from "./notifications";
 import { agentsStopping, agentsWorking, liveIndicatorText, prsNeedingYou, unreadLeadReplies } from "./progress";
-import { factoryPlaceState, visionPlaceState, type PlaceState } from "./placesView";
+import { factoryPlaceState, importPlaces, visionPlaceState, type PlaceState } from "./placesView";
 import { resultsHref } from "./resultsView";
 import { parseRoute, tabOf } from "./route";
 import { ShapingBanner } from "./Shaping";
@@ -28,6 +28,7 @@ import { Gallery } from "./kit/Gallery";
 import { ChangeOrderPage } from "./changeOrder/ChangeOrder";
 import { PreflightPage } from "./preflight/Preflight";
 import { LockInPage } from "./studio/LockIn";
+import { BaselineLockIn } from "./import/BaselineLockIn";
 import { Reality } from "./studio/Reality";
 import { Studio } from "./studio/Studio";
 import { waitingForYourMark } from "./studio/studioView";
@@ -142,7 +143,7 @@ function Shell() {
       <ConnectionBanner />
       <Header tab={tab} leadOpen={leadOpen} onLead={() => (leadOpen ? closeLead() : openLead())} />
       {/* There is no stage chip. While shaping, the banner says so on every page; Home shows the shaping panel, the board its own banner, and the studio is Vision itself. */}
-      {route.page !== "tasks" && route.page !== "overview" && route.page !== "vision" && route.page !== "lock-in" && route.page !== "preflight" && (
+      {route.page !== "tasks" && route.page !== "overview" && route.page !== "vision" && route.page !== "lock-in" && route.page !== "baseline" && route.page !== "preflight" && (
         <div className="shell-banner">
           <ShapingBanner />
         </div>
@@ -157,6 +158,7 @@ function Shell() {
         {route.page === "kit" && <Gallery />}
         {route.page === "vision" && <Studio />}
         {route.page === "lock-in" && <LockInPage />}
+        {route.page === "baseline" && <BaselineLockIn />}
         {route.page === "preflight" && <PreflightPage />}
         {route.page === "reality" && <Reality />}
         {route.page === "change-order" && <ChangeOrderPage key={route.rev} rev={route.rev} />}
@@ -392,14 +394,14 @@ export function PlaceStateText({ s }: { s: PlaceState }) {
 /** The factory's state beside Home: running and how many agents work, pausing, paused, stopped at the budget, or not started. */
 export function FactoryState() {
   const { state } = useStore();
-  return <PlaceStateText s={factoryPlaceState(factoryPlace(state), liveIndicatorText(agentsWorking(state), agentsStopping(state)))} />;
+  return <PlaceStateText s={importPlaces(state)?.home ?? factoryPlaceState(factoryPlace(state), liveIndicatorText(agentsWorking(state), agentsStopping(state)))} />;
 }
 
 /** Vision's state beside it: a draft and what it holds, or when the version in force was locked in. */
 export function VisionState() {
   const { state } = useStore();
   const now = useNow();
-  return <PlaceStateText s={visionPlaceState(visionPlace(state), now)} />;
+  return <PlaceStateText s={importPlaces(state)?.vision ?? visionPlaceState(visionPlace(state), now)} />;
 }
 
 function ConnectionBanner() {
