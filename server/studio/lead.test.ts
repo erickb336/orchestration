@@ -1,7 +1,7 @@
 // ORC-029 pass 4 at the service, with the fake runtime: the simulated lead runs the studio loop from the owner's
-// message. It plans a round ("as it is today" for a repository with code, else the next focus), asks for one designer
-// run and one question, labelled simulated; the simulated designer hands in what was asked (a screen, a document, or
-// an "as is" reproduction naming files the repository has); the PE reviews it; the owner can answer.
+// message. It plans the next focus (the import, not the lead, makes round 0 of an existing repository: ORC-032), asks
+// for one designer run and one question, labelled simulated; the simulated designer hands in what was asked (a screen or
+// a document); the PE reviews it; the owner can answer. Once an import is in review, the lead writes its message.
 
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -12,12 +12,14 @@ import { runCommand } from "../../src/domain/commands";
 import * as M from "../../src/domain/model";
 import { buildSeed } from "../../src/domain/seed";
 import * as S from "../../src/domain/studio/studio";
+import * as I from "../../src/domain/studio/import";
 import { startFactoryAsOwner } from "../../src/domain/testing/factory";
 import type { State } from "../../src/domain/types";
 import { buildLeadEnvelope } from "../envelope";
 import { FakeAdapter, defaultFakeConfig, fakeStudio } from "../runtimes/fake";
 import { Scheduler } from "../scheduler";
 import { Store } from "../store";
+import { tallyRepo } from "./import";
 
 let dir: string;
 let dataDir: string;
@@ -89,7 +91,8 @@ describe("the simulated lead's studio block, from its envelope alone", () => {
   const open = (s: State, focus: string) => runCommand(s, "openRound", { focus }, at(4)).state;
 
   it("plans the next focus in order, each text labelled simulated, and nothing while a round is open or after the flows", () => {
-    expect(studioOf(fresh(), { files: 2, codeFiles: 1, code: ["src/index.html"] })).toMatchObject({ openRound: { focus: "material" }, designerRuns: [{ kinds: ["screen"], variants: 1, devices: ["desktop", "mobile"] }] });
+    // A repository with code changes nothing here: the import makes round 0 (C12).
+    expect(studioOf(fresh(), { files: 2, codeFiles: 1, code: ["src/index.html"] })).toMatchObject({ openRound: { focus: "experience" }, designerRuns: [{ kinds: ["screen"], variants: 2, devices: ["desktop", "mobile"] }] });
     let s = open(fresh(), "experience");
     expect(studioOf(s)).toBeUndefined();
     s = close(s, 1);
@@ -112,31 +115,41 @@ describe("the simulated lead's studio block, from its envelope alone", () => {
 });
 
 describe("the simulated lead in Vision", () => {
-  it("for a repository with code, plans round 0 as it is today: the designer reproduces the screen as is, naming the files it came from, and the PE reviews it", () => {
+  it("for a repository with code, opens round 1 on the experience: the import, not the lead, reproduces the code (C12)", () => {
     service(repo({ "README.md": "# Trips\n", "src/index.html": "<h1>Trips</h1>", "src/trips.css": "h1 {}" }));
     cmd("postMessage", { text: "This is my old trips app. Let's look at it." });
     until((s) => s.studio.rounds.length > 0, "a round");
     const s0 = state();
-    const lead = s0.leadRuns.at(-1)!;
-    expect(s0.studio.rounds[0]).toMatchObject({ n: 0, focus: "material", summary: "As it is today (simulated): what the code in the repository does now.", leadRunId: lead.id });
-    expect(s0.studio.rounds[0].lead!.message).toMatch(/I opened a round on the product as it is today and asked the designer for one run, with one question beside it \(simulated\)\.$/);
-    // The owner chooses the domains in the app, so the lead never asks about them.
-    expect(s0.studio.rounds[0].lead!.questions).toEqual([{ text: "Is this how the product works today? (simulated)", reason: "Later rounds change what the code does now, so it must be right first.", options: ["Yes", "Mostly: see my pins", "No"] }]);
-    const [designer] = s0.studio.runs;
-    expect(designer).toMatchObject({ kind: "designer", round: 0, fromLead: { leadRunId: lead.id, kinds: ["screen"], variants: 1, devices: ["desktop", "mobile"] } });
-    until(settled, "the reproduction imported and reviewed");
-    const s = state();
-    const [a] = S.latestArtifacts(s);
-    expect(a).toMatchObject({ round: 0, kind: "screen", title: "Trip plan as it is today (simulated sample)", variants: [{ id: "a", label: "As it is today" }], provenance: { asIs: true, files: ["src/index.html", "src/trips.css"] } });
-    expect(s.studio.runs.find((r) => r.id === designer.id)).toMatchObject({ status: "completed", simulated: true });
-    expect(s.studio.verdicts.filter((v) => v.artifactId === a.id).map((v) => v.verdict)).toEqual(["feasible"]);
-    // The owner answers; the lead's next reply plans nothing while the round is open, and never moves the stage.
-    cmd("sendFeedback", { entries: [{ artifactId: a.id, version: 1, mark: "keep", pins: [], note: "That is how it works." }] });
-    cmd("postMessage", { text: "Yes, that is it." });
-    until((x) => x.leadRuns.length === 2 && x.leadRuns[1].outcome === "completed", "the second reply");
-    expect(state().studio.rounds).toHaveLength(1);
-    expect(state().studio.runs.filter((r) => r.kind === "designer")).toHaveLength(1);
-    expect(state().project).toMatchObject({ stage: "shaping", factoryStarts: [] });
+    expect(s0.studio.rounds[0]).toMatchObject({ n: 1, focus: "experience", leadRunId: s0.leadRuns.at(-1)!.id });
+    expect(s0.studio.runs[0]).toMatchObject({ kind: "designer", round: 1 });
+    until(settled, "round 1 imported and reviewed");
+    expect(S.latestArtifacts(state()).every((a) => !a.provenance)).toBe(true);
+  });
+
+  it("once the import is in review, the lead's reply says what it found, with a vision draft of the product today (ORC-032)", async () => {
+    const r = tallyRepo(join(dir, "tally"));
+    service(r);
+    cmd("setDomains", { domains: ["screen", "code"] });
+    cmd("setDevices", { devices: ["terminal"] });
+    const commit = execFileSync("git", ["-C", r, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    cmd("startImport", { commit, budgetUsd: 3, helpers: null, size: { sourceFiles: 7, testFiles: 7, kb: 12 } });
+    // The import's service steps end asynchronously: wait for each before the next cycle.
+    for (let i = 0; i < 400 && I.importStatus(state()) !== "review"; i++) {
+      tick();
+      await scheduler.importIdle();
+    }
+    expect(I.importStatus(state())).toBe("review");
+    const drafts = state().visionDrafts.length;
+    cmd("postMessage", { text: "What did the import find?" });
+    until((x) => x.leadRuns.some((l) => l.outcome === "completed"), "the lead's reply");
+    const reply = state().conversation.filter((m) => m.author === "lead").at(-1)!;
+    expect(reply.text).toBe(
+      `I read the repository at commit ${commit.slice(0, 7)} as it is today: the tests ran: 22, 22 pass; 17 rules, 13 named by tests; 6 parts; the screens and commands 3 of 3 recorded. The questions wait in Vision, round 0: answer the conflicts and the guesses that matter, then lock the baseline in (simulated).`,
+    );
+    expect(state().visionDrafts).toHaveLength(drafts + 1);
+    expect(state().visionDrafts.at(-1)!.text).toMatch(/^\(Simulated draft\) What the product is today, from the import at commit /);
+    // The lead opened no round: round 0 is the import's.
+    expect(state().studio.rounds.map((x) => x.n)).toEqual([0]);
   });
 
   it("for a new idea, plans round 1 on the experience in two takes; once it is closed, the data, as a document", () => {

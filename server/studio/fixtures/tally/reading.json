@@ -1,0 +1,275 @@
+{
+  "rules": [
+    {
+      "id": "R1",
+      "area": "tally add",
+      "text": "When you add an expense, the CLI shall record its amount, payer, people, note and date.",
+      "tests": [
+        "test_add.py::test_records_expense",
+        "test_add.py::test_records_date"
+      ],
+      "sources": [
+        {
+          "from": "test",
+          "ref": "test_add.py::test_records_expense",
+          "says": "When you add an expense, the CLI shall record its amount, payer, people, note and date."
+        }
+      ]
+    },
+    {
+      "id": "R2",
+      "area": "tally add",
+      "text": "If the amount is not a number, then the CLI shall stop with \"Amount must be a number\".",
+      "tests": [
+        "test_add.py::test_rejects_text",
+        "test_add.py::test_rejects_empty",
+        "test_add.py::test_rejects_symbols"
+      ],
+      "sources": [
+        {
+          "from": "test",
+          "ref": "test_add.py::test_rejects_text",
+          "says": "If the amount is not a number, then the CLI shall stop with \"Amount must be a number\"."
+        }
+      ]
+    },
+    {
+      "id": "R3",
+      "area": "tally add",
+      "text": "If the payer is not in the group, then the CLI shall stop with \"Unknown person\".",
+      "tests": [
+        "test_add.py::test_unknown_payer"
+      ],
+      "sources": [
+        {
+          "from": "test",
+          "ref": "test_add.py::test_unknown_payer",
+          "says": "If the payer is not in the group, then the CLI shall stop with \"Unknown person\"."
+        }
+      ]
+    },
+    {
+      "id": "R4",
+      "area": "tally add",
+      "text": "When you leave out --for, the CLI shall split the cost among everyone in the group.",
+      "tests": [
+        "test_add.py::test_default_everyone",
+        "test_add.py::test_default_after_join"
+      ],
+      "sources": [
+        {
+          "from": "test",
+          "ref": "test_add.py::test_default_everyone",
+          "says": "When you leave out --for, the CLI shall split the cost among everyone in the group."
+        }
+      ]
+    },
+    {
+      "id": "R5",
+      "area": "the ledger",
+      "text": "The ledger shall keep money in whole cents.",
+      "tests": [
+        "test_money.py::test_whole_cents",
+        "test_money.py::test_no_floats"
+      ],
+      "sources": [
+        {
+          "from": "test",
+          "ref": "test_money.py::test_whole_cents",
+          "says": "The ledger shall keep money in whole cents."
+        }
+      ]
+    },
+    {
+      "id": "R6",
+      "area": "tally split",
+      "text": "When you run tally split, the CLI shall show each person's balance.",
+      "tests": [
+        "test_split.py::test_balances",
+        "test_split.py::test_balances_sum_to_zero"
+      ],
+      "sources": [
+        {
+          "from": "test",
+          "ref": "test_split.py::test_balances",
+          "says": "When you run tally split, the CLI shall show each person's balance."
+        }
+      ]
+    },
+    {
+      "id": "R7",
+      "area": "splitting",
+      "text": "The split shall suggest the fewest payments that settle everyone.",
+      "tests": [
+        "test_split.py::test_fewest_payments",
+        "test_split.py::test_settles_all"
+      ],
+      "sources": [
+        {
+          "from": "test",
+          "ref": "test_split.py::test_fewest_payments",
+          "says": "The split shall suggest the fewest payments that settle everyone."
+        }
+      ]
+    },
+    {
+      "id": "R8",
+      "area": "tally split",
+      "text": "If everyone is even, then the CLI shall say \"Everyone is even\".",
+      "tests": [
+        "test_split.py::test_even"
+      ],
+      "sources": [
+        {
+          "from": "test",
+          "ref": "test_split.py::test_even",
+          "says": "If everyone is even, then the CLI shall say \"Everyone is even\"."
+        }
+      ]
+    },
+    {
+      "id": "R9",
+      "area": "tally report",
+      "text": "When you run tally report, the CLI shall list each expense by date, oldest first.",
+      "tests": [
+        "test_report.py::test_by_date"
+      ],
+      "sources": [
+        {
+          "from": "test",
+          "ref": "test_report.py::test_by_date",
+          "says": "When you run tally report, the CLI shall list each expense by date, oldest first."
+        }
+      ]
+    },
+    {
+      "id": "R10",
+      "area": "tally report",
+      "text": "When you give --since, the report shall show only the expenses from that date on.",
+      "tests": [
+        "test_report.py::test_since",
+        "test_report.py::test_since_empty"
+      ],
+      "sources": [
+        {
+          "from": "test",
+          "ref": "test_report.py::test_since",
+          "says": "When you give --since, the report shall show only the expenses from that date on."
+        }
+      ]
+    },
+    {
+      "id": "R11",
+      "area": "the ledger",
+      "text": "If the ledger file is missing, then the CLI shall start an empty ledger.",
+      "tests": [
+        "test_ledger.py::test_missing"
+      ],
+      "sources": [
+        {
+          "from": "test",
+          "ref": "test_ledger.py::test_missing",
+          "says": "If the ledger file is missing, then the CLI shall start an empty ledger."
+        }
+      ]
+    },
+    {
+      "id": "R12",
+      "area": "the ledger",
+      "text": "If the ledger file is damaged, then the CLI shall stop and change nothing.",
+      "tests": [
+        "test_ledger.py::test_damaged_untouched",
+        "test_ledger.py::test_damaged_message"
+      ],
+      "sources": [
+        {
+          "from": "test",
+          "ref": "test_ledger.py::test_damaged_untouched",
+          "says": "If the ledger file is damaged, then the CLI shall stop and change nothing."
+        }
+      ]
+    },
+    {
+      "id": "R13",
+      "area": "tally add",
+      "text": "The ledger shall keep one currency per group, set in .tally.json.",
+      "tests": [
+        "test_add.py::test_rejects_other_currency"
+      ],
+      "sources": [
+        {
+          "from": "test",
+          "ref": "test_add.py::test_rejects_other_currency",
+          "says": "one currency per group"
+        },
+        {
+          "from": "docs",
+          "ref": "README.md, Currency",
+          "says": "a currency on each expense",
+          "differs": true
+        }
+      ]
+    },
+    {
+      "id": "R14",
+      "area": "tally report",
+      "text": "When you give --format csv, the report shall print the expenses as CSV.",
+      "tests": [],
+      "sources": [
+        {
+          "from": "code",
+          "ref": "tally/report.py",
+          "says": "--format csv"
+        },
+        {
+          "from": "docs",
+          "ref": "README.md, Reports",
+          "says": "--csv",
+          "differs": true
+        }
+      ]
+    },
+    {
+      "id": "R15",
+      "area": "splitting",
+      "text": "If a cost does not split evenly, then the split shall give the extra cent to the first person in the split.",
+      "tests": [],
+      "sources": [
+        {
+          "from": "code",
+          "ref": "tally/cli.py",
+          "says": "If a cost does not split evenly, then the split shall give the extra cent to the first person in the split."
+        }
+      ],
+      "important": "It decides who pays the extra cent."
+    },
+    {
+      "id": "R16",
+      "area": "the ledger",
+      "text": "If the amount is below zero, then the CLI shall record a refund.",
+      "tests": [],
+      "sources": [
+        {
+          "from": "code",
+          "ref": "tally/cli.py",
+          "says": "If the amount is below zero, then the CLI shall record a refund."
+        }
+      ],
+      "important": "It changes what a negative amount means in the ledger."
+    },
+    {
+      "id": "R17",
+      "area": "the ledger",
+      "text": "The ledger shall live in .tally.json in the folder where you run tally.",
+      "tests": [],
+      "sources": [
+        {
+          "from": "code",
+          "ref": "tally/cli.py",
+          "says": "The ledger shall live in .tally.json in the folder where you run tally."
+        }
+      ],
+      "important": "It decides which ledger each command reads and writes."
+    }
+  ]
+}

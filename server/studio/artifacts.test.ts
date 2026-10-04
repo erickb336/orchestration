@@ -478,6 +478,13 @@ describe("the project's dictionary and a flow's rules at import (pass 4d)", () =
     expect(read()[0].rules).toBeUndefined();
   });
 
+  it("reads rules.json beside any part's entry, with the tests each rule names (ORC-032 D1), never a dictionary's", () => {
+    fresh();
+    const rules = { rules: [{ id: "R2", text: 'If the amount is not a number, then the CLI shall stop with "Amount must be a number".', tests: ["test_add.py::test_rejects_text"] }] };
+    stage({ artifacts: [{ kind: "algorithm", title: "Splitting", variants: [{ id: "a", label: "As it is today", entry: "split/split.md" }], files: ["split/split.md", "split/rules.json"] }] }, { "split/split.md": "# Splitting\n", "split/rules.json": JSON.stringify(rules) });
+    expect(read()[0].rules).toEqual([{ variant: "a", path: "split/rules.json", rules: [{ ...rules.rules[0], pattern: "unwanted" }], examples: [] }]);
+  });
+
   it("refuses a rule outside the patterns with its id and the patterns, so the designer's next run fixes it", () => {
     flow({ rules: [RULES.rules[0], { id: "R2", text: "If the trip is full, the app shall add the member to the waiting list." }], examples: [{ id: "E1", text: "Sam waits." }] });
     expect(refusal(read)).toBe(

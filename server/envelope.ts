@@ -12,6 +12,7 @@ import { childDefault, effectiveDefault, eligible, flowSummary } from "../src/do
 import { LEAD_PRINCIPLE_IDS, orderPrinciples, principle, wordCount } from "../src/domain/principles";
 import { buildingSpend, committedBuildUsd, countedSpend, fmtUsd, maintenanceEstimate } from "../src/domain/spend";
 import * as B from "../src/domain/studio/blueprint";
+import * as I from "../src/domain/studio/import";
 import { domainLines } from "../src/domain/studio/domains";
 import { MAX_DESIGNER_RUNS, MAX_RUN_VARIANTS } from "../src/domain/studio/lead";
 import { captureItems, notSetUpReason } from "../src/domain/studio/evidence";
@@ -1226,6 +1227,29 @@ function studioAnswers(state: State): string[] {
 }
 
 /**
+ * The import of the repository (ORC-032), when the project has one: where it stands, and the lead's part. The service
+ * runs the import; the lead only writes the round's message and a vision draft once the import is in review.
+ */
+function importLines(state: State): string {
+  const imp = state.studio.import;
+  if (!imp) return "";
+  const status = I.importStatus(state);
+  const c = imp.checks;
+  const total = c.status === "read" ? Object.values(c.counts).reduce((a, b) => a + b, 0) : 0;
+  const tests = c.status === "read" ? `the tests ran: ${total}, ${c.counts.passed} pass` : c.status === "not-run" ? `the tests did not run (${truncate(c.reason, 160)})` : "the tests have not run yet";
+  const rules = imp.reading ? `${imp.reading.rules.length} rules, ${imp.reading.rules.filter((r) => r.tests.length).length} named by tests` : "no rules yet";
+  const recorded = imp.capture ? `${imp.capture.parts.filter((x) => x.status === "captured").length} of ${imp.capture.parts.length} recorded` : "not recorded yet";
+  const where = status === "review" ? "is in review" : status === "reading" ? "is reading" : status === "locked-in" ? "is the baseline" : `stopped (${truncate(imp.stopped?.reason ?? "", 160)})`;
+  const what =
+    status === "review"
+      ? 'The import asks the user its own questions in round 0. In your reply, say in two or three sentences what the import found, and that its questions wait in Vision. Write "vision": what the product is today, from its parts and rules, for the user to accept. Open no round and ask for no designer run while round 0 is open.'
+      : status === "reading"
+        ? "The service runs the import. Open no round and ask for no designer run; if the user asks, say what it is doing."
+        : "";
+  return `\nThe import of the repository at commit ${imp.commit.slice(0, 7)} ${where}: ${tests}; ${rules}; ${I.importParts(state).length} parts; the screens and commands ${recorded}.${what ? `\n${what}` : ""}`;
+}
+
+/**
  * The lead's studio brief while the project is in Vision (pass 4): what the studio is and the lead's part in it, the
  * order of focus (aiming at completeness, r8), the domains and devices, the repository (for an "as it is today"
  * first round), the rounds with their artifacts and PE review, the designer runs under way, and the user's answers
@@ -1240,10 +1264,11 @@ export function studioBriefSection(state: State, repo?: RepoGlance): string {
     : repo.codeFiles
       ? `Repository: has code, ${repo.codeFiles} code file${repo.codeFiles === 1 ? "" : "s"} of ${repo.files} tracked (${repo.code.slice(0, 12).join(", ")}${repo.codeFiles > 12 ? ", …" : ""}).`
       : `Repository: no code yet (${repo.files} tracked file${repo.files === 1 ? "" : "s"}, documents only).`;
+  // An existing repository has one way in: the import (ORC-032), which the user starts on the new-project screen.
   const start = rounds.length
     ? ""
     : repo?.codeFiles
-      ? `\nNo round yet, and the repository has code. Unless the user said otherwise, start with round 0, "as it is today": openRound { "focus": "material", "summary": "As it is today: <what the code does now>" }, and ask the designer to reproduce the key screens, or the interface and core algorithms, or the topology, from the code (one take each, kinds by the domains). The designer reads the code read-only; the service labels each artifact "as is" with the files it came from. The PE checks only that each reproduction is faithful to the code, and the designer does not revise it for the PE: the user corrects it, and later rounds change it.`
+      ? "\nNo round yet, and the repository has code. Do not reproduce it in a round: the import reads it into round 0, As it is today, and the user starts it on the new-project screen. Otherwise open round 1 on the experience once you know enough to brief the designer."
       : "\nNo round yet: open round 1 on the experience once you know enough to brief the designer.";
   const latest = S.latestArtifacts(state);
   const openRows = open ? latest.filter((a) => a.round === open.n) : [];
@@ -1281,7 +1306,7 @@ The factory is running. Vision stays open: when the user's messages are about th
       : "";
   return `
 ## The studio
-You run Vision's studio. Each round, the designer makes artifacts the user opens, marks (keep, change, drop), pins comments on and picks between. The PE reviews each design before the user sees it (not dictionaries, material or evidence); when it asks for a change or objects, the designer revises, up to ${S.MAX_PE_PASSES} passes, and then the user sees it with what the PE still says. What the user approves becomes the blueprint the factory builds from. You plan the rounds and brief the designer through "studio" in your output. You never approve, overrule the PE, lock in or start the factory, and you never answer for the user: only the user's own actions do those.
+You run Vision's studio. Each round, the designer makes artifacts the user opens, marks (keep, change, drop), pins comments on and picks between. The PE reviews each design before the user sees it (not dictionaries, material, evidence or the import's parts); when it asks for a change or objects, the designer revises, up to ${S.MAX_PE_PASSES} passes, and then the user sees it with what the PE still says. What the user approves becomes the blueprint the factory builds from. You plan the rounds and brief the designer through "studio" in your output. You never approve, overrule the PE, lock in or start the factory, and you never answer for the user: only the user's own actions do those.
 ${building}
 Order of focus, aiming at a design that is complete before the factory starts (revisit a focus when the user's answers call for it):
 1. experience: the key screens or commands, or the interface, or the topology, and how they behave;
@@ -1295,7 +1320,7 @@ Product domains: the kind of product this is, which decides what the designer ma
 The user chooses the domains in the app. You never set them, and you do not ask about them in "questions"; you may recommend domains in one sentence of your reply. The user's choice:
 ${domainLines(p.domains).map((l) => `- ${l}`).join("\n")}
 Devices (the user's scope): ${p.devices.join(", ")}.
-${repoLine}${start}
+${repoLine}${start}${importLines(state)}
 
 Rounds:
 ${roundLines}${earlier.length ? `\n${earlier.join("\n")}` : ""}

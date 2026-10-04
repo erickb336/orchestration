@@ -1,6 +1,6 @@
 // ORC-029 pass 4: the lead's studio brief, in its envelope while the project is in Vision. It says what the studio is
 // and the lead's part (never the owner's), the order of focus aiming at completeness, the domains and devices, the
-// repository (an "as it is today" first round when it has code), the rounds with their artifacts and PE review, and the
+// repository (the import makes round 0, ORC-032), the rounds with their artifacts and PE review, and the
 // owner's answers since the lead's last reply. It is bounded however large the studio grows.
 
 import { describe, expect, it } from "vitest";
@@ -8,6 +8,7 @@ import * as M from "../src/domain/model";
 import { buildSeed } from "../src/domain/seed";
 import * as S from "../src/domain/studio/studio";
 import { startFactoryAsOwner } from "../src/domain/testing/factory";
+import { TALLY_COMMIT, tallyImport } from "../src/domain/testing/import";
 import { addScreen, feedback, openRound, peAgrees, pePass, run } from "../src/domain/testing/studio";
 import type { State } from "../src/domain/types";
 import { buildLeadEnvelope, parseLeadOutput, studioBriefSection } from "./envelope";
@@ -31,7 +32,7 @@ describe("the lead's studio brief", () => {
     const brief = section(text);
     expect(brief).toContain("You never approve, overrule the PE, lock in or start the factory, and you never answer for the user: only the user's own actions do those.");
     // Which artifacts the PE reviews follows the kind's rules: a dictionary goes to the user directly.
-    expect(brief).toContain("The PE reviews each design before the user sees it (not dictionaries, material or evidence);");
+    expect(brief).toContain("The PE reviews each design before the user sees it (not dictionaries, material, evidence or the import's parts);");
     expect(brief).toContain("1. experience: the key screens or commands, or the interface, or the topology, and how they behave;");
     // The data round asks for the project's dictionary (pass 4d): from the vision, and from the code's names.
     expect(brief).toContain(
@@ -83,14 +84,28 @@ describe("the lead's studio brief", () => {
     expect(plan).not.toContain("offline on the trail");
   });
 
-  it("for a repository with code and no round yet, starts with round 0, as it is today", () => {
+  it("for a repository with code and no round yet, leaves round 0 to the import (C12): the lead does not reproduce the code", () => {
     const brief = section(envelope(fresh(), CODE));
     expect(brief).toContain("Repository: has code, 3 code files of 5 tracked (src/index.html, src/trips.css, src/app.js).");
-    expect(brief).toContain('No round yet, and the repository has code. Unless the user said otherwise, start with round 0, "as it is today": openRound { "focus": "material", "summary": "As it is today: <what the code does now>" }');
-    expect(brief).toContain("the service labels each artifact \"as is\" with the files it came from");
+    expect(brief).toContain(
+      "No round yet, and the repository has code. Do not reproduce it in a round: the import reads it into round 0, As it is today, and the user starts it on the new-project screen. Otherwise open round 1 on the experience once you know enough to brief the designer.",
+    );
+    expect(brief).not.toContain('"focus": "material", "summary": "As it is today');
     expect(section(envelope(fresh()))).toContain("Repository: its file list was not read for this run; your working directory is a read-only checkout of it.");
     // Once a round exists, the start is not repeated.
     expect(section(envelope(openRound(fresh(), "experience", at(1)).state, CODE))).not.toContain("No round yet");
+  });
+
+  it("says where the import stands, and once it is in review asks the lead only for the round's message and a vision draft (ORC-032)", () => {
+    const reading = tallyImport("read").s;
+    expect(section(envelope(reading, CODE))).toContain(
+      `The import of the repository at commit ${TALLY_COMMIT.slice(0, 7)} is reading: the tests ran: 22, 22 pass; 17 rules, 13 named by tests; 1 parts; the screens and commands not recorded yet.\nThe service runs the import. Open no round and ask for no designer run; if the user asks, say what it is doing.`,
+    );
+    const review = section(envelope(tallyImport("review").s, CODE));
+    expect(review).toContain(`The import of the repository at commit ${TALLY_COMMIT.slice(0, 7)} is in review: the tests ran: 22, 22 pass; 17 rules, 13 named by tests; 6 parts; the screens and commands 3 of 3 recorded.`);
+    expect(review).toContain('Write "vision": what the product is today, from its parts and rules, for the user to accept. Open no round and ask for no designer run while round 0 is open.');
+    expect(section(envelope(tallyImport("review", { checks: "not-run" }).s, CODE))).toContain("the tests did not run (Docker is not available on this computer, so the tests did not run); 17 rules, 0 named by tests;");
+    expect(section(envelope(fresh(), CODE))).not.toContain("The import of the repository");
   });
 
   it("shows the open round's artifacts with PE review and provenance, earlier rounds, the runs under way and the lead's own questions", () => {
@@ -202,7 +217,7 @@ describe("the lead's studio brief", () => {
     expect(brief).toContain("- and 30 earlier answers, in the studio");
     expect(brief).toContain("  - and 1190 more, in the studio");
     // About 4,600 tokens at worst: 12 artifacts with 6 long variants each, 10 long open cases (about 4,200 characters), 10 answers with long pins and notes.
-    expect(brief.length).toBeLessThan(18_500);
+    expect(brief.length).toBeLessThan(18_600);
   });
 
   it("parseLeadOutput passes the studio block through as found, for the domain to check", () => {
