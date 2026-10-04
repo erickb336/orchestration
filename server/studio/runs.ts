@@ -90,6 +90,7 @@ function importSection(state: State, run: StudioRun, checkout: string | undefine
             "- Reproduce each key part, following the product's domains: each screen or command, the interface, each core algorithm, the topology. No dictionary: another run collects the words.",
             `- Place every rule below once, unchanged (its id, its text and its tests), in the ${RULES_FILE} beside the entry of the part it belongs to: \`{ "rules": [{ "id": "R1", "text": "…", "tests": ["…"] }] }\`. A part with no rule has no ${RULES_FILE}. The service refuses a hand-in that leaves a rule out, places one twice, or changes one.`,
             "- A terminal demo's or TUI's entry is a tape that types the real command, from the repository's root (for example `python3 -m tally add 5 Snacks --by ana`), never a stand-in script. The service records it in a copy of the repository at the commit, in the project's container, with no network; the studio does not record it. Each tape runs in its own fresh copy: it never sees what another tape wrote.",
+            '- A screen\'s entry is its reproduction, a page the studio shows. Give each screen in studio.json `"page"`: its path in the running app, for example `"page": "/trips"`. The service opens that path in the project\'s container, with the preview command the owner set, and records the screen on each of its devices.',
             "",
             `The rules the reader found (${rules.length}):`,
             ...rules.map((r) => `- ${r.id} (${r.area}): ${r.text}${r.tests.length ? ` [tests: ${r.tests.join(", ")}]` : ""}`),
@@ -255,13 +256,13 @@ export function importDesignerRun(state: State, runId: string, given: HandedIn, 
   // Provenance is kept only in round 0, where the designer reproduces the existing code "as is"; a later round's
   // artifacts are proposals, so a provenance listed there is not recorded. Each file named must be one the repository
   // tracks, so the owner is never shown a source the code does not have.
-  const provenanceOf = (a: StagedArtifact): { files: string[] } | undefined => {
+  const provenanceOf = (a: StagedArtifact): { files: string[]; page?: string } | undefined => {
     if (!a.provenance || run.round !== 0) return undefined;
     if (!given.tracked) throw new ManifestError(`the provenance of "${a.title}" cannot be checked: the repository cannot be read.`);
     const missing = a.provenance.filter((p) => !given.tracked!.has(p));
     const at = run.importStep && state.studio.import ? ` at the import's commit ${state.studio.import.commit.slice(0, 7)}` : "";
     if (missing.length) throw new ManifestError(`the provenance of "${a.title}" names ${missing.slice(0, 3).map((p) => JSON.stringify(p)).join(", ")}${missing.length > 3 ? ` and ${missing.length - 3} more` : ""}, which the repository does not have${at}.`);
-    return { files: a.provenance };
+    return { files: a.provenance, ...(a.page ? { page: a.page } : {}) };
   };
   let s = state;
   const written: string[] = [];

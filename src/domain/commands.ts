@@ -383,7 +383,7 @@ export const COMMANDS = {
           ? {}
           : (() => {
               const p = obj(a.provenance, "provenance");
-              return { provenance: { files: strings(p.files, "provenance.files"), ...(p.commit === undefined ? {} : { commit: str(p, "commit") }) } };
+              return { provenance: { files: strings(p.files, "provenance.files"), ...(p.commit === undefined ? {} : { commit: str(p, "commit") }), ...(p.page === undefined ? {} : { page: str(p, "page") }) } };
             })()),
         ...(a.dictionary === undefined ? {} : { dictionary: checked(parseDictionary(a.dictionary), "dictionary") }),
         ...(a.rules === undefined ? {} : { rules: array<unknown>(a.rules, "rules").map(variantRules) }),

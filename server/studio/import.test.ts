@@ -8,11 +8,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as I from "../../src/domain/studio/import";
-import { TALLY_COMMIT, tallyCases, tallyImport, tallyReading } from "../../src/domain/testing/import";
+import * as R from "../../src/domain/studio/runs";
+import { TALLY_COMMIT, at, tallyCases, tallyImport, tallyReading } from "../../src/domain/testing/import";
 import type { TestCaseResult } from "../../src/domain/types";
 import type { StagedArtifact } from "./artifacts";
 import { EnvironmentImport, NO_ENVIRONMENT, SimulatedImport, TALLY_FIXTURE, askForImportRuns, partsRefusal, readImportReading, readmeTestReport, reportCases, tallyRepo } from "./import";
-import { handedIn, importDesignerRun } from "./runs";
+import { designerEnvelope, handedIn, importDesignerRun } from "./runs";
 import { importDemo } from "./media";
 import { validateCast, validateTape } from "./terminal";
 
@@ -63,6 +64,15 @@ describe("the rules reader's answer, checked at the boundary", () => {
     expect(readImportReading(answer([{ ...r1, tests: ["test_add.py::test_records_expense", "test_add.py::test_invented"] }]), CASES)).toEqual({ refused: 'rule R1 names "test_add.py::test_invented": not in the baseline report' });
     // With no baseline run, any test it names is unknown.
     expect(readImportReading(answer([r1]), [])).toEqual({ refused: 'rule R1 names "test_add.py::test_records_expense"; rule R1 names "test_add.py::test_records_date": not in the baseline report' });
+  });
+});
+
+describe("the parts designer's brief", () => {
+  it("asks for each screen's page in the running app, and says each tape runs in its own fresh copy (U2-F2, U2-F1)", () => {
+    const asked = R.requestStudioRun(tallyImport("read").s, { kind: "designer", round: 0, brief: "Reproduce the parts.", importStep: "parts" }, at(40));
+    const brief = designerEnvelope(asked.state, R.getStudioRun(asked.state, asked.runId)!, { staging: "/tmp/staging" });
+    expect(brief).toContain('Give each screen in studio.json `"page"`: its path in the running app, for example `"page": "/trips"`.');
+    expect(brief).toContain("Each tape runs in its own fresh copy: it never sees what another tape wrote.");
   });
 });
 

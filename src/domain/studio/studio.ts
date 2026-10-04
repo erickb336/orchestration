@@ -194,9 +194,9 @@ export interface ArtifactInput {
   supersedes?: string;
   /**
    * An "as is" artifact's provenance: the repository files the designer reproduced it from (round 0 only), and the
-   * commit they are at. In a project with an import, the commit is the import's (C11), and it is filled in when absent.
+   * commit they are at, and a screen's page in the running app. The commit is the import's (C11), filled in when absent.
    */
-  provenance?: { files: string[]; commit?: string };
+  provenance?: { files: string[]; commit?: string; page?: string };
   /** A dictionary's terms, checked at the boundary (words.ts `parseDictionary`). A dictionary has them; nothing else does. */
   dictionary?: DictionaryEntry[];
   /** A part's rules, by variant, checked at the boundary (words.ts `parseRules`). Any designer's kind but the dictionary (ORC-032 D1). */
@@ -255,7 +255,9 @@ export function addArtifact(state: State, input: ArtifactInput, now: string): { 
     if (!imp) throw new ControlError("Only the import of an existing repository reproduces its code as it is today.");
     const commit = input.provenance!.commit ?? imp.commit;
     if (commit !== imp.commit) throw new ControlError(`The import reads commit ${imp.commit.slice(0, 7)}; a reproduction shows that commit, not ${agentLine(commit).slice(0, 12)}.`);
-    provenance = { asIs: true, files: provenanceFiles(input.provenance!.files), commit };
+    const page = input.provenance!.page;
+    if (page !== undefined && (input.kind !== "screen" || !/^\/[!-~]{0,199}$/.test(page))) throw new ControlError("A screen's page is a path in the running app, such as /trips. Only a screen has one.");
+    provenance = { asIs: true, files: provenanceFiles(input.provenance!.files), commit, ...(page ? { page } : {}) };
   }
   const title = required(agentLine(input.title), 200, "The title");
   if (input.variants.length > MAX_VARIANTS) throw new ControlError(`At most ${MAX_VARIANTS} variants side by side.`);

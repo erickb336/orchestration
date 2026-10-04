@@ -57,6 +57,15 @@ describe("as it is today: round 0 of an import (ORC-032)", () => {
     expect(art(v3.state, a.id, 3).provenance).toBeUndefined();
   });
 
+  it("a screen names its page in the running app, which the import's capture opens (U2-F2); only a screen has one", () => {
+    const zero = importZero();
+    const a = addScreen(zero.state, 0, at(2), asIs({ provenance: { files: ["src/TripList.tsx"], page: "/trips?view=list" } }));
+    expect(art(a.state, a.id, 1).provenance).toEqual({ asIs: true, files: ["src/TripList.tsx"], commit: TALLY_COMMIT, page: "/trips?view=list" });
+    const refused = "A screen's page is a path in the running app, such as /trips. Only a screen has one.";
+    for (const page of ["trips", "/a b", "/\u0007", `/${"x".repeat(200)}`]) expect(() => addScreen(zero.state, 0, at(2), asIs({ provenance: { files: ["src/TripList.tsx"], page } }))).toThrow(refused);
+    expect(() => addScreen(zero.state, 0, at(2), asIs({ kind: "terminal-demo", variants: [{ id: "a", label: "As it is today", entry: "a/demo.tape" }], files: [{ path: "a/demo.tape", sha256: sha("a") }], provenance: { files: ["src/cli.ts"], page: "/" } }))).toThrow(refused);
+  });
+
   it("refuses as-is provenance outside an import: the import is the one way to reproduce an existing repository (U2-Q3)", () => {
     const zero = openRound(fresh(), "material", at(1));
     expect(() => addScreen(zero.state, 0, at(2), asIs({ devices: ["desktop"] }))).toThrow("Only the import of an existing repository reproduces its code as it is today.");

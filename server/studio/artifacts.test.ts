@@ -360,16 +360,21 @@ describe("importing a designer run", () => {
         stage({ artifacts: [{ ...ONE, provenance }] });
         expect(refusal(read)).toMatch(/^artifact 1: (the provenance .* is not a path from the repository's root|"provenance" lists 1 to 50 repository files)/);
       }
+      // A screen's page is text, and only beside a provenance.
+      for (const extra of [{ provenance: ["src/index.html"], page: 3 }, { page: "/" }]) {
+        stage({ artifacts: [{ ...ONE, ...extra }] });
+        expect(refusal(read)).toBe('artifact 1: "page" is the path of a reproduced screen in the running app, as text, beside its "provenance".');
+      }
     });
 
-    it("records the reproduction as is, with the repository files it came from, in the version and its manifest.json", () => {
-      stage({ artifacts: [{ ...ONE, provenance: ["src/index.html", "src/trips.css"] }] });
+    it("records the reproduction as is, with the repository files it came from, and its page in the running app, in the version and its manifest.json", () => {
+      stage({ artifacts: [{ ...ONE, provenance: ["src/index.html", "src/trips.css"], page: "/" }] });
       const { s, runId } = asIsRun();
       const root = studioRoot(dir, "p-1");
       const r = importDesignerRun(s, runId, handedIn(s, runId, read()), root, at(4));
       const art = S.latestArtifacts(r.state)[0];
-      expect(art).toMatchObject({ round: 0, kind: "screen", title: "Trip list (as is)", provenance: { asIs: true, files: ["src/index.html", "src/trips.css"], commit } });
-      expect(JSON.parse(readFileSync(join(versionDir(root, art.id, 1), "manifest.json"), "utf8")).provenance).toEqual({ asIs: true, files: ["src/index.html", "src/trips.css"], commit });
+      expect(art).toMatchObject({ round: 0, kind: "screen", title: "Trip list (as is)", provenance: { asIs: true, files: ["src/index.html", "src/trips.css"], commit, page: "/" } });
+      expect(JSON.parse(readFileSync(join(versionDir(root, art.id, 1), "manifest.json"), "utf8")).provenance).toEqual({ asIs: true, files: ["src/index.html", "src/trips.css"], commit, page: "/" });
     });
 
     it("the import reads no repository: the provenance is looked up before the store's transaction (review finding 11)", () => {

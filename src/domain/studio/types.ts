@@ -235,6 +235,8 @@ export interface Provenance {
   files: string[];
   /** The commit it shows: the import's (ORC-032, C11). Absent on reproductions from before the import. */
   commit?: string;
+  /** A screen's page in the running app ("/trips"), which the import's capture opens (ORC-032, U2-F2). */
+  page?: string;
 }
 
 /** One screenshot: a variant on a device, relative to the version's folder (`shots/<variant>-<device>.png`). */
