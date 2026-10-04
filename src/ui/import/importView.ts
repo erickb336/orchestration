@@ -10,6 +10,7 @@ import { PREVIEW_PORTS } from "../../domain/studio/evidence";
 import {
   answerEffect,
   changeRequests,
+  importHold,
   importParts,
   importQuestions,
   importRuns,
@@ -285,6 +286,16 @@ const HALT_TONE: Record<ImportHalt["kind"], PillTone> = { stopped: "fail", budge
 export function importPill(s: State, busy: string): { text: string; tone: PillTone; pulse: boolean; paused: boolean } {
   const halt = importHalt(s);
   return halt ? { text: halt.pill, tone: HALT_TONE[halt.kind], pulse: false, paused: halt.kind === "paused" || halt.kind === "pausing" } : { text: busy, tone: "work", pulse: true, paused: false };
+}
+
+const HELD_STEP: Record<ImportStep, string> = { words: "the words", rules: "the rules", parts: "the parts", fix: "a fix" };
+
+/** What the import's stop holds, in a sentence: "It holds the fix of The ledger and the lead's message for round 0."; undefined when it holds nothing. */
+export function heldLine(s: State): string | undefined {
+  const holds = importHold(s)?.holds ?? [];
+  if (!holds.length) return undefined;
+  const words = holds.map((h) => (h.step === "review" ? "the lead's message for round 0" : h.step === "fix" && h.artifactId ? `the fix of ${s.studio.artifacts.find((a) => a.id === h.artifactId)?.title ?? "a part"}` : HELD_STEP[h.step]));
+  return `It holds ${words.length > 1 ? `${words.slice(0, -1).join(", ")} and ${words.at(-1)}` : words[0]}.`;
 }
 
 /** Home's sentence while the import waits at its budget: "The import budget is reached: $3.20 of $3.00. Raise it in Vision to go on." */

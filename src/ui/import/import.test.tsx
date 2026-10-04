@@ -457,6 +457,19 @@ describe("Vision after the baseline (UX-5, CR-9)", () => {
     expect(t).toContain("The baseline What tally does today, at commit c0ffee0: in force and built since Lock in 1.");
   });
 
+  it("the lead's round-0 message shows on the Review's lead card, and in Vision after the Lock in (UX-4)", () => {
+    const reply = (s: State, sec: number) => {
+      const r = M.startLeadRun(s, { provider: "claude", model: "claude-sample-large", trigger: "message" }, at(sec));
+      return M.completeLeadRun(r.state, r.runId, { reply: "I read tally at commit c0ffee0: 17 rules, 2 conflicts.", proposals: [] }, at(sec + 1));
+    };
+    expect(text(<ImportReview />, reply(stage("review"), 70))).toContain("The lead I read tally at commit c0ffee0: 17 rules, 2 conflicts.");
+    const sc = tallyImport("answered", { answers: CHANGE });
+    const locked = run(reply(sc.s, 101), "lockInBaseline", baselineArgs(reply(sc.s, 101)), at(130)).state;
+    const t = text(<Studio />, locked);
+    expect(t).toContain("I read tally at commit c0ffee0: 17 rules, 2 conflicts.");
+    expect(t).not.toContain("The lead has written nothing for round 0.");
+  });
+
   it("lists the changes to design beside Ask the lead for a round", () => {
     const t = text(<Studio />, stage("baseline"));
     expect(t).toMatch(/1 change to design waits for a round: tally add: The docs: a currency on each expense\.? .*Ask the lead for a round/);
@@ -495,6 +508,14 @@ describe("the import's budget stop (QA-F1)", () => {
       expect(t).toContain("New import budget (dollars) Raise the budget");
     }
     expect(text(<ImportReview />, stage("answered"))).not.toContain("waits at its budget");
+  });
+
+  it("says what the stop holds: a part's fix, the lead's message for round 0", () => {
+    const sc = tallyImport("answered");
+    let s = structuredClone(sc.s);
+    s.studio.runs.find((r) => r.importStep === "rules")!.usage = { costUsd: 3.2 };
+    s = R.requestStudioRun(s, { kind: "designer", round: 0, brief: "Fix the ledger.", importStep: "fix", artifactId: sc.parts.ledger! }, at(105)).state;
+    expect(text(<BaselineLockIn />, s)).toContain("Nothing new starts for it until you raise the import budget. It holds the fix of The ledger and the lead's message for round 0. The building budget stays apart.");
   });
 
   it("Home and the header say the import waits at its budget, while it reads and in the review", () => {

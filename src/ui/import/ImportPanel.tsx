@@ -8,7 +8,7 @@ import { importParts } from "../../domain/studio/import";
 import { Banner, Button, Card, Field, Input, SimulatedChip, StatePill, StepList } from "../kit";
 import { useStore } from "../store";
 import { kindWord } from "../studio/studioView";
-import { importHalt, importPill, productName, readingCards, readingSteps, roundZeroLine, spendWords } from "./importView";
+import { heldLine, importHalt, importPill, productName, readingCards, readingSteps, roundZeroLine, spendWords } from "./importView";
 import "./import.css";
 
 /** The spend as a bar: what is spent, over the estimate's band, against the budget. */
@@ -177,7 +177,7 @@ export function ImportBudgetStop() {
   const blocker = disabled ? "The service is offline." : !(n > imp.budgetUsd) ? `The new budget is a number above ${fmtUsd(imp.budgetUsd)}.` : undefined;
   return (
     <Banner tone="you" title={`The import waits at its budget. ${why}.`}>
-      <p className="no-margin">Nothing new starts for it until you raise the import budget. The building budget stays apart.</p>
+      <p className="no-margin">Nothing new starts for it until you raise the import budget. {heldLine(state) ?? ""} The building budget stays apart.</p>
       <form
         className="imp-path"
         onSubmit={(e) => {
