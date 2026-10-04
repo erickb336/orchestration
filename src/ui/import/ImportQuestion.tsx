@@ -22,7 +22,7 @@ export function Question({ q, answer, onAnswer }: { q: ImportQuestion; answer: D
       <div className="imp-q__head">
         <Chip tone={conf.tone}>{conf.word}</Chip>
         <h3 id={`imp-q-${rule.id}`} className="no-margin">
-          {rule.area}
+          {q.title}
         </h3>
         <span className="micro muted s-mono">{rule.id}</span>
       </div>

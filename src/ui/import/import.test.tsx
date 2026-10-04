@@ -221,6 +221,16 @@ describe("3 · Review (C5, C8, C9, C15)", () => {
     expect(t).not.toContain("Round 1");
   });
 
+  it("each question is headed by its title; What stays open lists each once, by its title (UX-7)", () => {
+    const html = renderScreen(<ImportReview />, stage("review"), svc);
+    const heads = [...html.matchAll(/<h3 id="imp-q-[^"]+"[^>]*>([^<]+)<\/h3>/g)].map((m) => m[1]);
+    expect(heads).toEqual(["Currency", "CSV reports", "Rounding", "Refunds", "Where the ledger lives"]);
+    const open = text(<BaselineLockIn />, run(stage("review"), "answerImport", { answers: [] }, at(100)).state);
+    expect(open).toContain('What stays open Open Currency: not answered. It goes in as the code has it, marked "not confirmed". The question stays in Vision. Open CSV reports: not answered.');
+    expect(open.match(/Where the ledger lives: not answered/g)).toHaveLength(1);
+    expect(open).not.toMatch(/the ledger: not answered/);
+  });
+
   it("each conflict offers the code, the source that differs, and Neither, each with what it does", () => {
     const t = text(<ImportReview />, stage("review"));
     expect(t).toContain("Which is right? The code: --format csv tally stays as it is, and this goes into the baseline. The docs: --csv tally must change. The baseline keeps what tally does today, and this becomes a change to design. Neither Write what is right. It becomes a change to design.");
@@ -304,7 +314,7 @@ describe("4 · Baseline (C4, C5, C10)", () => {
     expect(t).toContain("you corrected If the amount is below zero, then the CLI shall record a refund. (R16 · was inferred · no test)");
     expect(t).toContain("Changes to design, not the baseline");
     expect(t).toContain("Change tally add: The docs: a currency on each expense");
-    expect(t).toContain('Open the ledger: not answered. It goes in as the code has it, marked "not confirmed". The question stays in Vision.');
+    expect(t).toContain('Open Where the ledger lives: not answered. It goes in as the code has it, marked "not confirmed". The question stays in Vision.');
     expect(t).toContain("Import: $0.00 spent of $3.00. The estimate was $0.43–$2.07.");
   });
 

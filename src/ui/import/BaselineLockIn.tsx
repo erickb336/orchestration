@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import * as M from "../../domain/model";
 import { summaryDigest, type SummarySeen } from "../../domain/studio/blueprint";
-import { baselineBlocker, baselineSummary, importStatus } from "../../domain/studio/import";
+import { baselineBlocker, baselineSummary, importStatus, ruleTitle } from "../../domain/studio/import";
 import { fmtUsd, importSpend } from "../../domain/spend";
 import { Banner, Button, ButtonLink, Card, Checkbox, Chip, EmptyState, SimulatedChip } from "../kit";
 import { useStore } from "../store";
@@ -190,7 +190,7 @@ function BaselineSummary({ header, note, agreed, onAgree, busy, blocker, onLockI
                 {open.map((rule) => (
                   <li key={rule.id}>
                     <Chip tone="you">Open</Chip>
-                    <span>{rule.area}: not answered. It goes in as the code has it, marked "not confirmed". The question stays in Vision.</span>
+                    <span>{ruleTitle(rule)}: not answered. It goes in as the code has it, marked "not confirmed". The question stays in Vision.</span>
                   </li>
                 ))}
               </ul>
