@@ -289,6 +289,13 @@ describe("3 · Review (C5, C8, C9, C15)", () => {
     expect(t).toContain("Round 0 · As it is today");
     expect(t).toMatch(/The vision .*Write the vision/);
     expect(t).toContain("tally splits shared costs in a group, from the terminal.");
+    // With no vision text yet, the button names no revision (UX-R3-1); with a text, it names the next one.
+    expect(t).toContain("Not written yet.");
+    expect(t).toContain(" Accept Edit and accept ");
+    expect(t).not.toMatch(/Accept as r\d/);
+    const written = M.editVision(s, M.currentVision(s).rev, "tally splits costs.", "", "test", at(104));
+    const t2 = text(<Studio />, written);
+    expect(t2).toContain(`Accept as r${M.currentVision(written).rev + 1}`);
   });
 
   it("a test that fails makes its rule a conflict: the code as it is, or the test (Q2)", () => {
