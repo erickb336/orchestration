@@ -197,7 +197,7 @@ export function tallyImport(stage: ImportStage = "review", o: ImportOptions = {}
   if (!upTo("checked")) return scene;
   const failing = o.checks && o.checks !== "not-run" ? o.checks.failing : [];
   const counts = { passed: 22 - failing.length, failed: failing.length, skipped: 0, error: 0 };
-  const result = o.checks === "not-run" ? { status: "not-run", reason: "Docker is not available on this computer, so the tests did not run" } : { status: "read", counts, reportFile: "checks/junit.xml", simulated: true };
+  const result = o.checks === "not-run" ? { status: "not-run", reason: "Docker is not available on this computer, so the tests did not run." } : { status: "read", counts, reportFile: "checks/junit.xml", simulated: true };
   s = run(s, "recordImportChecks", { importId, result }, at(10)).state;
   if (!upTo("read")) return { ...scene, s };
 

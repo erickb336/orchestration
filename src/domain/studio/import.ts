@@ -254,7 +254,8 @@ export function recordImportChecks(state: State, input: { importId: string; resu
     if (!isInsidePath(r.reportFile)) throw new ControlError(`${show(line(r.reportFile))} is not a file path inside the import's folder.`);
     checks = { status: "read", at: now, counts, reportFile: r.reportFile, ...(r.simulated ? { simulated: true as const } : {}) };
   } else {
-    const reason = line(r.reason).slice(0, 500);
+    // Kept without its final full stop: every reader puts the reason inside its own sentence (QA3-F4).
+    const reason = line(r.reason).slice(0, 500).replace(/\.+$/, "");
     if (!reason) throw new ControlError("A baseline run that did not run says why.");
     checks = { status: "not-run", at: now, reason };
   }

@@ -357,7 +357,7 @@ describe("with no Docker or no environment (Q3)", () => {
     startImport({ runs: { environment: RUNS.environment } });
     await until((s) => I.importStatus(s) === "review", "the second import in review");
     imp = state().studio.import!;
-    expect(imp.checks).toMatchObject({ status: "not-run", reason: "No JUnit report path is set, so the import cannot read the tests' results. Set it in Settings › Checks." });
+    expect(imp.checks).toMatchObject({ status: "not-run", reason: "No JUnit report path is set, so the import cannot read the tests' results. Set it in Settings › Checks" });
     expect(imp.capture!.simulated).toBe(true);
     expect(imp.capture!.parts.map((p) => p.status)).toEqual(["captured", "captured", "captured"]);
   });
