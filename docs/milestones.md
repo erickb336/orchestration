@@ -2,7 +2,7 @@
 
 **What this is.** The list of Orchestrator's milestones, ORC-001 to ORC-033: what each added, and what survives today. Each has a spec in [`tasks/`](tasks/) with the options, the decision and the evidence. Later milestones sometimes replaced earlier ones; the last column says what survives.
 
-**Where things stand.** Twenty-five are done, four were dropped, and four are planned or in progress. The [real-run records](real-runs/README.md) say which features have run with real models.
+**Where things stand.** Twenty-six are done, four were dropped, and three are planned. The [real-run records](real-runs/README.md) say which features have run with real models.
 
 **The foundation** (the five milestones in the [project spec](PROJECT_SPEC.md), plus pipelines):
 
@@ -45,7 +45,7 @@
 | [ORC-027](tasks/ORC-027.md) The real-run test, committed | The end-to-end scenario runs in CI on simulated agents; `npm run test:real` runs it with real ones and leaves a record in [`docs/real-runs/`](real-runs/) | Done |
 | [ORC-028](tasks/ORC-028.md) Fixes from the real run | Investigation revises its report while its review finds something, and a rule keeps every flow from dropping review findings | Done; **verified with real models** ([records](real-runs/README.md)) |
 | [ORC-029](tasks/ORC-029.md) The vision studio, before the factory | Vision: rounds on prototypes you can click, terminal demos, data contracts and flows, with PE review. The draft and Lock in, the pre-flight, the factory floor and change orders. Design and reality, with evidence the service captures. Checks and evidence in the project's own container, for any language | Done; the studio and the factory **ran with real models** |
-| [ORC-030](tasks/ORC-030.md) QA, UI audit and a new demo | Test the product end to end, fix bugs at their root, audit and clean up the UI, then make the new demo; a shorter README | **In progress** |
+| [ORC-030](tasks/ORC-030.md) QA, UI audit and a new demo | QA journeys in a real browser at two widths (`npm run qa`), fixes at the root with a backlog of what is left, a UI audit the owner marked and the cleanup it called for, Resume from the paused work, keeping the Mac awake, the demo's whole story and tour, a shorter README | Done |
 | [ORC-031](tasks/ORC-031.md) Subagents in research steps | Agents in explicitly read-only research steps may start their provider's own subagents, counted, costed, capped and shown; writers stay single-session | Done for Claude (**proven with real models**); Codex's stays off, because Codex has no cap per run |
 | [ORC-032](tasks/ORC-032.md) Import an existing project | Derive an "as it is today" vision from an existing repository, then revise it and build on it | **Planned** |
 | [ORC-033](tasks/ORC-033.md) Keep the living vision true | Notice when the code changes outside Orchestrator, keep the vision local, and fix bugs at their root as mismatches with the vision | **Planned** |
