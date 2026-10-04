@@ -1097,6 +1097,9 @@ export class WorkspaceManager {
     if (!/^[A-Za-z0-9._/-]{1,200}$/.test(o.ref) || o.ref.startsWith("-")) return undefined;
     if (!this.check(o.repoPath).ok) return undefined;
     const repo = this.repoDir(o.repoPath);
+    // A partial clone is never read: a git older than 2.45 ignores GIT_NO_LAZY_FETCH and would fetch a missing object
+    // from its remote, which can run a command on this computer (SR-5). Every read of a file at a ref passes here.
+    if (isPartialClone(repo, this.safeFlags(), this.gitBin)) return undefined;
     const blob = this.status(["-C", repo, "rev-parse", "--verify", "--quiet", "--end-of-options", `${o.ref}:${o.path}`]);
     if (blob.status !== 0 || !blob.stdout.trim()) return undefined;
     const max = o.maxBytes ?? 256 * 1024;

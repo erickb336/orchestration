@@ -147,4 +147,23 @@ describe("a snapshot of a commit (SR-2, INT-F3)", () => {
     expect(existsSync(marker)).toBe(false);
     expect(existsSync(ws.pathFor(partial, "z2", "p"))).toBe(false);
   });
+
+  it("reads no file of a partial clone, even with a git that ignores GIT_NO_LAZY_FETCH (git older than 2.45; SR-5)", () => {
+    const { repo: partial, marker, commit } = hostilePartialClone(dir);
+    // A git that drops GIT_NO_LAZY_FETCH, as git before 2.45 ignores it.
+    const oldGit = join(dir, "old-git");
+    writeFileSync(oldGit, '#!/bin/sh\nunset GIT_NO_LAZY_FETCH\nexec git "$@"\n', { mode: 0o755 });
+    const ws = new WorkspaceManager(join(dir, "worktrees"), oldGit);
+    // The devcontainer, the conventions and the screens' reads all go through readFileAt.
+    // Its missing blob is not fetched: the remote's command never runs.
+    expect(ws.readFileAt({ repoPath: partial, ref: commit, path: "src/app.js" })).toBeUndefined();
+    expect(existsSync(marker)).toBe(false);
+    // And no file of it is read, though its README is there.
+    expect(ws.readFileAt({ repoPath: partial, ref: commit, path: "README.md" })).toBeUndefined();
+    // A full clone is read as before.
+    writeFileSync(join(repo, "a.txt"), "a\n");
+    git("add", "-A");
+    git("commit", "-q", "-m", "a");
+    expect(ws.readFileAt({ repoPath: repo, ref: "HEAD", path: "a.txt" })?.text).toBe("a\n");
+  });
 });
