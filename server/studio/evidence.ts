@@ -603,8 +603,9 @@ const lastLine = (s: string) => s.trim().split("\n").pop()?.slice(0, 200) ?? "";
 
 /**
  * Capture in the project's environment: the copy prepared as the checks prepare it (reusing the prepared image by its
- * key), then the screens (screensInEnvironment) and each CLI (sessionInEnvironment) on the prepared image, with no
- * network. A prepare that fails, or an environment that cannot run, says so on every item.
+ * key), then each CLI (sessionInEnvironment) and the screens (screensInEnvironment) on the prepared image, with no
+ * network. Each tape types into a fresh copy of the prepared copy, so no tape sees what another tape or the preview
+ * wrote. A prepare that fails, or an environment that cannot run, says so on every item.
  */
 async function captureInEnvironment(c: EnvironmentCapture): Promise<void> {
   const { job } = c;
@@ -613,11 +614,11 @@ async function captureInEnvironment(c: EnvironmentCapture): Promise<void> {
     { attemptId: job.attemptId ?? `ev-${randomBytes(6).toString("hex")}`, workspace: c.stage.work, sha: job.sha, environment: job.environment!, logDir: join(c.stage.dir, "logs"), ...(job.signal ? { signal: job.signal } : {}), note: (m) => c.log(`evidence: ${m}`) },
     async (p) => {
       c.setPath(pathOf(p.record));
-      if (c.screens.length && !job.signal?.aborted) await screensInEnvironment(c, p);
       for (const t of c.terminals) {
         if (job.signal?.aborted) break;
         await sessionInEnvironment(c, p, t);
       }
+      if (c.screens.length && !job.signal?.aborted) await screensInEnvironment(c, p);
     },
   );
   if (out.ok) {
@@ -705,7 +706,7 @@ async function screensInEnvironment(c: EnvironmentCapture, p: PreparedCopy): Pro
 
 /**
  * One CLI: a container of the project's image with no network and a terminal (`docker create --tty --interactive`),
- * its shell bash with VHS's prompt at the copy's root. The service attaches to the terminal through the daemon's
+ * its shell bash with VHS's prompt at the root of its own fresh copy. The service attaches to the terminal through the daemon's
  * socket, starts the container, sets the tape's size, types the tape (recordSession) and keeps the recording: an
  * asciicast v2 file and its transcript, scanned for failures. Nothing half-made is kept.
  */
@@ -718,7 +719,7 @@ async function sessionInEnvironment(c: EnvironmentCapture, p: PreparedCopy, t: P
   p.track(name);
   let stream: Awaited<ReturnType<typeof attachTty>> | undefined;
   try {
-    const made = await runDocker(p.docker, phaseArgs({ name, image: p.image, work: p.work, argv: ["bash", "--noprofile", "--norc", "-i"], phase: { kind: "session" }, imageEnv: p.imageEnv }), { env: p.denv, timeoutMs: 60_000 });
+    const made = await runDocker(p.docker, phaseArgs({ name, image: p.image, work: p.copyWork(), argv: ["bash", "--noprofile", "--norc", "-i"], phase: { kind: "session" }, imageEnv: p.imageEnv }), { env: p.denv, timeoutMs: 60_000 });
     if (made.code !== 0) return c.none(item, "capture-failed", `The session's container was not made: ${lastLine(made.stderr) || `exit ${made.code ?? "?"}`}`, made.stderr);
     stream = await attachTty(socket, name);
     stream.on("error", () => {});

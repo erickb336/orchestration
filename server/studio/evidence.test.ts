@@ -255,7 +255,7 @@ describe("where a capture runs: only in the project's environment (unit E2, ORC-
       async withPrepared(o, use) {
         calls.push({ workspace: o.workspace, sha: o.sha, environment: o.environment, files: readdirSync(o.workspace, { recursive: true }).map(String).sort() });
         if (answer) return answer as never;
-        const value = await use({ docker: "/nonexistent/docker", denv: { DOCKER_HOST: "tcp://127.0.0.1:2375" }, work: o.workspace, image: RECORD.imageId, imageEnv: {}, record: RECORD, run: () => Promise.reject(new Error("the capture runs no check")), track: () => {}, untrack: () => {} });
+        const value = await use({ docker: "/nonexistent/docker", denv: { DOCKER_HOST: "tcp://127.0.0.1:2375" }, work: o.workspace, image: RECORD.imageId, imageEnv: {}, record: RECORD, run: () => Promise.reject(new Error("the capture runs no check")), copyWork: () => o.workspace, track: () => {}, untrack: () => {} });
         return { ok: true, value, record: RECORD, prepare: [] };
       },
     };
