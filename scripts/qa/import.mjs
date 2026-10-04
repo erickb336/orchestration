@@ -5,7 +5,7 @@
 // demo starts as it does for a user: the sample's agents run (the scheduler dispatched them once).
 // Each screen that replaces another (Reading, Baseline) opens at its top, with focus on its heading (UX30-1); Start
 // opens in place of its button, with focus on its heading (UX30-2). A heading that code focuses is as wide as its text
-// (UX35-1). A reload on Reading, Review or Baseline moves no focus (QA36-2). When the
+// (UX35-1). A reload on Reading, Review or Baseline moves no focus (QA36-2). When the start or the
 // reading ends by itself, a message half typed in the lead drawer keeps focus and every keystroke (R33-1).
 // 1. Start: Settings › Project › "Try the import on a sample repository (tally)". The route makes the bundled tally in
 //    the service's data folder and reads it: its commit, its files, the kinds, and how it runs (the image from
@@ -29,6 +29,8 @@
 // 6. In real mode (a second service that says "real", every run still simulated; ORCHESTRATION_TEST_PORT + 2):
 //    Settings › Project › Start a new project › Import an existing repository, the path of a tally repository, and
 //    Read the repository: the real route reads it.
+// 7. Start while you type (a second demo service; ORCHESTRATION_TEST_PORT + 3): during "Pausing the sample's
+//    agents…" you type in the lead drawer; when the import starts, Vision opens and the drawer keeps every keystroke.
 //
 // Run: ORCHESTRATION_TEST_PORT=7900 node --import tsx scripts/qa/import.mjs   (QA_WIDTH=375 for one width)
 
@@ -337,6 +339,13 @@ await runJourney(
       j.check(t.includes("Baseline tally add v1 (terminal demo; tests 5 of 5 pass; recorded)"), "Baseline: each part with its tests and its recording");
       j.check(t.includes("The vision: what tally is today") && t.includes("What the product is today, from the import at commit"), "Baseline: the vision card shows the lead's draft (C10)");
       await reloadKeeps(j, page, "Baseline", () => page.getByRole("heading", { name: "What stays open" }).waitFor({ timeout: 10_000 }));
+      // Edit it in Vision, on the vision card, is a move you make: the review opens at its top (R43-2).
+      await page.getByRole("link", { name: "Edit it in Vision" }).click();
+      await page.waitForURL(/#\/vision$/, { timeout: 10_000 });
+      await page.getByText("4 answers are recorded.").waitFor({ timeout: 10_000 });
+      await atTop(j, page, "Vision", "Review, after Edit it in Vision on the baseline");
+      await page.goto(`${service.origin}/#/vision/baseline`);
+      await page.getByRole("heading", { name: "What stays open" }).waitFor({ timeout: 10_000 });
       const lockIn = page.getByRole("button", { name: "Lock in the baseline" });
       j.check((await lockIn.getAttribute("aria-disabled")) === "true" && t.includes("Tick the box first: your agreement is recorded with this summary."), "Baseline: Lock in waits for the agreement, and says why as text (UX-3)");
       const agree = page.getByRole("checkbox", { name: /I have reviewed the baseline/ });
@@ -450,7 +459,40 @@ await runJourney(
         page.qaErrors = page.qaErrors.filter((e) => !/status of 400/.test(e));
         await j.pageChecks("Start in real mode");
       } finally {
+        await page.goto("about:blank"); // first: a stream cut by the stop is not a page error
         await real.stop();
+      }
+    });
+
+    await j.step("7 Start while you type", async () => {
+      // A second demo service: the start waits for the sample's agents, and you type to the lead meanwhile (R43-1).
+      const demo = await startService(() => buildDemo(Date.now()), { port: PORT + 3, dist: await buildApp(), freeze: true });
+      try {
+        await page.goto(`${demo.origin}/#/settings/project/new-project`);
+        await page.getByRole("button", { name: "Try the import on a sample repository (tally)" }).click();
+        await page.getByText("✓ Found").waitFor({ timeout: 10_000 });
+        await page.getByLabel("Test command").fill("python3 tests/run.py");
+        await page.getByRole("button", { name: "Start the import" }).click();
+        await page.getByRole("dialog").getByRole("button", { name: "Start project" }).click();
+        await page.getByText("Pausing the sample's agents…").waitFor({ timeout: 10_000 });
+        await page.getByRole("button", { name: "Message the lead" }).click();
+        const box = page.locator("aside[aria-label=Lead] textarea").first();
+        await box.click();
+        await page.keyboard.type("Half a sente");
+        await stepUntil(demo, "the import started", (s) => !!s.studio.import && !s.project.importPending);
+        await page.waitForURL(/#\/vision$/, { timeout: 10_000 });
+        await page.getByText("Importing").first().waitFor({ timeout: 10_000 });
+        await page.waitForTimeout(500);
+        await page.keyboard.type("nce.");
+        const f = await focused(page);
+        const draft = await box.inputValue();
+        j.check(f.tag === "TEXTAREA" && draft === "Half a sentence.", "Start: when the start ends while you type in the lead drawer, the drawer keeps focus and every keystroke (R43-1)", `${JSON.stringify(f)} | ${JSON.stringify(draft)}`);
+        await box.fill("");
+        await page.keyboard.press("Escape");
+        await page.locator("aside[aria-label=Lead]").waitFor({ state: "detached", timeout: 5_000 });
+      } finally {
+        await page.goto("about:blank"); // first: a stream cut by the stop is not a page error
+        await demo.stop();
       }
     });
   },
