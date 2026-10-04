@@ -114,6 +114,8 @@ export function cancelInto(s: State, t: Task, now: string, by?: { actor: Actor; 
   F.supersedeDecisions(s, t.id, now, { reason: `${t.id} was cancelled` });
   // Unfinished child tasks exist only for this task's goal: cancel them too.
   const children = descendants(s, t).filter(isOpen);
+  // No step runs again, so none starts from a paused run's changes (ORC-030 C4); they stay on that run's branch.
+  for (const x of [t, ...children]) for (const st of x.steps) delete st.pausedWork;
   for (const c of children) {
     c.lifecycle = "cancelled";
     c.cancelledBy = by?.actor ?? "user";

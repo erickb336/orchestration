@@ -1,6 +1,6 @@
-// Vision with a draft (ORC-029 pass 5, screen 2): the bar at the top of the studio that lists the draft's changes
-// since the last Lock in, with Discard the draft and Review and lock in; and the version in force, shown beside the
-// draft's version of a changed artifact. The words come from draftView.ts.
+// Vision's draft bar (ORC-029 pass 5, screen 2; one line since ORC-030 C1): the draft's changes since the last Lock in
+// behind Show, with Discard the draft, and the way to Start the factory or Lock in; and the version in force, shown
+// beside the draft's version of a changed artifact. The words come from draftView.ts.
 
 import { useState } from "react";
 import * as B from "../../domain/studio/blueprint";
@@ -8,9 +8,11 @@ import { itemFactoryStatus } from "../../domain/studio/itemStatus";
 import type { BlueprintItem, StudioArtifact } from "../../domain/studio/types";
 import { Banner, Button, ButtonLink, Chip, useConfirm } from "../kit";
 import { cx } from "../kit/cx";
+import { useLeadContext } from "../LeadDrawer";
+import { StartFactoryLink } from "../preflight/StartFactoryLink";
 import { PREFLIGHT_HASH } from "../preflight/preflightView";
 import { useStore } from "../store";
-import { CHANGE_TONE, CHANGE_WORD, discardConfirm, draftHeading, draftLines, type DraftLine } from "./draftView";
+import { CHANGE_TONE, CHANGE_WORD, discardConfirm, draftHeading, draftLines, emptyDraftWords, type DraftLine } from "./draftView";
 import { ArtifactPreview } from "./Preview";
 import { STATUS_TONE, STATUS_WORDS, taskWords } from "./realityView";
 import { showKind, type ScreenDevice } from "./studioView";
@@ -33,11 +35,43 @@ export function ChangeLines({ lines, label }: { lines: DraftLine[]; label: strin
   );
 }
 
-/** The draft bar: what the draft holds since the last Lock in, Discard the draft, and Review and lock in. */
+/** What "Ask the lead for a round" writes in the conversation's box as a hint: the owner says what the round is for. */
+export const ASK_FOR_A_ROUND = "Ask for a round: what should the designer make next? For example, the main screen of a trip.";
+
+/**
+ * The draft bar (ORC-030 a-vision-draft-bar and a-vision-empty), one line under the vision. With a draft: "Draft · 5
+ * changes · 1 open", Show (the list of changes, since when, and Discard the draft), and the way to put it into force:
+ * Start the factory… in Vision (its pre-flight is the first Lock in), Lock in… once the factory runs. With an empty
+ * draft the main button is Ask the lead for a round, and Start the factory… is a quiet link.
+ */
 export function DraftBar() {
   const { state, send, disabled } = useStore();
+  const lead = useLeadContext();
   const confirm = useConfirm();
+  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const shaping = state.project.stage === "shaping";
+  if (!B.hasDraft(state)) {
+    const w = emptyDraftWords(state);
+    return (
+      <Banner
+        tone="info"
+        role="none"
+        className="st-draftbar st-draftbar--empty"
+        title={w.title}
+        actions={
+          <>
+            <Button size="small" variant="primary" onClick={() => lead.openLead({ placeholder: ASK_FOR_A_ROUND })}>
+              Ask the lead for a round
+            </Button>
+            <StartFactoryLink variant="quiet" size="small" />
+          </>
+        }
+      >
+        {w.text}
+      </Banner>
+    );
+  }
   const heading = draftHeading(state);
   const rev = B.draftRev(state);
   const discard = async () => {
@@ -54,18 +88,27 @@ export function DraftBar() {
       title={heading.title}
       actions={
         <>
-          <Button size="small" variant="quiet" disabled={disabled} loading={busy} onClick={() => void discard()}>
-            Discard the draft
+          <Button size="small" variant="quiet" aria-expanded={open} aria-controls="st-draft-list" onClick={() => setOpen(!open)}>
+            {open ? "Hide" : "Show"}
           </Button>
           {/* In Vision, Start the factory is the first Lock in: its pre-flight holds the summary. */}
-          <ButtonLink size="small" variant="primary" href={state.project.stage === "shaping" ? PREFLIGHT_HASH : LOCK_IN_HASH}>
-            {state.project.stage === "shaping" ? "Start the factory…" : "Review and lock in"}
+          <ButtonLink size="small" variant="primary" href={shaping ? PREFLIGHT_HASH : LOCK_IN_HASH}>
+            {shaping ? "Start the factory…" : "Lock in…"}
           </ButtonLink>
         </>
       }
     >
-      <p className="small">{heading.since}</p>
-      <ChangeLines lines={draftLines(state)} label="The draft's changes" />
+      {open && (
+        <div id="st-draft-list" className="k-stack k-stack--tight st-draftbar__list">
+          <p className="small no-margin">{heading.since}</p>
+          <ChangeLines lines={draftLines(state)} label="The draft's changes" />
+          <div>
+            <Button size="small" variant="quiet" disabled={disabled} loading={busy} onClick={() => void discard()}>
+              Discard the draft
+            </Button>
+          </div>
+        </div>
+      )}
     </Banner>
   );
 }

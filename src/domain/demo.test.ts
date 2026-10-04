@@ -13,6 +13,7 @@ import * as M from "./model";
 import { builtInCatalog } from "./flows";
 import { toDef, validatePipeline } from "./pipeline";
 import { buildSeed } from "./seed";
+import { blueprintFactoryStatus } from "./studio/itemStatus";
 import type { State, Task } from "./types";
 
 const T0 = Date.parse("2026-10-01T12:00:00Z");
@@ -185,16 +186,18 @@ describe("the demo state", () => {
     const coverage = M.coverageOf(s)!;
     expect(Object.values(coverage)).toHaveLength(9);
     expect(Object.values(coverage).every((c) => c === "clear")).toBe(true);
-    // The conversation: four messages, oldest first, and the change set with Undo.
-    expect(s.conversation.map((m) => m.author)).toEqual(["user", "lead", "user", "lead"]);
-    expect(s.conversation[0].text).toMatch(/offline maps ahead of sharing/);
-    expect(s.conversation[1].text).toMatch(/^Done\. Offline maps is now the focus/);
-    expect(s.conversation[2].text).toMatch(/Keep the VoiceOver work going/);
-    expect(s.conversation[3].text).toMatch(/Claude is reviewing/);
-    expect(s.steering).toHaveLength(1);
-    const set = s.steering[0];
+    // The conversation in the factory: four messages, oldest first, and the change set with Undo (the exchanges in Vision come before them).
+    const talk = s.conversation.slice(-4);
+    expect(talk.map((m) => m.author)).toEqual(["user", "lead", "user", "lead"]);
+    expect(talk[0].text).toMatch(/offline maps ahead of sharing/);
+    expect(talk[1].text).toMatch(/^Done\. Offline maps is now the focus/);
+    expect(talk[2].text).toMatch(/Keep the VoiceOver work going/);
+    expect(talk[3].text).toMatch(/Claude is reviewing/);
+    // Two change sets: the lead's answer to change order 2 (see its own test), then this exchange.
+    expect(s.steering.map((x) => x.changes.map((c) => c.kind).join())).toEqual(["new-task", "focus,defer,note"]);
+    const set = s.steering[1];
     expect(set.simulated).toBe(true);
-    expect(s.conversation[1].changeSetId).toBe(set.id);
+    expect(talk[1].changeSetId).toBe(set.id);
     expect(set.changes.map((c) => [c.kind, c.status, c.taskId])).toEqual([
       ["focus", "applied", undefined],
       ["defer", "applied", "WT-010"],
@@ -209,21 +212,113 @@ describe("the demo state", () => {
     expect(undone.result).toEqual({ undone: [set.changes[1].id, set.changes[0].id], left: [] });
     expect(M.currentVision(undone.state).focus).toBe("Trip sharing first.");
     expect(task(undone.state, "WT-010").deferral).toBeUndefined();
-    expect(undone.state.steering[0].changes[2].status).toBe("applied");
+    expect(undone.state.steering[1].changes[2].status).toBe("applied");
     expect(M.pendingMessages(s)).toEqual([]);
+  });
+
+  it("tells Vision: two rounds, each with the designer's parts, one PE ask revised then agreed, and your Keep, Change and Drop; then the recorded start", () => {
+    const s = demo();
+    const [r1, r2] = s.studio.rounds;
+    expect([r1, r2].map((r) => `${r.n} ${r.focus} ${r.closedAt ? "closed" : "open"}`)).toEqual(["1 experience closed", "2 data closed"]);
+    const versions = (round: number) => s.studio.artifacts.filter((a) => a.round === round).map((a) => `${a.title} v${a.version}`);
+    expect(versions(1)).toEqual(["Trail map v1", "Trip page v1", "Packing list v1", "Group chat v1", "Trail map v2", "Packing list v2"]);
+    expect(versions(2)).toEqual(["Trip data v1", "Words v1", "Trip data v2"]);
+    // Every version is the simulated designer's, from a run the fake runtime ran; every studio run is simulated.
+    for (const a of s.studio.artifacts) expect(a.madeBy).toMatchObject({ role: "designer", provider: "claude" });
+    expect(s.studio.runs.every((r) => r.status === "completed" && r.simulated)).toBe(true);
+    // In each round the PE asked one change, the designer made it, and the PE found the ask met.
+    const verdictsOf = (title: string) => {
+      const id = s.studio.artifacts.find((a) => a.title === title)!.id;
+      return s.studio.verdicts.filter((v) => v.artifactId === id);
+    };
+    for (const title of ["Trail map", "Trip data"]) {
+      const [ask, agreed] = verdictsOf(title);
+      expect(ask).toMatchObject({ version: 1, verdict: "feasible-if", pass: 1 });
+      expect(ask.change).toBeTruthy();
+      expect(agreed).toMatchObject({ version: 2, verdict: "feasible", pass: 2, earlier: [{ ask: ask.id, met: true }] });
+      expect(agreed.budget?.buildUsd).toBeDefined();
+    }
+    // Your marks: Keep, Change (with a note) and Drop, then Keep on the revised packing list.
+    const mark = (title: string, version: number) => {
+      const a = s.studio.artifacts.find((x) => x.title === title && x.version === version)!;
+      return s.studio.feedback.filter((f) => f.artifactId === a.id && f.version === version).at(-1);
+    };
+    expect(mark("Trail map", 2)?.mark).toBe("keep");
+    expect(mark("Trip page", 1)).toMatchObject({ mark: "keep", pickedVariant: "A" });
+    expect(mark("Packing list", 1)).toMatchObject({ mark: "change", note: expect.stringMatching(/who brings each shared item/) });
+    expect(mark("Group chat", 1)?.mark).toBe("drop");
+    expect(mark("Packing list", 2)?.mark).toBe("keep");
+    // Start the factory was the first Lock in: blueprint r1, with its summary and the settings you saw.
+    expect(s.project.factoryStarts).toHaveLength(1);
+    const start = s.project.factoryStarts[0];
+    expect(start).toMatchObject({ by: "user", blueprintRev: 1, visionRev: 1, openItems: [], settings: { delivery: { mode: "pr", merge: "user" }, pausePoints: { tradeoffs: "user", changeOrders: "lead" } } });
+    const r1Items = s.blueprint.revisions[0];
+    expect(r1Items.lockIn?.summary.changes.added.map((i) => i.title)).toEqual(["Trail map", "Trip page", "Packing list", "Trip data", "Words"]);
+    expect(r1Items.at).toBe(start.at);
+    expect(s.project.budgets).toMatchObject({ buildingUsd: 60, maintenanceUsdPerMonth: 15 });
+    // The tasks came after the start.
+    for (const t of s.tasks) expect(t.createdAt > start.at, t.id).toBe(true);
+  });
+
+  it("tells one change order: round 3 in Vision while the factory runs, your Lock in, and the lead's answer, a line with its own Undo", () => {
+    const s = demo();
+    expect(s.studio.rounds.map((r) => `${r.n} ${r.focus}`)).toEqual(["1 experience", "2 data", "3 flows"]);
+    expect(s.blueprint.revisions.map((r) => r.rev)).toEqual([1, 2]);
+    expect(s.blueprint.revisions[1].lockIn?.summary.changes.added.map((i) => i.title)).toEqual(["Join flow"]);
+    const join = s.blueprint.revisions[1].items.find((i) => i.title === "Join flow")!;
+    expect(s.blueprint.changeOrders).toHaveLength(1);
+    const co = s.blueprint.changeOrders[0];
+    expect(co).toMatchObject({ rev: 2, handler: "lead", status: "done" });
+    expect(co.lines).toEqual([expect.objectContaining({ kind: "new-task", status: "applied", appliedBy: "lead", items: [join.id] })]);
+    const made = task(s, co.lines![0].madeTaskId!);
+    expect(M.currentSpec(made).content).toMatchObject({ title: "Join a trip by link", blueprintRefs: [join.id] });
+    expect(made).toMatchObject({ lifecycle: "proposed", holdBeforeStart: true });
+    expect(s.leadRuns.find((r) => r.id === co.leadRunId)).toMatchObject({ trigger: "change-order", outcome: "completed", simulated: true });
+    // Undo on the line cancels the new task, which has not started.
+    const set = s.steering[0];
+    expect(set.changes.map((c) => c.id)).toEqual([co.lines![0].changeId]);
+    const undone = M.undoSteering(s, set.id, set.changes[0].id, iso(T0));
+    expect(task(undone.state, made.id).lifecycle).toBe("cancelled");
+  });
+
+  it("shows Design and reality with evidence: built and verified, built not verified, fails a check, in force; the captures are simulated", () => {
+    const s = demo();
+    const where = Object.fromEntries(blueprintFactoryStatus(s).map((v) => [v.item.title, v]));
+    expect(Object.fromEntries(Object.entries(where).map(([k, v]) => [k, v.status]))).toEqual({
+      "Trail map": "built-not-verified",
+      "Trip page": "built-and-verified",
+      "Packing list": "fails-a-check",
+      "Trip data": "built-not-verified",
+      Words: "in-force",
+      "Join flow": "designed",
+    });
+    // Trail map: WT-001 landed with no capture (a Change); Trip data: a contract with no rules to test.
+    expect(where["Trail map"].notVerified).toEqual({ why: "no-evidence", reason: "no-run" });
+    expect(where["Trip data"].notVerified).toEqual({ why: "no-rules" });
+    // Trip page: WT-014's simulated capture of its landed commit on both devices, and a clean UX review.
+    const page = where["Trip page"];
+    expect(page.evidence).toMatchObject({ status: "captured", current: true, from: { taskId: "WT-014", landed: true, simulated: true } });
+    expect(page.evidence?.status === "captured" && page.evidence.files.map((f) => f.device)).toEqual(["desktop", "mobile"]);
+    expect(page.uxReview?.differences).toEqual([]);
+    // Packing list: the UX review of WT-015's landed work found one difference; the lead accepted it, and only you can.
+    const list = where["Packing list"];
+    expect(list.uxReview).toMatchObject({ taskId: "WT-015", ofLandedWork: true });
+    expect(list.uxReview?.differences).toEqual([expect.objectContaining({ state: "open", title: "The list does not show who brings each shared item", decision: expect.objectContaining({ status: "accept", by: "lead" }) })]);
+    expect(task(s, "WT-015").integration?.landed?.flags).toEqual(["findings-accepted"]);
   });
 
   it("the lead's note reached WT-005's coder while it ran: sent live, acknowledged by the simulated runtime, applied in the change", () => {
     const s = demo();
+    const talk = s.conversation.slice(-4);
     expect(s.notes).toHaveLength(1);
     const n = s.notes[0];
-    const row = s.steering[0].changes[2];
+    const row = s.steering[1].changes[2];
     const run = s.attempts.find((a) => a.id === n.attemptId)!;
     expect(n).toMatchObject({ taskId: "WT-005", stepId: "S1", status: "delivered", via: "live", simulated: true, text: "Put a first-aid kit on every packing list, whatever the trail's length or forecast." });
-    expect(n.from).toEqual({ by: "lead", leadRunId: s.steering[0].leadRunId, changeSetId: s.steering[0].id, changeId: row.id, messageIds: [s.conversation[0].id] });
+    expect(n.from).toEqual({ by: "lead", leadRunId: s.steering[1].leadRunId, changeSetId: s.steering[1].id, changeId: row.id, messageIds: [talk[0].id] });
     expect(row).toMatchObject({ kind: "note", status: "applied", appliedBy: "lead", noteId: n.id, stepId: "S1", after: n.text });
-    expect(s.conversation[0].text).toMatch(/tell the coder on the packing list to put a first-aid kit on every list/);
-    expect(s.conversation[1].text).toMatch(/I also passed your note to the coder working on the packing list\.$/);
+    expect(talk[0].text).toMatch(/tell the coder on the packing list to put a first-aid kit on every list/);
+    expect(talk[1].text).toMatch(/I also passed your note to the coder working on the packing list\.$/);
     // The coder was running when the note was sent and when it was acknowledged, and finished after it.
     expect(run).toMatchObject({ taskId: "WT-005", stepId: "S1", outcome: "completed", snapshot: { provider: "codex", role: "coder" } });
     expect(run.startedAt < n.sentAt! && n.sentAt! <= n.settledAt! && n.settledAt! < run.endedAt!).toBe(true);
@@ -242,7 +337,7 @@ describe("the demo state", () => {
 
   it("shows each capability once: the tasks and their states at the start of the demo", () => {
     const s = demo();
-    expect(s.tasks.map((t) => t.id)).toEqual(["WT-001", "WT-002", "WT-003", "WT-004", "WT-005", "WT-006", "WT-007", "WT-008", "WT-009", "WT-010", "WT-011", "WT-012", "WT-013", "WT-004.1", "WT-004.2", "WT-004.3"]);
+    expect(s.tasks.map((t) => t.id)).toEqual(["WT-001", "WT-002", "WT-003", "WT-004", "WT-005", "WT-006", "WT-007", "WT-008", "WT-009", "WT-010", "WT-011", "WT-012", "WT-013", "WT-004.1", "WT-004.2", "WT-004.3", "WT-014", "WT-015", "T-019"]);
     const col = (id: string) => M.column(s, task(s, id));
 
     // WT-001: a failing check became a finding, the repair ran, the loop ran once more clean; merged, in Review.
@@ -331,7 +426,8 @@ describe("the demo state", () => {
     // It cites no screen of the blueprint, so there is nothing to capture (E1, ORC-029 pass 5).
     expect(vo.steps.map((x) => `${x.id}:${x.state}`)).toEqual(["S1:pending", "S2:pending", "C1:pending", "E1:skipped", "S3:pending", "SR1:pending", "S4:pending", "S5:pending", "C2:pending", "S6:pending"].map((x) => (x.startsWith("S1:") || x.startsWith("S2:") || x.startsWith("C1:") || x.startsWith("S4:") ? x.replace("pending", "done") : x)));
     const decision = s.decisions.find((d) => d.taskId === "WT-007");
-    expect(s.decisions).toHaveLength(1);
+    // Two decisions: this one, and WT-015's, which you sent to the lead and the lead accepted (see Design and reality).
+    expect(s.decisions.map((d) => `${d.taskId}:${d.status}:${d.routedTo}`).sort()).toEqual(["WT-007:open:user", "WT-015:accept:lead"]);
     expect(decision).toMatchObject({ status: "open", routedTo: "user", finding: { title: "Read distances in miles or kilometres?" } });
     expect(decision!.finding.why).toMatch(/Recommendation: follow the phone's region setting/);
     expect(F.awaitingDecision(s, vo)).toEqual({ count: 1, lead: 0, pe: 0, user: 1 });
@@ -362,7 +458,7 @@ describe("the demo state", () => {
     expect(search.integration?.pr?.changeAuthors).toEqual(["codex"]);
 
     // The review-later list: unreviewed first, newest first. The two tasks without code (WT-012, WT-013) are not in it.
-    expect(D.landedTasks(s).map((t) => `${t.id}:${t.integration!.landed!.status}`)).toEqual(["WT-011:unreviewed", "WT-001:unreviewed", "WT-004.1:reviewed", "WT-008:reviewed"]);
+    expect(D.landedTasks(s).map((t) => `${t.id}:${t.integration!.landed!.status}`)).toEqual(["WT-011:unreviewed", "WT-001:unreviewed", "WT-015:reviewed", "WT-014:reviewed", "WT-004.1:reviewed", "WT-008:reviewed"]);
     expect(D.unreviewedCount(s)).toBe(2);
   });
 
@@ -376,7 +472,7 @@ describe("the demo state", () => {
     // A code task is one whose steps produce a code change. Each of its code reviews has a security review beside it:
     // the same round, finished, with an accepted findings artifact, and it read the same change the code review read.
     const codeTasks = s.tasks.filter((t) => t.lifecycle === "done" && t.steps.some((st) => st.outputs.some((o) => o.kind === "code-change")));
-    expect(codeTasks.map((t) => t.id).sort()).toEqual(["WT-001", "WT-004.1", "WT-005", "WT-008", "WT-011"]);
+    expect(codeTasks.map((t) => t.id).sort()).toEqual(["WT-001", "WT-004.1", "WT-005", "WT-008", "WT-011", "WT-014", "WT-015"]);
     const changeInputs = (attemptId: string | undefined) =>
       s.attempts
         .find((a) => a.id === attemptId)!
@@ -473,7 +569,7 @@ describe("the demo state", () => {
     for (const id of ["WT-003", "WT-006", "WT-009", "WT-010", "WT-004.3", "WT-012", "WT-013"]) expect(M.activeAttempts(s, id), id).toEqual([]);
     // WT-004.3 was promoted (the lead moves published specs to Ready) and still waits for you.
     expect(task(s, "WT-004.3")).toMatchObject({ lifecycle: "ready", holdBeforeStart: true });
-    expect(M.stateLabel(s, task(s, "WT-004.3"))).toBe("Waiting for your go-ahead");
+    expect(M.stateLabel(s, task(s, "WT-004.3"))).toBe("Waits for you");
     // One more slot goes to WT-007's security review (beside its code review), the next after that to WT-003's designer step on Claude.
     const wider = M.dispatchEligible({ ...s, project: { ...s.project, workerLimit: 4 } }, iso(T0 + 2000));
     expect(M.activeAgentAttempts(wider).map((a) => `${a.taskId} ${a.stepId} ${a.snapshot.provider}`)).toEqual([...active, "WT-007 SR1 claude"]);
@@ -493,10 +589,14 @@ describe("the demo state", () => {
       expect(text, where).not.toMatch(/\(Simulated\)/);
     }
     expect(s.project.name).toContain("(sample)");
-    // "(simulated)" appears in no visible text: simulated things are labelled by their records instead.
-    expect(texts.filter((t) => /\(simulated\)/i.test(t.text))).toEqual([]);
-    // Simulated things are labelled by their records instead.
-    expect(s.attempts.filter((a) => a.snapshot.provider === "service").every((a) => s.artifacts.find((x) => x.attemptId === a.id)?.checkRun?.simulated)).toBe(true);
+    // "(simulated)" appears in no visible text the demo wrote: simulated things are labelled by their records instead.
+    // The one exception is the service's own summary of a simulated capture of evidence (evidenceSummary), which says so.
+    const captures = new Set(s.artifacts.filter((a) => a.kind === "evidence").map((a) => `${a.id} summary`));
+    expect(captures.size).toBe(2);
+    for (const t of texts) if (captures.has(t.where)) expect(t.text, t.where).toMatch(/^\(simulated\) Evidence of [0-9a-f]{12}: 1 of 1 item captured\./);
+    expect(texts.filter((t) => /\(simulated\)/i.test(t.text) && !captures.has(t.where))).toEqual([]);
+    // Simulated things are labelled by their records instead: every check run and every capture.
+    expect(s.attempts.filter((a) => a.snapshot.provider === "service").every((a) => { const art = s.artifacts.find((x) => x.attemptId === a.id); return art?.checkRun?.simulated || art?.evidence?.simulated; })).toBe(true);
     expect(s.tasks.filter((t) => t.integration?.pr).every((t) => t.integration!.pr!.simulated)).toBe(true);
     expect(s.tasks.filter((t) => t.integration?.landed).every((t) => t.integration!.landed!.simulated)).toBe(true);
   });
@@ -509,7 +609,7 @@ describe("the demo state", () => {
     expect(r.project.name).toBe(DEMO_PROJECT_NAME);
     expect(r.tasks.map((t) => t.id)).toEqual(s0.tasks.map((t) => t.id));
     expect(task(r, "WT-002").hold).toBe(false);
-    expect(r.conversation).toHaveLength(4);
+    expect(r.conversation).toHaveLength(s0.conversation.length);
     expect(r.notes).toHaveLength(1);
     expect(r.flows).toEqual(s.flows);
     expect(r.seq).toBeGreaterThan(s.seq);

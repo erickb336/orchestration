@@ -1,16 +1,16 @@
 // Evidence of what the factory built (ORC-029 pass 5, docs/design/ORC-029-pass5-design.md, "Evidence of what the
 // factory built"): each screen, terminal demo and TUI of the blueprint beside what the built code shows. A builder's
 // own pictures are a claim, so the service captures them (the "Capture evidence" step, server/studio/evidence.ts):
-// it runs the project's preview on a copy of the task's change at its commit, in the project's environment when it
-// has one (docs/design/project-environment.md, unit E2) or else in the recorder's container, and takes the
-// screenshots and recordings the coder's capture plan names. Pure, from state only: this module holds the project's
-// preview setting, what a capture run captures, its record, and the record per blueprint item that "Design and
-// reality" and the lead's brief read.
+// it runs the project's preview on a copy of the task's change at its commit, in the project's environment
+// (docs/design/project-environment.md, unit E2), and takes the screenshots and recordings the coder's capture plan
+// names. A project without an environment gets no capture: its items record "not set up", with what to set. Pure,
+// from state only: this module holds the project's preview setting, what a capture run captures, its record, and the
+// record per blueprint item that "Design and reality" and the lead's brief read.
 //
 // The record per item names the path it ran by, the commit and the design version it shows, the evidence files
 // (served by the app's file route, server/studio/files.ts), and when; or why there is none, with a short log excerpt.
 
-import { isInstall, networkRefusal, validateCommand } from "../checks";
+import { argvRefusal, environmentIsSet } from "../environment";
 import { currentSpec, draft, event } from "../model/core";
 import { ControlError, type Artifact, type State, type Task } from "../types";
 import { blueprintItems } from "./blueprint";
@@ -54,30 +54,23 @@ export function captureItems(s: State, t: Task): CaptureItem[] {
 
 /**
  * How the service runs the project to capture it (desired state; only the owner's `setPreview` writes it). Optional:
- * without it, a capture run records "not set up" and nothing runs. Commands are argv lists, never shell strings, under
- * the checks' rules (src/domain/checks.ts, validateCommand).
+ * without it, a capture run records "not set up" and nothing runs. It runs only in the project's environment, whose
+ * prepare commands install what it needs; commands are argv lists, never shell strings.
  */
 export interface PreviewSetting {
   /** Bumps on each change. */
   rev: number;
-  /**
-   * The dependency download in the recorder's image, run with the network and every install hook off (npm, pnpm or
-   * yarn). Empty: no install. Not run for a project with an environment: its prepare commands run instead.
-   */
-  install: string[];
-  /** What serves the built screens inside the container, on `port`. Absent for a product with no screens. */
+  /** What serves the built screens inside the project's container, on `port`. Absent for a product with no screens. */
   preview?: string[];
   port?: number;
-  /** The CLI's entry file in the repository (`bin/trips.js`): a tape in the capture plan must type it, so it records the real command. */
+  /** The CLI's entry in the repository (`bin/trips.js`): a tape in the capture plan must type it, so it records the real command. */
   cliEntry?: string;
 }
 
-export const DEFAULT_INSTALL = ["npm", "ci", "--ignore-scripts"];
 export const PREVIEW_PORTS = { min: 1024, max: 65535 } as const;
 
-/** The owner's input: what the settings form sends. `install` absent takes DEFAULT_INSTALL; an empty list runs no install. */
+/** The owner's input: what the settings form sends. */
 export interface PreviewInput {
-  install?: string[];
   preview?: string[];
   port?: number;
   cliEntry?: string;
@@ -86,22 +79,18 @@ export interface PreviewInput {
 /** A path segment of a CLI entry: the studio's plain names (server/studio/artifacts.ts). */
 const SEGMENT = /^[A-Za-z0-9._ -]+$/;
 
-/** The setting as it is stored (without its revision), or why it is refused. Pure. */
+/**
+ * The setting as it is stored (without its revision), or why it is refused. Pure. The preview runs only in the
+ * project's container, with no network, so any program may serve it: only the command's shape is checked, as for the
+ * environment's prepare commands.
+ */
 export function normalizePreview(input: PreviewInput): Omit<PreviewSetting, "rev"> | { refused: string } {
-  const install = input.install ?? DEFAULT_INSTALL;
-  if (install.length) {
-    const why = validateCommand({ id: "install", label: "Install", kind: "prepare", argv: install }, { networked: true });
-    if (why) return { refused: why.replace(/^install: /, "The install: ") };
-    // Only a download gets the network; anything else would run repository code with it on.
-    if (!isInstall(install)) return { refused: `The install is a download by npm, pnpm or yarn ("npm ci --ignore-scripts"), because it runs with the network on.` };
-    const net = networkRefusal(install);
-    if (net) return { refused: `The install: ${net}` };
-  }
   const hasPreview = input.preview !== undefined && input.preview.length > 0;
+  if (!hasPreview && input.port === undefined && input.cliEntry === undefined) return { refused: "Give the preview command and its port, or the CLI entry; to capture nothing, clear the setting." };
   if (hasPreview !== (input.port !== undefined)) return { refused: "The preview command and its port go together: give both, or neither for a product with no screens." };
   if (hasPreview) {
-    const why = validateCommand({ id: "preview", label: "Preview", kind: "check", argv: input.preview! });
-    if (why) return { refused: why.replace(/^preview: /, "The preview: ").replace("a check with", "a preview with") };
+    const why = argvRefusal(input.preview!, "The preview command");
+    if (why) return { refused: why };
     const port = input.port!;
     if (!Number.isInteger(port) || port < PREVIEW_PORTS.min || port > PREVIEW_PORTS.max) return { refused: `The port is a whole number from ${PREVIEW_PORTS.min} to ${PREVIEW_PORTS.max}.` };
   }
@@ -110,7 +99,6 @@ export function normalizePreview(input: PreviewInput): Omit<PreviewSetting, "rev
     if (!isInsidePath(p) || p.length > 200 || !p.split("/").every((x) => SEGMENT.test(x))) return { refused: `The CLI entry "${p.slice(0, 60)}" is not a file path inside the repository (letters, digits, ".", "_", "-", " " and "/").` };
   }
   return {
-    install: [...install],
     ...(hasPreview ? { preview: [...input.preview!], port: input.port! } : {}),
     ...(input.cliEntry !== undefined ? { cliEntry: input.cliEntry } : {}),
   };
@@ -121,7 +109,6 @@ const argvText = (argv: string[]) => argv.map((a) => (/[\s"']/.test(a) ? JSON.st
 /** The setting in one line, for events and briefs. */
 export function previewWords(p: PreviewSetting): string {
   return [
-    p.install.length ? `install \`${argvText(p.install)}\`` : "no install",
     p.preview ? `preview \`${argvText(p.preview)}\` on port ${p.port}` : "no preview",
     p.cliEntry ? `CLI entry \`${p.cliEntry}\`` : "",
   ]
@@ -156,9 +143,9 @@ export function setPreview(state: State, input: PreviewInput | null, now: string
 
 /**
  * Why an item has no evidence from a run:
- * - not-set-up: the project has no preview setting (or none for screens);
+ * - not-set-up: the project has no preview setting (or none for screens), or no environment to run it in;
  * - no-plan / not-in-plan / invalid-plan: the coder's capture plan is missing, does not name the item, or was refused;
- * - unavailable: Docker, the recorder's image or its probe is not there;
+ * - unavailable: Docker, the project's environment or the recorder's browser is not there;
  * - install-failed, preview-did-not-start, page-errors, capture-failed: the run itself (a page that did not load, a recording that failed);
  * - stopped: the run was stopped (a time limit);
  * - simulated: the fake runtime ran nothing.
@@ -171,7 +158,7 @@ export const NO_EVIDENCE_WORDS: Record<NoEvidence, string> = {
   "no-plan": "no capture plan",
   "not-in-plan": "not in the capture plan",
   "invalid-plan": "the capture plan was refused",
-  unavailable: "the recorder is not available",
+  unavailable: "Docker or the recorder's browser is not available",
   "install-failed": "the install failed",
   "preview-did-not-start": "the preview did not start",
   "page-errors": "page errors",
@@ -184,7 +171,8 @@ export const NO_EVIDENCE_WORDS: Record<NoEvidence, string> = {
  * Which way a capture ran (docs/design/project-environment.md, unit E2):
  * - environment: in the project's own environment, prepared as its checks are (the image, the prepare or its reuse by
  *   key); the screenshots come from the recorder's browser beside it, and the CLIs are recorded as asciicasts;
- * - recorder: in the recorder's image, for a project without an environment (Node only: npm, pnpm or yarn).
+ * - recorder: in the recorder's image, after an npm, pnpm or yarn install. Only records made before ORC-030 C3 have
+ *   it: that path was removed, and evidence now runs only in the project's environment.
  */
 export type EvidencePath =
   | { via: "environment"; from: "devcontainer" | "setting"; image: string; imageId?: string; prepare?: "ran" | "reused" | "failed" | "none"; key?: string }
@@ -253,13 +241,26 @@ export const noCapture = (item: CaptureItem, reason: NoEvidence, detail: string,
   ...(log?.trim() ? { log: log.trim().slice(-LOG_CAP) } : {}),
 });
 
-/** The run a step records when the project has no preview setting: every item "not set up", and nothing ran. */
-export function notSetUpRun(snap: EvidenceSnapshot, now: string): EvidenceRun {
+/** Where the owner sets what a capture needs, in the app's words. */
+export const RUNS_SETTINGS = "Settings › How your project runs";
+
+/**
+ * Why a capture cannot run in this project, in the owner's words, or undefined when it can: it needs the preview
+ * setting, and an environment to run it in (an image the owner confirmed, or a dev container the owner confirmed).
+ */
+export function notSetUpReason(s: State): string | undefined {
+  if (!s.project.preview) return `The project has no preview setting, so nothing ran. Set the preview command and its port, or the CLI entry, in ${RUNS_SETTINGS}.`;
+  if (!environmentIsSet(s.project.environment)) return `The project has no environment, so nothing ran: evidence runs only in the project's own container. Set an image, or confirm the repository's dev container, in ${RUNS_SETTINGS}.`;
+  return undefined;
+}
+
+/** The run a step records when a capture cannot run (notSetUpReason): every item "not set up", and nothing ran. */
+export function notSetUpRun(snap: EvidenceSnapshot, now: string, why: string): EvidenceRun {
   return {
     sha: snap.target.ref,
     at: now,
     durationMs: 0,
-    items: snap.items.map((i) => noCapture(i, "not-set-up", "The project has no preview setting, so nothing ran. Only the owner sets one.")),
+    items: snap.items.map((i) => noCapture(i, "not-set-up", why)),
   };
 }
 

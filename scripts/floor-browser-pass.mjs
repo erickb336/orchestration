@@ -86,16 +86,28 @@ for (const width of WIDTHS) {
   else ok("Home: the page policy is set");
   await p.getByRole("heading", { name: "The factory", exact: true }).waitFor({ timeout: 10_000 });
   await p.waitForTimeout(400);
-  for (const name of ["Needs you", "Building budget", "Maintenance budget, estimated", "Decided by the PE", "Focus"]) {
+  // ORC-030 pass C2: one Budgets card (two lines, each a figure and a bar), the focus in Latest from the lead (no
+  // Focus card), and on a phone one row per area.
+  for (const name of ["Needs you", "Budgets", "Decided by the PE", "Latest from the lead"]) {
     // A card's count is part of its heading's name: "Needs you 3".
     if (!(await p.getByRole("heading", { name: new RegExp(`^${name}( \\d+)?$`) }).count())) fail(`Home: no "${name}"`);
   }
-  for (const words of ["PE estimate for the rest: $9.00–$16.00", "$35.00 a month of your $50.00", "Change order 2 · from Lock in 2"]) {
+  for (const gone of ["Building budget", "Maintenance budget, estimated", "Focus"]) {
+    if (await p.getByRole("heading", { name: gone, exact: true }).count()) fail(`Home: "${gone}" is still a card of its own`);
+  }
+  for (const words of ["Building · $8.10 of $40 · about $9–$16 more (the PE)", "Maintenance · about $35 a month of $50", "Change order 2 · from Lock in 2"]) {
     if (!(await p.getByText(words).count())) fail(`Home: no "${words}"`);
   }
+  const bars = await p.getByRole("region", { name: "Budgets" }).locator(".k-meter").count();
+  if (bars !== 2) fail(`Home: ${bars} budget bars, not 2`);
   const lines = await p.locator(".ff-line").count();
   if (lines !== 5) fail(`Home: ${lines} lines, not 5`);
-  else ok("Home: the floor shows Needs you, both budgets, 5 lines, the change order and the PE's call");
+  else ok("Home: the floor shows Needs you, the Budgets card with two bars, 5 lines, the change order and the PE's call");
+  // On a phone each line is one row that opens its area's tasks; on a desktop each line shows its tasks.
+  const rows = await p.locator(".ff-line__row:visible").count();
+  const belts = await p.locator(".ff-belt:visible").count();
+  if (width < 600 ? rows !== 5 || belts !== 0 : rows !== 0 || belts !== 5) fail(`Home at ${width}: ${rows} area rows and ${belts} belts`);
+  else ok(width < 600 ? "Home on a phone: one row per area, no belts" : "Home on a desktop: each area's tasks on its line");
   const co = await p.getByRole("link", { name: "Open the change order" }).getAttribute("href");
   if (co !== "#/tasks/change-order/2") fail(`the change order links to ${co}`);
   else ok("the change order links to #/tasks/change-order/2");

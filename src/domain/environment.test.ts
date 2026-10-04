@@ -57,6 +57,19 @@ describe("where the checks run (B-05)", () => {
 });
 
 describe("the owner's setting", () => {
+  it("gives the project an environment only with an image or a confirmed dev container; prepare commands alone do not", () => {
+    expect(E.environmentIsSet(undefined)).toBe(false);
+    expect(E.environmentIsSet({ rev: 1, prepare: [["npm", "ci"]], hosts: ["pkgs.example.com"] })).toBe(false);
+    expect(E.environmentIsSet({ rev: 1, image: PINNED, prepare: [], hosts: [] })).toBe(true);
+    expect(E.environmentIsSet({ rev: 1, prepare: [], hosts: [], devcontainer: { file: DC, sha256: "a".repeat(64) } })).toBe(true);
+  });
+
+  it("checks a command that runs in the container for its shape only, for any program", () => {
+    expect(E.argvRefusal(["bundle", "exec", "rails", "server"], "The preview command")).toBeUndefined();
+    expect(E.argvRefusal(["-it"], "The preview command")).toBe("The preview command: the first argument is the program, not an option.");
+    expect(E.argvRefusal([], "Prepare command 2")).toMatch(/^Prepare command 2: 1–32 arguments\.$/);
+  });
+
   it("takes a pinned image, argv prepare commands and added host names", () => {
     const n = E.normalizeEnvironment({ image: PINNED, prepare: [["sh", "-c", "make deps"]], hosts: ["Pkgs.Example.com.", "pypi.org", "pkgs.example.com"] });
     expect(n).toEqual({ image: PINNED, prepare: [["sh", "-c", "make deps"]], hosts: ["pkgs.example.com"] });
@@ -111,6 +124,12 @@ describe("the dev container", () => {
     expect(E.parseDevcontainer(`{"name":"x"}`, DC)).toEqual({ refused: expect.stringMatching(/no image/) });
     expect(E.parseDevcontainer(`not json`, DC)).toEqual({ refused: expect.stringMatching(/not valid JSON/) });
   });
+
+  it("names a Dockerfile's base images for the owner to read, not its own stages (a-settings-devcontainer)", () => {
+    const dockerfile = ["# syntax is not read here", "ARG VERSION=22", "FROM --platform=linux/amd64 node:${VERSION}-bookworm AS build", "RUN npm ci", "FROM build AS test", "from python:3.13-slim \\", "  AS docs", "FROM node:${VERSION}-bookworm"].join("\n");
+    expect(E.dockerfileBases(dockerfile)).toEqual(["node:${VERSION}-bookworm", "python:3.13-slim"]);
+    expect(E.dockerfileBases("RUN echo FROM nothing\n")).toEqual([]);
+  });
 });
 
 describe("the source of a run's environment", () => {
@@ -158,7 +177,10 @@ describe("the source of a run's environment", () => {
     expect(E.unconfirmedDevcontainer(s)).toBeUndefined();
     s.artifacts.push({ id: "c-1", taskId: "T1", stepId: "C1", attemptId: "a-1", name: "checks", kind: "check-results", version: 1, summary: "", createdAt: "2026-10-02T12:05:00Z", checkRun: { sha: "c".repeat(40), configRev: 1, sandbox: "codex", touchedInputs: [], results: [], durationMs: 1, environment: { ran: "host", reason: "not confirmed", unconfirmed: { file: DC, sha256: sha } } } } as never);
     expect(E.unconfirmedDevcontainer(s)).toEqual({ file: DC, sha256: sha, sha: "c".repeat(40) });
-    expect(needsYouItems(s).map((i) => i.key)).toContain("devcontainer");
+    const item = needsYouItems(s).find((i) => i.key === "devcontainer");
+    expect(item).toMatchObject({ href: "#/settings/how-it-runs/environment", detail: expect.stringMatching(/not used until you confirm what it sets/) });
+    // The digest stays in the record: Needs you does not show it (a-settings-devcontainer).
+    expect(JSON.stringify(item)).not.toContain(sha.slice(0, 8));
     s.project.environment = { rev: 1, prepare: [], hosts: [], devcontainer: { file: DC, sha256: sha } };
     expect(E.unconfirmedDevcontainer(s)).toBeUndefined();
     expect(needsYouItems(s).map((i) => i.key)).not.toContain("devcontainer");

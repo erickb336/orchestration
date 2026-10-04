@@ -8,11 +8,13 @@ import type { ServiceInfo } from "../api";
 import * as D from "../domain/delivery";
 import { buildDemo } from "../domain/demo";
 import { buildSeed } from "../domain/seed";
+import * as M from "../domain/model";
+import { blueprintScene } from "../domain/testing/blueprintScene";
 import { reviewedChange } from "../domain/testing/reviewed";
 import type { Landed, State } from "../domain/types";
 import { ConfirmProvider } from "./kit";
 import { prsNeedingYou } from "./progress";
-import { FILTER_TITLE, bulkLabel, emptyText, matchesFilter, prLists, reviewsLine, showBulk } from "./resultsView";
+import { FILTER_TITLE, bulkLabel, designFirst, emptyText, matchesFilter, prLists, resultsHref, reviewsLine, showBulk } from "./resultsView";
 import { Review } from "./Review";
 import { StoreContext, type ServiceStore } from "./store";
 
@@ -186,7 +188,7 @@ describe("the Results page", () => {
     const demo = buildDemo(T0);
     for (const t of D.landedTasks(demo)) t.integration!.landed!.status = "unreviewed";
     const markup = render(demo);
-    expect(markup).toContain("Mark all 4 as seen");
+    expect(markup).toContain("Mark all 6 as seen"); // every landed task of the demo
   });
 
   it("puts a ready pull request under Ready to merge with its verdict line, Merge, Keep for me and Why it's ready", () => {
@@ -216,5 +218,22 @@ describe("the Results page", () => {
     const local = buildSeed(T0);
     local.project.hold = true;
     expect(render(local)).not.toContain("Paused: watching GitHub only");
+  });
+});
+
+describe("the order of Results' two tabs (ORC-030 a-results-order)", () => {
+  const tabs = (markup: string) => [...markup.matchAll(/role="tab"[^>]*>([^<]+)</g)].map((m) => m[1]);
+
+  it("Design and reality is first once anything is locked in; before that Delivered work is first; #/results stays the delivered work", () => {
+    const fresh = M.initProject(buildSeed(T0, { inFlightRuns: false }), { name: "New", repoPath: "/tmp/new", vision: "", focus: "" }, at(0));
+    expect(designFirst(fresh)).toBe(false);
+    expect(resultsHref(fresh)).toBe("#/results");
+    expect(tabs(render(fresh))).toEqual(["Delivered work", "Design and reality"]);
+    const locked = blueprintScene().s;
+    expect(designFirst(locked)).toBe(true);
+    expect(resultsHref(locked)).toBe("#/results/design");
+    expect(tabs(render(locked))).toEqual(["Design and reality", "Delivered work"]);
+    // The delivered work keeps its address, and its tab stays selected there.
+    expect(render(locked)).toMatch(/role="tab"[^>]*aria-selected="true"[^>]*>Delivered work</);
   });
 });

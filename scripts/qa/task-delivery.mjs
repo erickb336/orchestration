@@ -83,6 +83,12 @@ await runJourney(
       const needs = page.getByRole("region", { name: /^Needs you/ });
       j.check(!/Running/.test(h) && (await needs.getByRole("button", { name: "Start", exact: true }).count()) === 1, "the new task opens on its page, not running, with Start under Needs you", h);
       j.check(task(id)?.flow.id === "change" && task(id).holdBeforeStart, "the record: a Change task that waits for the go-ahead", { flow: task(id)?.flow.id });
+      // ORC-030 C2: the words of a task you wrote and held.
+      j.check(/Waits for you/.test(h) && !/Proposed/.test(h), "the state says Waits for you, not Proposed", h);
+      j.check((await page.getByRole("button", { name: "Pause", exact: true }).count()) === 0, "no Pause before the task starts");
+      const purpose = await page.getByRole("region", { name: "What it's for" }).innerText();
+      j.check(/Your spec\./.test(purpose) && !/as the lead recommended/.test(purpose), "What it's for says Your spec", purpose.replace(/\s+/g, " "));
+      j.check((await page.getByRole("region", { name: "Steps" }).getByText("Change flow").count()) === 0, "the Steps card has no Change flow chip");
       await j.shot("02-created");
     });
     if (!id) return;
@@ -145,6 +151,8 @@ await runJourney(
       j.check(/Skipped: nothing to fix/.test(row(rows, "Repair", 1)), "round 2: the repair is skipped, nothing to fix", row(rows, "Repair", 1));
       j.check(/Passed/.test(row(rows, "Final checks")), "Final checks: Passed", row(rows, "Final checks"));
       j.check(rows.every((r) => !/Running|Waiting/.test(r)), "no step still says Running or Waiting", rows);
+      const main = (await page.locator("main").innerText()).replace(/\s+/g, " ");
+      j.check(!/Verified: Verified/.test(main), "the result says each thing once (no 'Verified: Verified')", main.match(/.{40}Verified.{60}/)?.[0]);
       await j.shot("07-done");
       await j.pageChecks("the task page, Done");
     });

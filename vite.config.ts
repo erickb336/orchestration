@@ -4,6 +4,8 @@ import { configDefaults, defineConfig } from "vitest/config";
 /** Tests that start a real Chrome, a Docker recording or a capture of evidence: slow, and heavy on CPU and memory (Colima has 2 CPUs and 2 GB). */
 const HEAVY_TESTS = [
   "server/environment/environment.docker.test.ts",
+  // Starts the Docker stand-in's processes and waits on them: under a loaded parallel run its 10 s waits ran out.
+  "server/environment/runner.test.ts",
   "server/http.browser.test.ts",
   "server/studio/container.test.ts",
   "server/studio/escape.test.ts",
@@ -36,7 +38,8 @@ export default defineConfig({
       // oversubscribed the machine (load 14 on 10 cores) until timing tests missed their 5 s limit.
       { extends: true, test: { name: "unit", exclude: [...configDefaults.exclude, ".claude/**", "evidence/**", ...HEAVY_TESTS], maxWorkers: "50%" } },
       // After the unit tests, one file at a time, so they never starve the unit tests' 5 s limits (or each other).
-      { extends: true, test: { name: "heavy", include: HEAVY_TESTS, fileParallelism: false, sequence: { groupOrder: 1 } } },
+      // A lock across test runs on this computer, too: two runs' Docker tests at once overrun one Docker VM (ORC-030 B-34).
+      { extends: true, test: { name: "heavy", include: HEAVY_TESTS, fileParallelism: false, sequence: { groupOrder: 1 }, globalSetup: ["server/testing/heavyLock.ts"] } },
     ],
   },
 });

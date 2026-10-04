@@ -11,14 +11,13 @@ import { blueprintScene } from "../../domain/testing/blueprintScene";
 import { answerChangeOrder, at, changeOrdered, fullAnswer, leadProposal, T0 } from "../../domain/testing/changeOrders";
 import { lockInArgs, run } from "../../domain/testing/studio";
 import type { State } from "../../domain/types";
-import { Places } from "../App";
 import { Board } from "../Board";
 import { fmtTime } from "../common";
 import { parseRoute, tabOf } from "../route";
 import { renderScreen, visible } from "../testStore";
 import { StatusBanners } from "../task/Banners";
 import { ChangeOrderPage } from "./ChangeOrder";
-import { changeOrderWords, factoryPlaceLink } from "./changeOrderView";
+import { changeOrderWords } from "./changeOrderView";
 
 const order = (s: State) => s.blueprint.changeOrders.at(-1)!;
 const page = (s: State, rev = order(s).rev) => {
@@ -162,14 +161,6 @@ describe("the ways to a change order", () => {
     expect(parseRoute("#/tasks/change-order/3")).toEqual({ page: "change-order", rev: 3 });
     expect(tabOf(parseRoute("#/tasks/change-order/3"))).toBe("tasks");
     expect(parseRoute("#/tasks/change-order/none")).toEqual({ page: "tasks" });
-  });
-
-  it("the header's Factory place opens an open change order; the tasks once it is closed", () => {
-    const f = changeOrdered();
-    expect(factoryPlaceLink(f.s, "1 agent working. Open the tasks.")).toEqual({ href: "#/tasks/change-order/2", title: "1 agent working. Open change order 2." });
-    expect(renderScreen(<Places />, f.s)).toContain('href="#/tasks/change-order/2" title="1 agent working. Open change order 2."');
-    const closed = runCommand(f.s, "closeChangeOrder", { rev: 2 }, at(30)).state;
-    expect(factoryPlaceLink(closed, "1 agent working. Open the tasks.")).toEqual({ href: "#/tasks", title: "1 agent working. Open the tasks." });
   });
 
   it("Needs you and the Tasks page link to an open one that waits for you", () => {

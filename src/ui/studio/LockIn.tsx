@@ -48,7 +48,7 @@ export function LockInPage() {
     <div className="k-stack st-lockin">
       <header>
         <p className="small muted no-margin">
-          <a href="#/vision">Vision</a> › Review and lock in
+          <a href="#/vision">Vision</a> › Lock in
         </p>
         <h1 className="no-margin">{done !== null ? `Lock in ${done}` : w.title}</h1>
       </header>

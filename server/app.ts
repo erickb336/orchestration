@@ -18,7 +18,9 @@ import type { ProviderId } from "../src/domain/types";
 import { pruneCheckLogs, type CheckRunner } from "./checks";
 import type { GitHubHost } from "./github";
 import { Housekeeping, SWEEP_EVERY_MS, systemDocker } from "./housekeeping";
+import { writeDemoFiles } from "./demoFiles";
 import { createHttpServer } from "./http";
+import { KeepAwake } from "./keepAwake";
 import type { ArchiveOutcome } from "./runtimes/codex";
 import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
 import type { RuntimeAdapter } from "./runtimes/types";
@@ -110,6 +112,22 @@ if (mode === "fake") {
   } catch (e) {
     log(`Vision documents: could not write the sample document: ${e instanceof Error ? e.message : String(e)}`);
   }
+  // The sample's studio versions and captures, as files (server/demoFiles.ts); again after Reset sample data, which
+  // records them under new ids.
+  let written = "";
+  const demoFiles = () => {
+    try {
+      const s = store.read().state;
+      const key = `${s.project.id}|${s.studio.artifacts[0]?.id ?? ""}|${s.studio.artifacts.length}`;
+      if (key === written) return;
+      written = key;
+      writeDemoFiles(dataDir, s);
+    } catch (e) {
+      log(`The sample's files: could not write them: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+  demoFiles();
+  store.onChange(demoFiles);
 }
 // The six flows are compiled in from flows/; the state's copy is refreshed at start so a changed
 // flow file takes effect after a restart. Tasks keep the steps they were created with.
@@ -125,7 +143,9 @@ if (mode === "fake") {
 // Fake runtime: no `github` is passed, so the scheduler uses its simulated host and contacts nothing.
 // Studio versions get screenshots (the system Chrome) and terminal recordings (VHS, sandboxed or not at all), in both modes.
 // The lead's replies are checked against the controlled-English style with Vale, when it is installed (else "not checked").
-const scheduler = new Scheduler(store, adapters, { log, workspaces, github, workerShell, visionDocs, checks, evidence, dataDir, studioMedia: systemMedia(log), prose: valeChecker() });
+// Real runs keep a Mac awake while any is active (ORC-030 C4); the simulated runtime runs no agent and holds nothing.
+const keepAwake = mode === "real" ? new KeepAwake({ log }) : undefined;
+const scheduler = new Scheduler(store, adapters, { log, workspaces, github, workerShell, visionDocs, checks, evidence, dataDir, studioMedia: systemMedia(log), prose: valeChecker(), keepAwake });
 // Check logs are pruned at start and once a day (older than 14 days, or beyond 200 MiB in all).
 const pruneLogs = () => {
   try {
@@ -189,6 +209,7 @@ const server = createHttpServer({
   prototypePort,
   prototypeServer: prototypes,
   housekeeping,
+  keepAwake,
   log,
 });
 
@@ -226,6 +247,7 @@ function shutdown(reason: string) {
   log(`${reason}: stopping scheduler and closing the database`);
   try {
     void scheduler.stop();
+    keepAwake?.stop();
     server.close();
     server.closeAllConnections();
     prototypes.close();

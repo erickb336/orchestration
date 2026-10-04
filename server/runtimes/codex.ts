@@ -128,9 +128,11 @@ const CAPABILITIES: CapabilityMap = {
   resume: "unverified",
   usageReporting: "supported",
   // Native sub-agents are off at every start but a read-only research run that allows them (ORC-031), and each one
-  // that starts is reported as `subagent` events. "supported" only with real runs that prove pause, cost, safety and
-  // the cap (docs/real-runs).
-  childAgentTracking: "unsupported",
+  // that starts is reported as `subagent` events. "Supported" on the real runs of docs/real-runs/2026-10-03T08-34-11-166Z.json
+  // (31c): pause stops them, their cost is counted apart from the parent's, and the read-only sandbox applies to them.
+  // The cap holds only at once (`agents.max_threads`), not per run; the owner chose to allow Codex helpers with the
+  // cap "at most N at once", said beside the setting (ORC-030 r6, 2026-10-03).
+  childAgentTracking: "supported",
 };
 
 const NOTE_MAX = 140;

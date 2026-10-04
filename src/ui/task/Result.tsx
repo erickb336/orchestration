@@ -29,6 +29,16 @@ const KIND_WORD: Record<Artifact["kind"], string> = {
   evidence: "The evidence",
 };
 
+/**
+ * An output in one line, each thing said once (ORC-030 a-words-verified): "The brief: Build the invite sheet…", but
+ * "Verified against the acceptance criteria", not "Verified: Verified against…", when the summary starts with the word.
+ */
+export function outputLine(kind: Artifact["kind"], summary: string): { label?: string; text: string } {
+  const word = KIND_WORD[kind];
+  const bare = word.replace(/^The /, "").toLowerCase();
+  return summary.trim().toLowerCase().startsWith(bare) ? { text: summary } : { label: word, text: summary };
+}
+
 export function ResultCard({ state, task, prAtTop }: { state: State; task: Task; prAtTop: boolean }) {
   if (task.lifecycle !== "done") return null;
   const integ = task.integration;
@@ -36,11 +46,15 @@ export function ResultCard({ state, task, prAtTop }: { state: State; task: Task;
   const pr = integ?.pr;
   const outputs = finalOutputs(state, task)
     .filter((a) => a.kind !== "code-change" && a.kind !== "check-results")
-    .map((a) => (
-      <p key={a.id} className="t-needs__text">
-        <strong>{KIND_WORD[a.kind]}:</strong> {a.summary}
-      </p>
-    ));
+    .map((a) => {
+      const line = outputLine(a.kind, a.summary);
+      return (
+        <p key={a.id} className="t-needs__text">
+          {line.label && <strong>{line.label}: </strong>}
+          {line.text}
+        </p>
+      );
+    });
   return (
     <Card title="Result" actions={landed && <LandedChips landed={landed} />}>
       <div className="k-stack k-stack--tight">

@@ -429,14 +429,16 @@ describe("in the code, only the owner's command starts the factory", () => {
     expect(shaping.match(new RegExp(calls.source, "g"))).toHaveLength(1);
     expect(shaping.lastIndexOf("export function ", shaping.search(calls))).toBe(shaping.indexOf("export function startFactory("));
     // Only the owner's Lock in screen sends the lockIn command (src/ui/studio/lockInView.ts builds it for the owner's
-    // click); the store names it only to check a write.
-    expect(where(/["']lockIn["']/)).toEqual([join("server", "store.ts"), join("src", "ui", "studio", "lockInView.ts")]);
+    // click); the store names it only to check a write. The demo's story (src/domain/demo.ts) sends it as the owner did,
+    // through the command table, when it builds the sample.
+    expect(where(/["']lockIn["']/)).toEqual([join("server", "store.ts"), join("src", "domain", "demo.ts"), join("src", "ui", "studio", "lockInView.ts")]);
   });
 
   it("the command is sent only by the owner's button and by the test harnesses acting as the owner", () => {
     // The pre-flight builds the command for the owner's click (src/ui/preflight/preflightView.ts); the real-run scenario
-    // (scripts/real-run-test.mjs) sends that same command, so it does not name it.
-    expect(where(/["']startFactory["']/)).toEqual([join("scripts", "factory-trial.mjs"), join("server", "http.ts"), join("server", "store.ts"), join("server", "testing", "prSandbox.ts"), join("src", "ui", "preflight", "preflightView.ts")].sort());
+    // (scripts/real-run-test.mjs) sends that same command, so it does not name it. The demo's story (src/domain/demo.ts)
+    // sends it as the owner did, through the command table, when it builds the sample.
+    expect(where(/["']startFactory["']/)).toEqual([join("scripts", "factory-trial.mjs"), join("server", "http.ts"), join("server", "store.ts"), join("server", "testing", "prSandbox.ts"), join("src", "domain", "demo.ts"), join("src", "ui", "preflight", "preflightView.ts")].sort());
     // The store names it only to check a write against it (its stage guard); it never sends it.
     const store = readFileSync(join(ROOT, "server", "store.ts"), "utf8");
     expect(store.match(/["']startFactory["']/g)?.length).toBe(store.match(/command === "startFactory"/g)?.length);

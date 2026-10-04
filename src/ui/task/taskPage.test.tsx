@@ -18,6 +18,8 @@ import { DetailsCard, type DetailsSectionId } from "./Details";
 import { ModelsSection } from "./Models";
 import { OutputsSection } from "./Outputs";
 import { openCleanPr } from "./needsYouItems.test";
+import { outputLine } from "./Result";
+import { controlFailureWords } from "./Banners";
 
 // The page reads the clock (Date.now()) for what is ready and how old things are, so the demo is built at the clock too.
 const T0 = Date.now();
@@ -131,7 +133,9 @@ describe("the task page", () => {
     expect(html).toContain(">Choose B<");
     expect(html).not.toContain(">Choose A<");
     expect(t).toContain("Compare the tradeoffs");
-    expect(t).toContain("Change flow");
+    // The flow is named once, in the line above the title; the Steps card has no "Change flow" chip (More has it).
+    expect(t).toContain("WT-004.3 Change · Trip sharing");
+    expect(t).not.toContain("Change flow");
   });
 
   it("a done task with a pull request that waits for you shows it once, under Needs you, with Merge and Keep for me and the checklist behind Why it's ready", () => {
@@ -213,6 +217,51 @@ describe("the task page", () => {
     expect(html).toContain(">Send a note<");
     expect(text(html)).toContain("Running");
     expect(text(page(s, "NOPE"))).toContain("No task NOPE.");
+  });
+});
+
+describe("the task page's words (ORC-030 pass C2)", () => {
+  const written = () => {
+    const r = runCommand(buildDemo(T0), "createTask", { title: "Show the trip length", area: "Trips", outcome: "Each trip card shows its length.", benefit: "", whyNow: "", approach: "Count the days from the dates.", acceptance: ["2 days"], priority: 3, holdBeforeStart: true, flowId: "change" }, new Date(T0).toISOString());
+    return { s: r.state, id: (r.result as { newId: string }).newId };
+  };
+
+  it("a task you wrote and held with Wait for my go-ahead: Waits for you, not Proposed; no Pause before it starts; Your spec", () => {
+    const { s, id } = written();
+    expect(M.stateLabel(s, task(s, id))).toBe("Waits for you");
+    const html = page(s, id);
+    const t = text(html);
+    expect(t).toContain("Waits for you");
+    expect(t).not.toContain("Proposed");
+    expect(html).not.toContain(">Pause<");
+    expect(t).toContain("Approach: Count the days from the dates. Your spec.");
+    expect(t).not.toContain("as the lead recommended");
+    // Its own approach is "your spec" under Needs you too: the lead recommended nothing.
+    expect(t).toContain("A: As described your spec selected");
+    expect(t).not.toContain("recommended by the lead");
+    // A started task can be paused (WT-007 runs its review); a ready one that has not started cannot.
+    expect(page(s, "WT-007")).toContain(">Pause<");
+    expect(task(s, "WT-003").lifecycle).not.toBe("active");
+    expect(page(s, "WT-003")).not.toContain(">Pause<");
+  });
+
+  it("a stop the runtime did not confirm names the step, never the run's id (a-words-ids)", () => {
+    const s = buildSeed(T0);
+    const a = M.activeAttempts(s)[0];
+    const t = task(s, a.taskId);
+    const timedOut = M.reportStopTimeout(M.pauseTask(s, t.id, new Date(T0 + 1000).toISOString()), a.id, new Date(T0 + 2000).toISOString());
+    expect(task(timedOut, t.id).controlFailure?.message).toContain(a.id); // the record keeps the id
+    const banner = text(page(timedOut, t.id));
+    expect(banner).toContain(`Control failure. ${t.id} ${a.stepId} did not confirm the stop. Nothing merges until it does; the agent may still be working.`);
+    expect(banner).not.toContain(a.id);
+    expect(controlFailureWords(t, [])).toBe("The run did not confirm the stop. Nothing merges until it does; the agent may still be working.");
+  });
+
+  it("an output says each thing once: no 'Verified: Verified …' on any finished task", () => {
+    expect(outputLine("verification", "Verified against the acceptance criteria (simulated)")).toEqual({ text: "Verified against the acceptance criteria (simulated)" });
+    expect(outputLine("brief", "Build the invite sheet as designed")).toEqual({ label: "The brief", text: "Build the invite sheet as designed" });
+    const s = buildDemo(T0);
+    for (const t of s.tasks.filter((x) => x.lifecycle === "done")) expect(text(page(s, t.id))).not.toMatch(/Verified: Verified|The brief: Brief/);
   });
 });
 

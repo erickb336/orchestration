@@ -1,10 +1,11 @@
-// Settings › Project › Environment, pure: the form and the command it sends, "Use this image", "Add a host", where the
-// environment comes from, and the last prepare's line.
+// Settings › How your project runs › Environment, pure: the form and the command it sends, "Use this image", "Add a
+// host", where the environment comes from, what a dev container sets before you confirm it, and the last prepare's line.
 
 import { describe, expect, it } from "vitest";
+import { REGISTRY_HOSTS } from "../../domain/environment";
 import { buildSeed } from "../../domain/seed";
 import type { State } from "../../domain/types";
-import { addHost, confirmDevcontainer, environmentInput, environmentProblem, environmentSteps, lastPrepareLine, liveEnvironment, sourceLine, takeProposal } from "./environment";
+import { addHost, confirmDevcontainer, devcontainerFacts, environmentInput, environmentProblem, environmentSteps, lastPrepareLine, liveEnvironment, sourceLine, takeProposal } from "./environment";
 
 const PINNED = "python:3.13-slim-trixie@sha256:bb2988715db2cf7ace7b53f38f3cffbef7c7046a656bee66245eb0ed386e2e81";
 const empty = { envImage: "", envPrepare: "", envHosts: [] as string[], envDevcontainer: "" };
@@ -66,6 +67,27 @@ describe("the card's lines", () => {
     const s = buildSeed(Date.parse("2026-10-02T12:00:00Z"), { inFlightRuns: false });
     s.project.environment = { rev: 1, prepare: [], hosts: [], devcontainer: { file: dc.devcontainer.file, sha256: SHA } };
     expect(liveEnvironment(s).envDevcontainer).toBe(v.envDevcontainer);
+  });
+
+  it("Confirm this dev container says what it sets in plain words, and never shows its digest (a-settings-devcontainer)", () => {
+    const SHA = "f".repeat(64);
+    const image = { file: ".devcontainer/devcontainer.json", image: "node:22-bookworm", sha256: SHA };
+    const reach = `the ${REGISTRY_HOSTS.length} package registries, through a proxy. The checks and the evidence run with no network.`;
+    expect(devcontainerFacts(image, { ...empty, envPrepare: "npm ci\nnpm run build" }, [])).toEqual([
+      { label: "Image", text: "node:22-bookworm" },
+      { label: "Prepare commands", text: "npm ci, then npm run build (yours, below)" },
+      { label: "Installs may reach", text: reach },
+    ]);
+    // A Dockerfile build: the file and its base images; without prepare commands of your own, the checks' own run.
+    const build = { file: ".devcontainer/devcontainer.json", dockerfile: ".devcontainer/Dockerfile", context: ".", bases: ["python:3.13-slim", "golang:1.26"], sha256: SHA };
+    const facts = devcontainerFacts(build, { ...empty, envHosts: ["pkgs.example.com"] }, [["python3", "-m", "pip", "install", "-r", "requirements.txt"]]);
+    expect(facts.map((f) => `${f.label}: ${f.text}`)).toEqual([
+      "Builds from: .devcontainer/Dockerfile, based on python:3.13-slim and golang:1.26",
+      "Prepare commands: python3 -m pip install -r requirements.txt (the checks' own, because you set none below)",
+      `Installs may reach: the ${REGISTRY_HOSTS.length} package registries and pkgs.example.com, through a proxy. The checks and the evidence run with no network.`,
+    ]);
+    expect(devcontainerFacts(image, empty, [])[1].text).toBe("none: nothing is installed");
+    expect(JSON.stringify([...facts, ...devcontainerFacts(image, empty, [])])).not.toContain(SHA.slice(0, 8));
   });
 
   it("the last prepare: ran, reused, or on this computer and why", () => {

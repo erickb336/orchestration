@@ -135,6 +135,17 @@ const SCENES = {
     await hideTryLine(page);
     return { clipTo: ".home .k-grid-2" };
   },
+  // Vision, round 1 (the experience): the designer's Trail map with the PE's review beside it, as the README's How it
+  // works starts. The sample's studio opens on its latest round, so the still picks round 1 and its first part.
+  vision: async ({ page, api }) => {
+    // The rounds list has no box of its own (only its items do), so the still waits for round 1's button.
+    await open(page, api, "#/vision", { text: "The experience" });
+    await page.getByRole("list", { name: "Rounds" }).getByRole("button").filter({ hasText: "The experience" }).click();
+    await page.getByRole("list", { name: "Artifacts of round 1" }).getByRole("button").filter({ hasText: "Trail map" }).click();
+    await page.waitForSelector("iframe");
+    await page.waitForTimeout(1500); // the prototype's frame loads its own page
+    await page.evaluate(() => window.scrollTo(0, 0));
+  },
   // The board shows every column in one window (the stills' browser prefers the board view).
   tasks: async ({ page, api }) => open(page, api, "#/tasks", { selector: ".board" }),
   // A task that needs you: WT-007's finding to decide, and its steps in plain words.
@@ -173,7 +184,9 @@ if (extra.length && !only.length) log(`scenes the README does not use (skipped):
 // ---------- the throwaway service ----------
 
 async function freePort() {
-  for (let port = 5391; port <= 5399; port++) {
+  // CAPTURE_PORT moves the range (nine ports from it), for a machine where 5391–5399 are taken.
+  const first = Number(process.env.CAPTURE_PORT ?? 5391);
+  for (let port = first; port <= first + 8; port++) {
     const free = await new Promise((done) => {
       const srv = createServer();
       srv.once("error", () => done(false));
@@ -181,7 +194,7 @@ async function freePort() {
     });
     if (free) return port;
   }
-  throw new Error("No free port between 5391 and 5399.");
+  throw new Error(`No free port between ${first} and ${first + 8}.`);
 }
 
 function makeApi(port) {

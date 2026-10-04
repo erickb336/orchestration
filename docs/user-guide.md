@@ -19,7 +19,7 @@ Open the task, and write a note to the step that runs. The note shows **Delivere
 ## Pause, resume and cancel
 
 - **Pause** a task or the whole project. The task reads **Pausing** until its agent confirms the stop, and then **Paused**. A pause stays until you resume.
-- **Resume** starts a fresh attempt of the step from its saved inputs.
+- **Resume** starts a fresh run of the step. When the paused run had changed files, the fresh run starts from those changes and reviews them first, so no work is lost. If the step's inputs changed while it was paused, it starts from its inputs again, and the run says why.
 - **Cancel task** stops the task for good.
 
 ## Edit or rerun a step
@@ -46,3 +46,7 @@ You choose this on the pre-flight, and you can change it later in Settings:
 - **Manual:** the lead works only when you message it. Tasks you create still run, and nothing new is planned.
 
 At the building budget the factory always stops and asks you.
+
+## Overnight runs
+
+On a Mac, the service keeps the Mac from sleeping while any agent or check runs, and lets it sleep again when none does. The display can still sleep. Settings › Advanced shows it. On other systems, keep the computer awake yourself.

@@ -160,8 +160,9 @@ export function stateLabel(s: State, t: Task): string {
   // PE review comes first: the involvement setting applies once the PE agreed (ORC-029 2e).
   const review = peReviewHold(t.peReview);
   if ((col === "ready" || col === "proposed") && review) return review === PE_REVIEW_HOLD ? "Waiting for PE review" : review === PE_OBJECTS_HOLD ? "The PE objects: needs you" : "PE review could not finish: needs you";
-  // "Wait for my go-ahead" is the setting; the state names what it waits for. A project pause shows in the header, not here.
-  if (col === "ready" && t.holdBeforeStart) return "Waiting for your go-ahead";
+  // "Wait for my go-ahead" is the setting; the state says who it waits for, proposed or ready (ORC-030 a-words-proposed:
+  // never "Proposed" for a task you held). A project pause shows in the header, not here.
+  if ((col === "ready" || col === "proposed") && t.holdBeforeStart && !t.heldForShaping) return WAITS_FOR_YOU;
   // A dependency wait is shown before the stage, with shaping noted.
   if (col === "ready" && waitingOn(s, t)) return waitingLabel(s, t);
   if (col === "ready" && s.project.stage === "shaping") return "Ready (in Vision)";
@@ -169,6 +170,9 @@ export function stateLabel(s: State, t: Task): string {
   if (col === "ready" && budgetStop(s)) return BUDGET_HELD;
   return col[0].toUpperCase() + col.slice(1);
 }
+
+/** The state of a task that waits for your go-ahead ("Wait for my go-ahead"), whether the lead proposed it or you wrote it. */
+export const WAITS_FOR_YOU = "Waits for you";
 
 /** The state of a task, or of its next step, that only the building budget holds (ORC-030 Q-24). */
 export const BUDGET_HELD = "Held at the building budget";

@@ -17,6 +17,16 @@ import { useStore } from "../store";
 import { droppedPartsWords } from "../studio/draftView";
 import { isOpenTask, leadDecisions } from "./needsYouItems";
 
+/**
+ * A stop the runtime did not confirm, naming the step that ran ("WT-002 S1"), never the run's internal id (ORC-030
+ * a-words-ids; the record's own message keeps the id).
+ */
+export function controlFailureWords(task: Task, stopping: { stepId: string }[]): string {
+  const steps = [...new Set(stopping.map((a) => `${task.id} ${a.stepId}`))];
+  const who = steps.length ? steps.join(" and ") : "The run";
+  return `${who} did not confirm the stop. Nothing merges until ${steps.length > 1 ? "they do" : "it does"}; the agent may still be working.`;
+}
+
 export function StatusBanners({ state, task, onEdit }: { state: State; task: Task; onEdit?: () => void }) {
   const { send, disabled } = useStore();
   const active = M.activeAttempts(state, task.id);
@@ -57,7 +67,7 @@ export function StatusBanners({ state, task, onEdit }: { state: State; task: Tas
           </Button>
         }
       >
-        {task.controlFailure.message}
+        {controlFailureWords(task, stopping)}
       </Banner>,
     );
   else if (stopping.length) {
@@ -139,7 +149,7 @@ export function StatusBanners({ state, task, onEdit }: { state: State; task: Tas
     out.push(
       <Banner key="hfs">
         Planned in Vision: it waits until you start the factory{M.waitingOn(state, task) ? ` and on ${M.waitingOn(state, task)}` : ""}, then {M.startFactoryPlan(state).release ? "starts on Autopilot" : "waits for your go-ahead"} (your involvement setting at the moment you start the factory decides). Changing "Wait for my go-ahead" under More takes it out of the roadmap's wait.{" "}
-        <a href="#/overview">Work on the vision</a>
+        <a href="#/vision">Work on the vision</a>
       </Banner>,
     );
   // Only the building budget holds it: say why, and where to raise the budget or continue past it (ORC-030 Q-24).

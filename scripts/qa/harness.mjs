@@ -23,6 +23,7 @@ import { build } from "vite";
 import { builtInCatalog } from "../../src/domain/flows.ts";
 import { setFlows } from "../../src/domain/model.ts";
 import { setSubagentProviders } from "../../src/domain/subagents.ts";
+import { writeDemoFiles } from "../../server/demoFiles.ts";
 import { createHttpServer } from "../../server/http.ts";
 import { FakeAdapter, defaultFakeConfig } from "../../server/runtimes/fake.ts";
 import { Scheduler } from "../../server/scheduler.ts";
@@ -115,6 +116,8 @@ export async function startService(state, o = {}) {
     git("add", "-A");
     git("-c", "user.name=QA", "-c", "user.email=qa@localhost", "commit", "-q", "-m", "Initial commit");
   }
+  // The sample's studio versions and captures on disk, as the fake service writes them at start (server/app.ts).
+  writeDemoFiles(dataDir, store.read().state);
   const visionDocs = new VisionDocStore(join(dataDir, "vision-docs"));
   {
     const now = new Date().toISOString();
@@ -203,7 +206,8 @@ export async function chrome() {
  * `page.qaErrors`. The demo's first-run tour is marked done unless o.tour.
  */
 export async function openPage(browser, width, o = {}) {
-  const ctx = await browser.newContext({ viewport: { width, height: width < 600 ? 812 : 900 }, deviceScaleFactor: 1 });
+  // o.touch: a touch screen (pointer: coarse, hover: none), as a phone is: keyboard hints hide there (ORC-030).
+  const ctx = await browser.newContext({ viewport: { width, height: width < 600 ? 812 : 900 }, deviceScaleFactor: 1, ...(o.touch ? { hasTouch: true } : {}) });
   // Only in the app's own window: a studio prototype's frame is sandboxed and has no storage.
   if (!o.tour)
     await ctx.addInitScript(() => {

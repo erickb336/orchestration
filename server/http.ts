@@ -8,12 +8,13 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { extname, join, resolve, sep } from "node:path";
 import { CLIENT_HEADER, type AckMode, type ChangeError, type ChangeResponse, type CheckSuggestions, type CommandError, type EnvironmentFound, type ServiceInfo, type StatePayload, type VisionDocUploadOk } from "../src/api";
 import { suggestChecks, type RepoFile } from "../src/domain/checks";
-import { PROPOSAL_MARKERS, proposeImage } from "../src/domain/environment";
+import { PROPOSAL_MARKERS, dockerfileBases, proposeImage } from "../src/domain/environment";
 import { readDevcontainer } from "./environment/devcontainer";
 import { SERVICE_COMMANDS } from "../src/domain/commands";
 import { exportMarkdown, trustedBaseRef } from "../src/domain/model";
 import type { State } from "../src/domain/types";
 import type { Housekeeping } from "./housekeeping";
+import type { KeepAwake } from "./keepAwake";
 import type { FakeRuntimeConfig } from "./runtimes/fake";
 import type { Scheduler } from "./scheduler";
 import { evidenceFileKnown } from "../src/domain/studio/evidence";
@@ -48,6 +49,8 @@ interface HttpOptions {
   prototypeServer?: Server;
   /** Housekeeping of what runs leave behind: its status is in the service payload, and POST /api/maintenance/housekeeping sweeps now. */
   housekeeping?: Pick<Housekeeping, "status" | "sweep">;
+  /** Keeping the Mac awake while runs are active (server/keepAwake.ts): its status is in the service payload where it applies. */
+  keepAwake?: Pick<KeepAwake, "status">;
   log?: (msg: string) => void;
 }
 
@@ -132,6 +135,8 @@ export function createHttpServer(opts: HttpOptions): Server {
     const proto = opts.prototypeServer?.listening ? opts.prototypeServer.address() : null;
     if (proto && typeof proto === "object") out.prototypePort = proto.port;
     if (opts.housekeeping) out.housekeeping = opts.housekeeping.status();
+    const awake = opts.keepAwake?.status();
+    if (awake) out.keepAwake = awake;
     if (real && opts.workspaces) {
       const project = store.read().state.project;
       if (project.sample) out.repo = { ok: false, reason: "This is the sample project; real runs are disabled for it. Start a new project below." };
@@ -203,8 +208,7 @@ export function createHttpServer(opts: HttpOptions): Server {
     const { state } = store.read();
     if (!real || !opts.workspaces) return send(res, 200, { ref: "", reason: "The simulated runtime reads no repository." } satisfies EnvironmentFound);
     if (state.project.sample) return send(res, 200, { ref: "", reason: SAMPLE_HAS_NO_REPO } satisfies EnvironmentFound);
-    // The Environment card sits under the Repository card in Settings › Project.
-    if (!state.project.repoPath) return send(res, 200, { ref: "", reason: "No repository is set yet: give its path above." } satisfies EnvironmentFound);
+    if (!state.project.repoPath) return send(res, 200, { ref: "", reason: "No repository is set yet: give its path in Settings › Project." } satisfies EnvironmentFound);
     const ref = trustedBaseRef(state);
     const read = (path: string, maxBytes: number) => {
       try {
@@ -215,7 +219,7 @@ export function createHttpServer(opts: HttpOptions): Server {
     };
     const found = readDevcontainer(read);
     const p = found?.parsed;
-    const devcontainer: EnvironmentFound["devcontainer"] = found && p ? { file: found.file, ...("refused" in p ? { refused: p.refused } : "image" in p ? { image: p.image } : { dockerfile: p.build.dockerfile, context: p.build.context }), ...(found.sha256 ? { sha256: found.sha256 } : {}) } : undefined;
+    const devcontainer: EnvironmentFound["devcontainer"] = found && p ? { file: found.file, ...("refused" in p ? { refused: p.refused } : "image" in p ? { image: p.image } : { dockerfile: p.build.dockerfile, context: p.build.context, bases: dockerfileBases(found.dockerfile ?? "") }), ...(found.sha256 ? { sha256: found.sha256 } : {}) } : undefined;
     const proposal = proposeImage(PROPOSAL_MARKERS.filter((m) => read(m, 1)));
     return send(res, 200, { ref, ...(devcontainer ? { devcontainer } : {}), ...(proposal ? { proposal } : {}) } satisfies EnvironmentFound);
   };

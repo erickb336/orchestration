@@ -8,7 +8,7 @@
 //     hosts and prepare inputs reuses them instead of preparing again.
 
 import { createHash } from "node:crypto";
-import { closeSync, constants, cpSync, existsSync, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, rmdirSync, unlinkSync, type Stats } from "node:fs";
+import { chmodSync, closeSync, constants, cpSync, existsSync, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, rmdirSync, unlinkSync, type Stats } from "node:fs";
 import { dirname, join } from "node:path";
 import { isPrepareInput } from "../../src/domain/environment";
 
@@ -133,9 +133,22 @@ function removeEntry(p: string, st: Stats, parent?: { path: string; own: Stats }
       throw e;
     }
   }
+  const open = () => openSync(p, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
   let fd: number;
   try {
-    fd = openSync(p, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    try {
+      fd = open();
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EACCES") throw e;
+      // A folder no one may read (mode 000, as a built app can leave one) cannot be opened to change its mode: it is
+      // made the owner's again by its path, only while lstat still shows the same folder (Node has no fchmodat; no
+      // container mounts the folder by now, so nothing swaps it), and then opened as any other.
+      const now = lstatSync(p);
+      if (!now.isDirectory() || !sameEntry(now, st)) throw new Error(`${p} was replaced while it was being removed; the clean-up stopped there`);
+      if (parent) still(parent.path, parent.own);
+      chmodSync(p, (now.mode & 0o7777) | 0o700);
+      fd = open();
+    }
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code;
     // Replaced by a link or a file since its lstat: that entry itself goes, never what it points to.

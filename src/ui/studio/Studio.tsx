@@ -1,23 +1,23 @@
 // Vision, the studio (ORC-029 passes 3d and 4a): the studio screen approved in pass 1 (the canvas). `#/vision`, in
 // the main navigation.
 //
-// At the top, while there is a draft (pass 5): the draft bar, with its changes since the last Lock in (Draft.tsx).
+// At the top (ORC-030 C1): the vision text and its history (VisionCard.tsx), then the draft bar, one line (Draft.tsx).
 //
 // Left: the rounds, then the chosen round's artifacts with your mark and where each stands in the blueprint ("in the
 // draft" or "in force"), and the designer's runs of that round. A changed artifact shows its version in force beside it.
-// Centre: the artifact, on Desktop or Mobile (only the project's devices), with its variants, Keep, Change or Drop,
-// and Pin a comment; terminal demos and TUIs in a terminal window; interfaces, algorithms, topologies, contracts and
-// flows as documents. Right: the lead's panel (its message for the round, its questions with suggested answers, and
-// a box to message it); PE review of the artifact shown, with the PE's verdict on each variant and the artifact's
-// versions; then your feedback: a summary, a note, and Send to the lead.
+// Centre: the artifact, on Desktop or Mobile (only the project's devices), with Pin a comment; terminal demos and TUIs
+// in a terminal window; interfaces, algorithms, topologies, contracts and flows as documents. Under it, your answer in
+// one bar: the variant, Keep, Change or Drop, the note on the part, and Send to the lead (ORC-030 a-vision-actions).
+// Right: only what the lead and the PE said: the lead's message for the round and its questions (with suggested
+// answers and a box for yours), then PE review of the artifact shown, with the PE's verdict on each variant and the
+// artifact's versions. The studio has no box of its own to message the lead: the header's Message the lead does that.
 //
-// Your marks, picks, pins, notes, answers and message are kept here until you send them, all together, as one
-// message to the lead (the marks are also recorded on each version). You can mark a version once the PE agreed, or
-// once its review ended, and then overrule an objection that stands, with your reason; until then you can look.
+// Your marks, picks, pins, notes and answers are kept here until you send them, all together, as one message to the
+// lead (the marks are also recorded on each version). You can mark a version once the PE agreed, or once its review
+// ended, and then overrule an objection that stands, with your reason; until then you can look.
 
 import { useCallback, useState, type ReactNode } from "react";
 import * as M from "../../domain/model";
-import * as B from "../../domain/studio/blueprint";
 import * as R from "../../domain/studio/runs";
 import * as S from "../../domain/studio/studio";
 import { DOMAIN_WORDS } from "../../domain/studio/domains";
@@ -28,8 +28,6 @@ import type { PinMessage } from "../../runtime/prototype";
 import { relTime, selectionText } from "../common";
 import { Banner, Button, Chip, Disclosure, EmptyState, Field, Input, SegmentedControl, SimulatedChip, StatePill, Textarea } from "../kit";
 import { cx } from "../kit/cx";
-import { useLeadContext } from "../LeadDrawer";
-import { StartFactoryLink } from "../preflight/StartFactoryLink";
 import { useStore } from "../store";
 import { DocumentArtifact } from "./Document";
 import { DraftBar, InForcePane } from "./Draft";
@@ -37,6 +35,7 @@ import { BLUEPRINT_PLACE_TITLE, PLACE_TONE, blueprintPlace, inForceBeside } from
 import { DeviceFrame, NoPrototypeServer, PlainFrame, ScreenshotFallback } from "./Frames";
 import { PeQuestions } from "./PeQuestions";
 import { TerminalArtifact } from "./Preview";
+import { VisionCard } from "./VisionCard";
 import {
   AS_IS_FILES_SHOWN,
   AS_IS_LABEL,
@@ -77,6 +76,7 @@ import {
   variantEntry,
   variantRules,
   type Draft,
+  type DraftEffect,
   type ScreenDevice,
   type TableRow,
 } from "./studioView";
@@ -95,7 +95,6 @@ const simulatedRun = (s: ReturnType<typeof useStore>["state"], a: StudioArtifact
 
 export function Studio() {
   const { state, service, send, disabled } = useStore();
-  const leadDrawer = useLeadContext();
   const [roundChoice, setRoundChoice] = useState<number | undefined>(undefined);
   const [artifactChoice, setArtifactChoice] = useState<string | undefined>(undefined);
   /** The version of an artifact you chose from its history, by artifact. */
@@ -106,7 +105,6 @@ export function Studio() {
   const [pinMode, setPinMode] = useState(false);
   /** Your answers to each round's questions, by round. */
   const [answers, setAnswers] = useState<Record<number, string[]>>({});
-  const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
   /** What the last Send did, in words, until you change something: to the lead, then to the draft, part by part. */
   const [sent, setSent] = useState<string | null>(null);
@@ -119,6 +117,7 @@ export function Studio() {
   const listed = artifacts.find((a) => a.id === artifactChoice) ?? artifacts[0];
   // An earlier or later version, when you chose one from its history; the round's newest otherwise.
   const artifact = listed && versionChoice[listed.id] !== undefined ? (S.versionsOf(state, listed.id).find((v) => v.version === versionChoice[listed.id]) ?? listed) : listed;
+  const shown = artifact && round ? artifact : undefined;
 
   const draftOf = (a: StudioArtifact): Draft => drafts[draftKey(a)] ?? draftFrom(S.currentFeedback(state, a.id, a.version));
   const update = useCallback(
@@ -138,21 +137,10 @@ export function Studio() {
     setSent(null);
     setAnswers((all) => ({ ...all, [n]: questions.map((_, j) => (j === i ? text : (all[n]?.[j] ?? ""))) }));
   };
-  const answer = { round: n, questions, answers: roundAnswers, message };
+  // The studio has no message box of its own (ORC-030 a-vision-two-boxes): the note on the part says the rest.
+  const answer = { round: n, questions, answers: roundAnswers, message: "" };
   const changed = changedDrafts(state, drafts);
   const effects = new Map(answerEffects(state, changed).map((e) => [e.key, e]));
-  /**
-   * Under a version's mark: what Send does to the draft for it (Keep puts it in, Drop takes it out, or why Keep cannot),
-   * or, when your answer has nothing on it, why a version you kept is not in the draft.
-   */
-  const effectLine = (a: StudioArtifact): { text: string; needsYou: boolean } | undefined => {
-    if (standing(state, a).kind !== "open") return undefined;
-    const e = effects.get(draftKey(a));
-    if (e) return { text: e.will, needsYou: !!e.refused };
-    if (changed.some((c) => draftKey(c.artifact) === draftKey(a))) return undefined;
-    const kept = keptNotInDraft(state, a);
-    return kept ? { text: kept, needsYou: true } : undefined;
-  };
   const parts = answerParts({ ...answer, changed });
   const blocker = disabled ? "The service is offline. What you marked and wrote stays here until it reconnects." : answerBlocker({ ...answer, changed });
   const sendAll = async () => {
@@ -169,12 +157,11 @@ export function Studio() {
     setPinMode(false);
     setSentDraft(r.draft);
     if (!r.posted) {
-      // The marks are recorded; your answers and message stay here to send again.
+      // The marks are recorded; your answers stay here to send again.
       setSent(r.recorded.length ? "Your marks are recorded on each version, but the message did not reach the lead. Send again." : null);
       return;
     }
     if (n !== undefined) setAnswers((all) => ({ ...all, [n]: [] }));
-    setMessage("");
     setSent(`Sent to the lead as one message.${r.recorded.length ? " Your marks, picks, pins and notes are recorded on each version." : ""} The lead answers in the conversation.`);
   };
 
@@ -182,42 +169,27 @@ export function Studio() {
     setPinMode(false);
     change();
   };
+  const variant = shown ? (shownVariant[draftKey(shown)] ?? draftOf(shown).pickedVariant ?? shown.variants[0]?.id) : undefined;
+  // The bar shows when there is something to answer: a part, the lead's questions, or a change not sent yet.
+  const showBar = !!round && (!!shown || questions.length > 0 || changed.length > 0 || !!sent);
 
   return (
     <div className="k-stack st-page">
       <header className="st-head">
         <h1 className="no-margin">Vision</h1>
-        <p className="small muted">
-          {round ? `The studio · round ${round.n}${round.closedAt ? " (closed)" : ""}. ` : "The studio. "}The factory builds exactly what the blueprint shows, with many agents at once. Changing the blueprint now takes minutes; changing built work takes runs.
-        </p>
+        <p className="small muted">{round ? `The studio · round ${round.n}${round.closedAt ? " (closed)" : ""}. ` : "The studio. "}The factory builds exactly what the blueprint shows.</p>
       </header>
-      {B.hasDraft(state) ? (
-        <DraftBar />
-      ) : state.project.stage === "shaping" ? (
-        <Banner tone="info" actions={<StartFactoryLink size="small" />}>
-          Nothing is in the draft yet. A part you mark Keep goes into the draft when you send it, and Start the factory is your first Lock in.
-        </Banner>
-      ) : (
-        <Banner tone="info">The factory has started. Vision stays open: the designer and the PE go on working here, and a part you mark Keep goes into the draft when you send it. The factory builds from the version you locked in, never from the draft.</Banner>
-      )}
+      <VisionCard />
+      <DraftBar />
       <DomainPrompt />
       {state.studio.rounds.length === 0 ? (
-        <EmptyState
-          title="No rounds yet."
-          action={
-            <Button size="small" onClick={() => leadDrawer.openLead()}>
-              Message the lead
-            </Button>
-          }
-        >
-          When the lead opens a round, the designer makes screens, terminal demos or documents for it, and they appear here for you to mark, pin and pick.
-        </EmptyState>
+        <EmptyState title="No rounds yet.">When the lead opens a round, the designer makes screens, terminal demos or documents for it, and they appear here for you to mark, pin and pick.</EmptyState>
       ) : (
         <div className="st-canvas">
           <aside className="st-col st-left" aria-label="Rounds and artifacts">
             <section>
               <h2 className="st-label">Rounds</h2>
-              <ul className="st-list" aria-label="Rounds">
+              <ul className="st-list" aria-label="Rounds" data-tour="vision-rounds">
                 {roundsNewestFirst(state).map((r) => (
                   <li key={r.n}>
                     <button type="button" className="st-item" aria-current={r.n === n ? "true" : undefined} onClick={() => choose(() => (setRoundChoice(r.n), setArtifactChoice(undefined)))}>
@@ -249,76 +221,170 @@ export function Studio() {
           </aside>
 
           <section className="st-col st-center" aria-label="The artifact">
-            {artifact && round ? (
+            {shown ? (
               <ArtifactView
-                key={draftKey(artifact)}
-                artifact={artifact}
-                draft={draftOf(artifact)}
+                key={draftKey(shown)}
+                artifact={shown}
+                draft={draftOf(shown)}
                 update={update}
-                variant={shownVariant[draftKey(artifact)] ?? draftOf(artifact).pickedVariant ?? artifact.variants[0]?.id}
-                onVariant={(v) => choose(() => setShownVariant((all) => ({ ...all, [draftKey(artifact)]: v })))}
+                variant={variant}
                 device={deviceChoice}
                 onDevice={(d) => choose(() => setDeviceChoice(d))}
                 pinMode={pinMode}
                 setPinMode={setPinMode}
                 port={service.prototypePort}
-                effectLine={effectLine(artifact)}
               />
             ) : round ? (
               <NoArtifacts n={round.n} />
             ) : null}
+            {showBar && (
+              <AnswerBar
+                artifact={shown}
+                draft={shown ? draftOf(shown) : undefined}
+                update={update}
+                variant={variant}
+                onVariant={(v) => shown && choose(() => setShownVariant((all) => ({ ...all, [draftKey(shown)]: v })))}
+                pending={changed.map(({ artifact: a, draft }) => ({
+                  key: draftKey(a),
+                  title: `${a.title}${a.version > 1 ? ` v${a.version}` : ""}`,
+                  summary: draftSummary(a, draft) || "cleared",
+                  effect: effects.get(draftKey(a)),
+                }))}
+                parts={parts}
+                kept={shown && !changed.some((c) => draftKey(c.artifact) === draftKey(shown)) ? keptNotInDraft(state, shown) : undefined}
+                blocker={blocker}
+                sending={sending}
+                sent={sent}
+                sentDraft={sentDraft}
+                onSend={() => void sendAll()}
+              />
+            )}
           </section>
 
-          <aside className="st-col st-right" aria-label="The lead and your feedback">
-            <LeadPanel round={round} answers={roundAnswers} onAnswer={setAnswer} message={message} onMessage={(text) => (setSent(null), setMessage(text))} />
-            <PeReviewPanel artifact={artifact && round ? artifact : undefined} onVersion={(id, version) => choose(() => setVersionChoice((all) => ({ ...all, [id]: version })))} />
-            <section className="k-stack k-stack--tight" aria-label="Your feedback">
-              <h2 className="st-label">Your feedback</h2>
-              {changed.length || parts.length ? (
-                <ul className="st-sum" aria-label="Not sent yet">
-                  {changed.map(({ artifact: a, draft }) => (
-                    <li key={draftKey(a)}>
-                      <b>{a.title}</b>
-                      {a.version > 1 ? ` v${a.version}` : ""}: {draftSummary(a, draft) || "cleared"}
-                      {effects.get(draftKey(a)) && <span className={cx("st-effect", effects.get(draftKey(a))!.refused && "st-effect--refused")}>{effects.get(draftKey(a))!.will}</span>}
-                    </li>
-                  ))}
-                  {parts.map((p) => (
-                    <li key={p}>{`${p[0].toUpperCase()}${p.slice(1)}`}</li>
-                  ))}
-                </ul>
-              ) : (
-                !sent && <p className="small muted">Nothing marked or written yet.</p>
-              )}
-              {sent && (
-                <p className="small muted" role="status">
-                  {sent}
-                </p>
-              )}
-              {sentDraft.length > 0 && (
-                <ul className="st-sum" aria-label="The draft after Send">
-                  {sentDraft.map((l) => (
-                    <li key={l}>{l}</li>
-                  ))}
-                </ul>
-              )}
-              {artifact && standing(state, artifact).kind === "open" && (
-                <Field label={`Note on ${artifact.title}`} hint="Anything the marks and pins do not say.">
-                  <Textarea value={draftOf(artifact).note} disabled={disabled} rows={3} onChange={(e) => update(artifact, (d) => ({ ...d, note: e.target.value }))} />
-                </Field>
-              )}
-              <div className="k-actions">
-                <Button variant="primary" disabled={!!blocker} disabledReason={blocker} showReason={changed.length > 0 || parts.length > 0 || disabled} loading={sending} onClick={() => void sendAll()}>
-                  {sending ? "Sending…" : "Send to the lead"}
-                </Button>
-              </div>
-              <p className="micro muted">Your marks, answers and message go together, as one message to the lead. Send puts each part you mark Keep in the draft, and takes each part you mark Drop out of it.</p>
-            </section>
+          <aside className="st-col st-right" aria-label="What the lead and the PE said">
+            <LeadPanel round={round} answers={roundAnswers} onAnswer={setAnswer} />
+            <PeReviewPanel artifact={shown} onVersion={(id, version) => choose(() => setVersionChoice((all) => ({ ...all, [id]: version })))} />
           </aside>
         </div>
       )}
     </div>
   );
+}
+
+/** One part of your answer not sent yet, as the bar lists it: the version, your marks in words, and what Send does to the draft. */
+interface PendingPart {
+  key: string;
+  title: string;
+  summary: string;
+  effect: DraftEffect | undefined;
+}
+
+interface AnswerBarProps {
+  /** The part shown, when there is one; undefined while the round has none. */
+  artifact: StudioArtifact | undefined;
+  draft: Draft | undefined;
+  update: (a: StudioArtifact, change: (d: Draft) => Draft) => void;
+  variant: string | undefined;
+  onVariant: (v: string) => void;
+  pending: PendingPart[];
+  /** Your answers to the lead's questions, in a few words ("2 answers to the lead's questions"). */
+  parts: string[];
+  /** Why a version you kept is not in the draft, when your answer has nothing on it. */
+  kept: string | undefined;
+  blocker: string | undefined;
+  sending: boolean;
+  sent: string | null;
+  sentDraft: string[];
+  onSend: () => void;
+}
+
+/**
+ * Your answer, in one bar under the part (ORC-030 a-vision-actions): the variant and Pick this variant, then Keep,
+ * Change or Drop, the note on the part and Send to the lead; under it, what Send sends and does to the draft.
+ */
+function AnswerBar({ artifact: a, draft, update, variant, onVariant, pending, parts, kept, blocker, sending, sent, sentDraft, onSend }: AnswerBarProps) {
+  const { state, disabled } = useStore();
+  const locked = a ? lockedWhy(state, a, disabled) : undefined;
+  const open = !!a && standing(state, a).kind === "open";
+  const nothing = pending.length === 0 && parts.length === 0;
+  return (
+    <section className="st-answer" aria-label="Your answer">
+      {a && draft && a.variants.length > 1 && (
+        <div className="st-answer__row">
+          <SegmentedControl label="Variant" size="small" value={variant ?? ""} onChange={onVariant} options={a.variants.map((v) => ({ value: v.id, label: v.label }))} />
+          <Button
+            size="small"
+            aria-pressed={draft.pickedVariant === variant}
+            disabled={!!locked || variant === undefined}
+            disabledReason={locked}
+            onClick={() => update(a, (d) => ({ ...d, pickedVariant: d.pickedVariant === variant ? undefined : variant }))}
+          >
+            {draft.pickedVariant === variant ? "Picked" : "Pick this variant"}
+          </Button>
+        </div>
+      )}
+      <div className="st-answer__row">
+        {a && draft && (
+          <div className="st-toolbar__grp" role="group" aria-label="Your mark">
+            {MARKS.map((m) => (
+              <Button
+                key={m.value}
+                size="small"
+                className={cx("st-mark", `st-mark--${m.value}`)}
+                aria-pressed={draft.mark === m.value}
+                disabled={!!locked}
+                disabledReason={locked}
+                onClick={() => update(a, (d) => ({ ...d, mark: d.mark === m.value ? null : m.value }))}
+              >
+                {m.label}
+              </Button>
+            ))}
+          </div>
+        )}
+        {a && draft && open && (
+          <Field label={`Note on ${a.title}`} labelHidden className="st-answer__note">
+            <Textarea value={draft.note} disabled={disabled} rows={1} placeholder={`Note on ${a.title}…`} onChange={(e) => update(a, (d) => ({ ...d, note: e.target.value }))} />
+          </Field>
+        )}
+        <Button variant="primary" size="small" disabled={!!blocker} disabledReason={blocker} showReason={!nothing || disabled} loading={sending} onClick={onSend}>
+          {sending ? "Sending…" : "Send to the lead"}
+        </Button>
+      </div>
+      {!nothing && (
+        <ul className="st-sum" aria-label="Not sent yet">
+          {pending.map((p) => (
+            <li key={p.key}>
+              <b>{p.title}</b>: {p.summary}
+              {p.effect && <span className={cx("st-effect", p.effect.refused && "st-effect--refused")}>{p.effect.will}</span>}
+            </li>
+          ))}
+          {parts.map((p) => (
+            <li key={p}>{`${p[0].toUpperCase()}${p.slice(1)}`}</li>
+          ))}
+        </ul>
+      )}
+      {nothing && kept && <p className="small st-hint">{kept}</p>}
+      {nothing && !kept && !sent && open && <p className="micro muted">Keep puts the part in the draft when you send. Drop takes it out.</p>}
+      {sent && (
+        <p className="small muted" role="status">
+          {sent}
+        </p>
+      )}
+      {sentDraft.length > 0 && (
+        <ul className="st-sum" aria-label="The draft after Send">
+          {sentDraft.map((l) => (
+            <li key={l}>{l}</li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/** Why you cannot mark this version now, in words: the PE has it, a newer version replaced it, or the service is offline. */
+function lockedWhy(s: ReturnType<typeof useStore>["state"], a: StudioArtifact, offline: boolean): string | undefined {
+  const st = standing(s, a);
+  return st.kind === "pe" ? st.text : st.kind === "replaced" ? `This is v${a.version}; v${st.by.version} (round ${st.by.round}) replaced it, so your answer goes on the newer version.` : offline ? "The service is offline." : undefined;
 }
 
 /**
@@ -457,22 +523,19 @@ interface ArtifactViewProps {
   draft: Draft;
   update: (a: StudioArtifact, change: (d: Draft) => Draft) => void;
   variant: string | undefined;
-  onVariant: (v: string) => void;
   device: ScreenDevice | undefined;
   onDevice: (d: ScreenDevice) => void;
   pinMode: boolean;
   setPinMode: (on: boolean) => void;
   port: number | undefined;
-  /** What Send does to the draft for this version, or why a version you kept is not in it (the Studio's `effectLine`). */
-  effectLine: { text: string; needsYou: boolean } | undefined;
 }
 
-/** The centre: the artifact's toolbar, the stage (a device frame, a terminal window or a plain frame), the variants, your mark, and the pins. */
-function ArtifactView({ artifact: a, draft, update, variant, onVariant, device, onDevice, pinMode, setPinMode, port, effectLine }: ArtifactViewProps) {
+/** The centre: the artifact's toolbar, the stage (a device frame, a terminal window or a plain frame), and the pins. Your answer is the bar under it (AnswerBar). */
+function ArtifactView({ artifact: a, draft, update, variant, device, onDevice, pinMode, setPinMode, port }: ArtifactViewProps) {
   const { state, disabled } = useStore();
   const kind = showKind(a);
   const st = standing(state, a);
-  const locked = st.kind === "pe" ? st.text : st.kind === "replaced" ? `This is v${a.version}; v${st.by.version} (round ${st.by.round}) replaced it, so your answer goes on the newer version.` : disabled ? "The service is offline." : undefined;
+  const locked = lockedWhy(state, a, disabled);
   const options = deviceOptions(state.project.devices, a);
   // Until you choose, a phone-sized window starts on Mobile when the artifact has it.
   const narrow = typeof window !== "undefined" && !!window.matchMedia?.("(max-width: 600px)").matches;
@@ -546,41 +609,7 @@ function ArtifactView({ artifact: a, draft, update, variant, onVariant, device, 
       </p>
       {a.kind === "flow" && <RulesTable key={variant} artifact={a} variant={variant} draft={draft} update={update} locked={locked} />}
 
-      <div className="st-markbar">
-        {a.variants.length > 1 && (
-          <div className="st-toolbar__grp">
-            <SegmentedControl label="Variant" size="small" value={variant ?? ""} onChange={onVariant} options={a.variants.map((v) => ({ value: v.id, label: v.label }))} />
-            <Button
-              size="small"
-              aria-pressed={draft.pickedVariant === variant}
-              disabled={!!locked || variant === undefined}
-              disabledReason={locked}
-              onClick={() => update(a, (d) => ({ ...d, pickedVariant: d.pickedVariant === variant ? undefined : variant }))}
-            >
-              {draft.pickedVariant === variant ? "Picked" : "Pick this variant"}
-            </Button>
-          </div>
-        )}
-        <div className="st-toolbar__grp" role="group" aria-label="Your mark">
-          {MARKS.map((m) => (
-            <Button
-              key={m.value}
-              size="small"
-              className={cx("st-mark", `st-mark--${m.value}`)}
-              aria-pressed={draft.mark === m.value}
-              disabled={!!locked}
-              disabledReason={locked}
-              onClick={() => update(a, (d) => ({ ...d, mark: d.mark === m.value ? null : m.value }))}
-            >
-              {m.label}
-            </Button>
-          ))}
-        </div>
-      </div>
-
-      {effectLine && <p className={cx("small", effectLine.needsYou ? "st-hint" : "muted")}>{effectLine.text}</p>}
       {draft.pins.length > 0 && <PinList artifact={a} draft={draft} update={update} locked={locked} />}
-      <p className="micro muted">Artifacts stay on this computer: the studio shows the files the designer wrote, whichever provider wrote them.</p>
     </div>
   );
 }
@@ -820,13 +849,13 @@ function PinList({ artifact: a, draft, update, locked }: { artifact: StudioArtif
 }
 
 /**
- * The lead's panel: its message for the round, its questions with the answers it suggests (a suggestion fills the
- * answer box, as on ORC-012's shaping panel), and a box to message it. What you write here is sent with your marks,
- * by Send to the lead, as one message in the conversation the header's Message the lead opens.
+ * The lead's panel: its message for the round, and its questions with the answers it suggests (a suggestion fills the
+ * answer box, as on ORC-012's shaping panel). Your answers go with your marks, by Send to the lead under the part, as
+ * one message in the conversation the header's Message the lead opens. The panel has no message box of its own
+ * (ORC-030 a-vision-two-boxes).
  */
-export function LeadPanel({ round, answers, onAnswer, message, onMessage }: { round: Round | undefined; answers: string[]; onAnswer: (i: number, text: string) => void; message: string; onMessage: (text: string) => void }) {
+export function LeadPanel({ round, answers, onAnswer }: { round: Round | undefined; answers: string[]; onAnswer: (i: number, text: string) => void }) {
   const { state, service, disabled } = useStore();
-  const leadDrawer = useLeadContext();
   const lead = roundLead(round);
   const run = M.activeLeadRun(state);
   return (
@@ -842,7 +871,7 @@ export function LeadPanel({ round, answers, onAnswer, message, onMessage }: { ro
       {lead?.message ? (
         <p className="st-leadmsg">{lead.message}</p>
       ) : (
-        <p className="small muted">{round ? `The lead has written nothing for round ${round.n}.` : "No round is open."} Write to it below; it answers in the conversation.</p>
+        <p className="small muted">{round ? `The lead has written nothing for round ${round.n}.` : "No round is open."}</p>
       )}
       {run && (
         <p className="small muted st-toolbar__grp" role="status">
@@ -874,14 +903,7 @@ export function LeadPanel({ round, answers, onAnswer, message, onMessage }: { ro
           ))}
         </ol>
       )}
-      <Field label="Message the lead" hint="Sent with your answers and marks, into the same conversation as Message the lead at the top.">
-        <Textarea rows={3} value={message} onChange={(e) => onMessage(e.target.value)} placeholder="Anything else for the lead…" />
-      </Field>
-      <div>
-        <Button size="small" variant="quiet" onClick={() => leadDrawer.openLead()}>
-          Open the conversation
-        </Button>
-      </div>
+      {lead && lead.questions.length > 0 && <p className="micro muted">Your answers go with Send to the lead, with your marks.</p>}
     </section>
   );
 }

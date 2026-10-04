@@ -39,7 +39,7 @@
     {
       "id": "E1",
       "purpose": "Capture evidence of the built screens and CLIs",
-      "$comment": "Run by the service in the recorder's container: the screenshots and recordings the coder's capture plan names, of the checked commit. Skipped when the task's spec cites no screen, terminal demo or TUI of the blueprint.",
+      "$comment": "Run by the service in the project's environment: the screenshots and recordings the coder's capture plan names, of the checked commit. Recorded as not set up without the preview setting or an environment. Skipped when the task's spec cites no screen, terminal demo or TUI of the blueprint.",
       "role": "evidence",
       "dependsOn": ["S2", "C1"],
       "inputs": [{ "step": "S2", "output": "change" }],

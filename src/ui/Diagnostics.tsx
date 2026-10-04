@@ -3,7 +3,7 @@
 // where the service runs. Settings renders them as one card, "Usage and service".
 
 import { useState } from "react";
-import type { SweepReport } from "../api";
+import type { ServiceInfo, SweepReport } from "../api";
 import * as M from "../domain/model";
 import { PROVIDERS, isProvider, type Attempt, type ProviderId } from "../domain/types";
 import { fmtTime, involvementOf } from "./common";
@@ -223,11 +223,17 @@ export function ServiceCard() {
           {state.project.autonomy.enabled
             ? `the lead plans every ${state.project.autonomy.planningIntervalMinutes} min${state.project.autonomy.operatingHours ? ` between ${state.project.autonomy.operatingHours.start} and ${state.project.autonomy.operatingHours.end}` : ""}, while this service runs`
             : "the lead runs only when you message it"}
-          . Nothing runs while this service is stopped or the computer sleeps.
+          . {sleepLine(service.keepAwake)}
         </dd>
       </dl>
     </section>
   );
+}
+
+/** What sleep does to the work: on a Mac the service keeps awake while agents run, nothing; elsewhere, everything stops. */
+function sleepLine(keepAwake: ServiceInfo["keepAwake"]): string {
+  if (keepAwake && !keepAwake.failed) return "Nothing runs while this service is stopped. This Mac stays awake while agents run.";
+  return `Nothing runs while this service is stopped or the computer sleeps${keepAwake?.failed ? `: ${keepAwake.failed}` : ""}.`;
 }
 
 const TRIGGER: Record<SweepReport["trigger"], string> = { start: "at start", timer: "on the timer", owner: "by you" };

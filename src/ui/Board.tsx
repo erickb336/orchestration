@@ -1,6 +1,6 @@
 // The Tasks page: every task once, as a list or a board. "Needs you" comes first, in the
 // list and on the board; each card says in one plain line what is happening; a finished task is Done with at most
-// one result chip. New task starts with "Describe it to the lead"; writing the spec yourself is one click away.
+// one result chip. In the list, Done is one line with its count that opens on click (ORC-030 a-tasks-done). New task starts with "Describe it to the lead"; writing the spec yourself is one click away.
 
 import { useEffect, useMemo, useState } from "react";
 import * as M from "../domain/model";
@@ -8,7 +8,7 @@ import { effectiveDefault } from "../domain/flows";
 import type { State, Task } from "../domain/types";
 import { ProviderMark } from "./common";
 import { FlowPicker } from "./FlowPicker";
-import { Actions, Button, ButtonLink, Card, Checkbox, Chip, EmptyState, Field, Input, SegmentedControl, Select, SimulatedChip, StatePill, Textarea } from "./kit";
+import { Actions, Button, ButtonLink, Card, Checkbox, Chip, Disclosure, EmptyState, Field, Input, SegmentedControl, Select, SimulatedChip, StatePill, Textarea } from "./kit";
 import { useLeadContext } from "./LeadDrawer";
 import { OTHER_AREA, areaOf, serviceOwned } from "./progress";
 import { ChangeOrderBanners } from "./changeOrder/ChangeOrder";
@@ -291,6 +291,25 @@ export function Board() {
           shownGroups.map((g) => {
             const items = inGroup(g);
             if (!items.length) return null;
+            // Done is one line with its count, and opens on click (Results lists what landed); the Done filter opens it.
+            if (g === "done")
+              return (
+                <section className="tl-group tl-group--done" key={g} aria-labelledby={`g-${g}`}>
+                  <Disclosure
+                    label={
+                      <h2 id={`g-${g}`} className="tl-group__title">
+                        {GROUP_LABEL[g]}
+                      </h2>
+                    }
+                    count={items.length}
+                    defaultOpen={status === "done"}
+                  >
+                    {items.map((t) => (
+                      <TaskCard key={t.id} state={state} task={t} nowMs={now} />
+                    ))}
+                  </Disclosure>
+                </section>
+              );
             return (
               <section className={`tl-group${g === "needs-you" ? " tl-group--you" : ""}`} key={g} aria-labelledby={`g-${g}`}>
                 <div className="tl-group__head">

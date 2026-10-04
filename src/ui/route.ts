@@ -1,7 +1,7 @@
 // The hash routes, as pure functions so they can be tested without React. `#/results` is the Results page
 // (the tab used to be called Review); `#/review` still opens it. `#/vision` is Vision, the studio, in the main
 // navigation (ORC-029 r12). A
-// query after the page name (`#/overview?history=1`, `#/tasks?area=Maps`) never changes which page opens; the page
+// query after the page name (`#/vision?history=1`, `#/tasks?area=Maps`) never changes which page opens; the page
 // reads it.
 
 export type Route = { page: "overview" | "tasks" | "review" | "activity" | "settings" | "kit" | "vision" | "lock-in" | "preflight" | "reality" } | { page: "task"; id: string } | { page: "change-order"; rev: number };
@@ -38,8 +38,8 @@ export function parseRoute(hash: string): Route {
   return { page: "overview" };
 }
 
-/** The Focus banner's History link opens the Overview with the vision history shown: `#/overview?history=1`. */
-export const HISTORY_HASH = "#/overview?history=1";
+/** A link to the vision history opens Vision with the history shown: `#/vision?history=1` (the vision text lives in Vision, ORC-030 C1). */
+export const HISTORY_HASH = "#/vision?history=1";
 
 export function historyRequested(hash: string): boolean {
   const q = hash.indexOf("?");

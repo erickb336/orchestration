@@ -447,8 +447,8 @@ describe("sub-agents (ORC-031)", () => {
     expect(recvOf(stubLog, "turn/interrupt").map((m) => m.params)).toEqual([{ threadId: "thr_stub_1", turnId: "turn_stub_1" }]);
   });
 
-  it("publishes no tracking until real runs prove it", () => {
-    expect(new CodexAdapter({ codexPath: STUB }).capabilities.childAgentTracking).toBe("unsupported");
+  it("publishes tracking on the real runs that proved pause, cost and safety; its cap holds at once (the owner's choice)", () => {
+    expect(new CodexAdapter({ codexPath: STUB }).capabilities.childAgentTracking).toBe("supported");
   });
 });
 
@@ -676,7 +676,7 @@ describe("CodexAdapter health and models", () => {
       interrupt: "supported",
       resume: "unverified",
       usageReporting: "supported",
-      childAgentTracking: "unsupported",
+      childAgentTracking: "supported",
     });
   });
 });

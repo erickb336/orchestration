@@ -1,4 +1,4 @@
-// Settings › Project › Budgets and Devices (ORC-029 pass 6), as pure functions: the fields from the project, the
+// Settings › Budgets and Settings › Project › Devices (ORC-029 pass 6), as pure functions: the fields from the project, the
 // owner's commands they make (setBudgets, setDevices), the domain's refusals in its own words, and what the cards say
 // about the spend and the budget stop. Continue past the budget is its own command (continuePastBudget) and acts at
 // once.

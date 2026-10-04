@@ -27,6 +27,11 @@ export interface ServiceInfo {
   prototypePort?: number;
   /** Housekeeping of what runs leave behind (server/housekeeping.ts), when this service runs it. */
   housekeeping?: HousekeepingInfo;
+  /**
+   * Present where this service keeps the computer awake while runs are active (macOS, real runtime; server/keepAwake.ts):
+   * whether it holds the idle-sleep assertion now, and why it could not, if it could not.
+   */
+  keepAwake?: { holding: boolean; failed?: string };
 }
 
 /** Housekeeping: its last sweep, and whether one runs now. */
@@ -153,8 +158,11 @@ export interface CheckSuggestions {
  */
 export interface EnvironmentFound {
   ref: string;
-  /** sha256: the digest the owner confirms (Settings › Project › Environment); absent when the dev container is refused. */
-  devcontainer?: { file: string; image?: string; dockerfile?: string; context?: string; refused?: string; sha256?: string };
+  /**
+   * sha256: the digest the owner confirms (Settings › How your project runs); absent when the dev container is refused.
+   * bases: for a Dockerfile build, the images its FROM lines name, for the owner to read before confirming.
+   */
+  devcontainer?: { file: string; image?: string; dockerfile?: string; context?: string; bases?: string[]; refused?: string; sha256?: string };
   proposal?: { label: string; image: string; prepare: string[][]; because: string };
   /** Why nothing could be read (the sample project, the simulated runtime). */
   reason?: string;

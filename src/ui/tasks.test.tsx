@@ -68,8 +68,8 @@ describe("the groups", () => {
     expect(GROUPS.slice(1)).toEqual(M.BOARD_COLUMNS);
     const demo = buildDemo(T0);
     const groups = Object.fromEntries(demo.tasks.map((t) => [t.id, groupOf(demo, t, T0)]));
-    // The finding that waits for you and the two-option task, wherever their columns are.
-    expect(Object.keys(groups).filter((id) => groups[id] === "needs-you")).toEqual(["WT-007", "WT-004.3"]);
+    // The finding that waits for you, the two-option task, and the change order's new task, wherever their columns are.
+    expect(Object.keys(groups).filter((id) => groups[id] === "needs-you")).toEqual(["WT-007", "WT-004.3", "T-019"]);
     expect(groups["WT-001"]).toBe("done");
     expect(groups["WT-009"]).toBe("paused");
     expect(groups["WT-010"]).toBe("deferred");
@@ -183,6 +183,15 @@ describe("the Tasks page", () => {
     expect(markup).toContain('<option value="needs-you">Needs you</option>');
     for (const gone of ["since your last visit", "Mark all seen", "New decision", ">Role<", ">Provider<", "Changed since last visit", "badge-new"]) expect(markup).not.toContain(gone);
     for (const kept of [">Area<", ">Status<", ">Sort<"]) expect(markup).toContain(kept);
+  });
+
+  it("Done is one line with its count that opens on click; the Done filter opens it (ORC-030 a-tasks-done)", () => {
+    const done = demo.tasks.filter((t) => t.lifecycle === "done").length;
+    expect(done).toBeGreaterThan(1);
+    const section = markup.slice(markup.indexOf('class="tl-group tl-group--done"'));
+    expect(section).toMatch(new RegExp(`^[^]*?<details class="k-disc"><summary class="k-disc__summary"><h2 id="g-done" class="tl-group__title">Done</h2><span class="k-count">${done}</span></summary>`));
+    // Closed: the cards are in the page but behind the line.
+    expect(section.slice(0, section.indexOf("</details>"))).toContain('class="tl-card"');
   });
 
   it("shows one plain line per card and no raw event text", () => {

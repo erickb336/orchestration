@@ -174,13 +174,26 @@ const shots = [];
 for (const width of WIDTHS) {
   log(`\nAt ${width} wide:`);
   const ctx = await browser.newContext({ viewport: { width, height: width < 600 ? 812 : 900 }, deviceScaleFactor: 1 });
+  // The demo's first-run tour (on Home) is not part of this pass.
+  await ctx.addInitScript(() => {
+    try {
+      if (window === window.top) localStorage.setItem("orc.tour.v1", "done");
+    } catch {
+      // A sandboxed frame has no storage.
+    }
+  });
   const p = await ctx.newPage();
   const errors = [];
   p.on("console", (m) => m.type() === "error" && errors.push(m.text()));
   p.on("pageerror", (e) => errors.push(`page error: ${e.message}`));
   ctx.on("requestfailed", (r) => errors.push(`request failed: ${r.url()} (${r.failure()?.errorText})`));
-  await p.goto(`${origin}/#/results/design`);
+  // ORC-030 a-results-order: the header's Results opens Design and reality, the first tab once anything is locked in.
+  await p.goto(`${origin}/#/overview`);
+  await p.getByRole("navigation", { name: "Main" }).getByRole("link", { name: /^Results/ }).click();
   await p.waitForSelector(".st-reality__list");
+  const tabs = await p.getByRole("tab").allInnerTexts();
+  if (tabs[0] !== "Design and reality" || !p.url().endsWith("#/results/design")) fail(`${width}: Results opens ${p.url().split("#")[1]} with the tabs ${JSON.stringify(tabs)}`);
+  else log(`  Results opens Design and reality, its first tab (${tabs.join(", ")})`);
 
   const settle = async () => {
     // Every image in the page has loaded (or failed), and the design frames have loaded.

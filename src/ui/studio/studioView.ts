@@ -473,7 +473,7 @@ export function answerBlocker(x: Answer): string | undefined {
     if (empty >= 0) return `Write a comment for pin ${empty + 1} on ${artifact.title}, or remove it.`;
   }
   const text = answerMessage(x);
-  if (!text) return "Mark, pick or pin something, answer a question, or write to the lead first.";
+  if (!text) return "Mark, pick or pin something, write a note, or answer a question first.";
   if (text.length > MAX_MESSAGE) return `Together this is over ${MAX_MESSAGE} characters; shorten your message or your answers.`;
   return undefined;
 }

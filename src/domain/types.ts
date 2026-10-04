@@ -393,8 +393,9 @@ export interface Project {
   /** The checks sandbox as last probed. Observed; written only by the service. */
   checksHealth?: ChecksHealth;
   /**
-   * How the service runs the built product to capture evidence of it (ORC-029 pass 5): the install, the preview and
-   * its port, the CLI's entry. Optional; absent, capture runs record "not set up". Only the owner's `setPreview` writes it.
+   * How the service runs the built product to capture evidence of it (ORC-029 pass 5), in the project's environment:
+   * the preview and its port, the CLI's entry. Optional; absent, or without an environment, capture runs record "not
+   * set up". Only the owner's `setPreview` writes it.
    */
   preview?: PreviewSetting;
   /**
@@ -1070,9 +1071,35 @@ export interface Step extends StepDef {
    * breakdown's children are not created. Absent on steps whose output is not reviewed.
    */
   peReview?: PeReviewState;
+  /**
+   * The changes a writer's run had made when it was paused (ORC-030 C4). The step's next run starts from them. Cleared
+   * when the step finishes, is rerun or is cancelled; set aside at dispatch when the spec, the step's inputs or the
+   * flow changed since the pause.
+   */
+  pausedWork?: PausedWork;
 }
 
-export type SelectionSource = "step" | "task-role" | "independence" | "project-role" | "project-default" | "service";
+/**
+ * What a paused writer's run had changed, recorded once the runtime confirmed the stop (ORC-030 C4). The change is
+ * `base` → `commit`; the commit is on the paused run's own branch and holds its files as the run left them, finished
+ * or not.
+ */
+export interface PausedWork {
+  /** The paused run. */
+  attemptId: string;
+  /** The commit that holds the run's files ("sim-…" in the simulated runtime, where no file changes). */
+  commit: string;
+  /** The commit the paused run started from. */
+  base: string;
+  /** The files the changes touch (the first 20), and how many in all. */
+  files: string[];
+  total: number;
+  at: string;
+  /** The simulated runtime ran it: no file was changed or recorded. */
+  simulated?: true;
+}
+
+export type SelectionSource ="step" | "task-role" | "independence" | "project-role" | "project-default" | "service";
 
 /** Immutable configuration captured at dispatch. Never rewritten. */
 export interface RunSnapshot {
@@ -1117,6 +1144,11 @@ export interface RunSnapshot {
    * `allowSubagents`.
    */
   allowSubagents?: SubagentAllowance;
+  /**
+   * The paused run's changes this run started from (ORC-030 C4): the service applied them, uncommitted, to its
+   * workspace before it started, so its change still compares to the step's base. Absent: it started from the base.
+   */
+  startedFrom?: PausedWork;
 }
 
 type AttemptOutcome =
@@ -1186,9 +1218,13 @@ export const MAX_SUBAGENT_ASK = 300;
 /** The subagents a run's record lists; past them it keeps counting, and their cost is unknown. */
 export const MAX_SUBAGENTS_LISTED = 100;
 
-/** What a run may start: at most `cap` subagents. */
+/**
+ * What a run may start: at most `cap` subagents in the run, or, with `atOnce`, at most `cap` running at the same time
+ * (Codex limits its sub-agents only at once, so a run may start more over time; the owner accepted that, ORC-030 r6).
+ */
 export interface SubagentAllowance {
   cap: number;
+  atOnce?: true;
 }
 
 /** How a subagent ended. "refused": the parent asked for one past the run's cap and the runtime refused it, so it never ran. */

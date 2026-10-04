@@ -5,10 +5,6 @@ import { PREF_INVOLVEMENT_CHOSEN, PREF_ONBOARDING_DISMISSED, usePref } from "./c
 import { Button, Chip } from "./kit";
 import { useLeadContext } from "./LeadDrawer";
 
-function scrollToHeading(id: string) {
-  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
-}
-
 interface Step {
   id: string;
   label: string;
@@ -77,11 +73,8 @@ export function Onboarding() {
       id: "vision",
       label: shaping ? "Draft the vision with the lead, then accept it" : "Write your vision",
       done: vision.text.trim().length > 0,
-      action: (
-        <Button size="small" variant="quiet" onClick={() => scrollToHeading(shaping ? "shape-h" : "vision-history")}>
-          Go to vision
-        </Button>
-      ),
+      // The vision text lives in Vision (ORC-030 C1).
+      action: <a href="#/vision">Open Vision</a>,
     },
     {
       id: "first",

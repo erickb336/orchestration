@@ -12,6 +12,7 @@ import { useStore } from "../store";
 import { OverruleForm } from "../settings/OverrulesCard";
 import { OVERRULE_OTHERWISE } from "../settings/overrules";
 import { needsYouCount, needsYouItems, type NeedsYouItem } from "./needsYouItems";
+import { specWrittenByYou } from "./Purpose";
 
 export const NEEDS_YOU_ID = "needs-you";
 
@@ -134,7 +135,7 @@ export function OptionChoice({ task }: { task: Task }) {
                 {o.id === c.recommendedOptionId && (
                   <>
                     {" "}
-                    <Chip>recommended by the lead</Chip>
+                    <Chip>{specWrittenByYou(task) ? "your spec" : "recommended by the lead"}</Chip>
                   </>
                 )}
                 {o.id === c.selectedOptionId && (

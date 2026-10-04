@@ -69,6 +69,18 @@ export function setSubagentProviders(state: State, providers: ProviderId[], now:
   return s;
 }
 
+/**
+ * How each provider's cap holds (ORC-031): Claude's hook counts helpers per run; Codex limits them only at once
+ * (`agents.max_threads`), so a Codex run may start more over time. The owner allowed Codex helpers on those terms
+ * (ORC-030 r6, 2026-10-03), and the setting says so beside it.
+ */
+export const HELPER_CAP: Record<ProviderId, "per run" | "at once"> = { claude: "per run", codex: "at once" };
+
+/** "at most 2 per run on Claude, at most 2 at once on Codex": the cap on the providers that track helpers. */
+export function capWords(cap: number, providers: readonly ProviderId[]): string {
+  return providers.map((p) => `at most ${cap} ${HELPER_CAP[p]} on ${providerLabel(p)}`).join(", ");
+}
+
 /** Whether any provider tracks subagents yet: without one, the setting cannot be turned on. */
 export const canAllowSubagents = (s: State) => s.project.subagentProviders.length > 0;
 
@@ -90,17 +102,20 @@ export function setResearchHelpers(state: State, key: string, cap: number | null
   if (cap === null) delete s.project.researchHelpers[key];
   else s.project.researchHelpers[key] = { cap };
   const on = s.project.subagentProviders.map(providerLabel).join(" and ");
-  event(s, now, "user", "config", cap === null ? `${step.label}: helpers off` : `${step.label}: helpers on, at most ${cap} per run (${on} only)`);
+  event(s, now, "user", "config", cap === null ? `${step.label}: helpers off` : `${step.label}: helpers on, ${capWords(cap, s.project.subagentProviders)} (${on} only)`);
   return s;
 }
 
 // ---------- what a run may start ----------
 
-/** What a run may start, from the setting's key and the run's provider: the cap when the owner allows it there, else none. */
+/**
+ * What a run may start, from the setting's key and the run's provider: the cap when the owner allows it there, else
+ * none. On a provider whose cap holds only at once (HELPER_CAP), the allowance says so.
+ */
 function allowance(s: State, key: string | undefined, provider: Runner): SubagentAllowance | undefined {
   if (!key || !isProvider(provider) || !s.project.subagentProviders.includes(provider)) return undefined;
   const set = s.project.researchHelpers[key];
-  return set ? { cap: set.cap } : undefined;
+  return set ? { cap: set.cap, ...(HELPER_CAP[provider] === "at once" ? { atOnce: true as const } : {}) } : undefined;
 }
 
 /** What a task step's run may start, resolved at dispatch and recorded in its snapshot. */
@@ -177,7 +192,8 @@ export function reportSubagent(state: State, runId: string, report: SubagentRepo
     delete rec.seenAt;
     event(s, now, "runtime", "blocked", `${runName(run)} started a helper agent where none is allowed`, taskId);
   }
-  else if (rec.count > allowed.cap) event(s, now, "runtime", "blocked", `${runName(run)} started ${rec.count} helper agents, over its cap of ${allowed.cap}`, taskId);
+  // A cap that holds at once is passed only by more running together; a per-run cap, by more in the run.
+  else if (allowed.atOnce ? running(rec) > allowed.cap : rec.count > allowed.cap) event(s, now, "runtime", "blocked", allowed.atOnce ? `${runName(run)} ran ${running(rec)} helper agents at once, over its cap of ${allowed.cap} at once` : `${runName(run)} started ${rec.count} helper agents, over its cap of ${allowed.cap}`, taskId);
   return s;
 }
 

@@ -98,11 +98,6 @@
 .k-pill--neutral { color: var(--muted); }
 .k-pill--pulse .k-pill__dot { animation: k-pulse 1.4s ease-in-out infinite; }
 @keyframes k-pulse { 50% { opacity: 0.25; } }
-/* A pill that opens the place it describes: the words in ink, the state in the dot and the border. */
-.k-pill--link { text-decoration: none; padding: 0.15rem 0.7rem 0.15rem 0.55rem; transition: background-color var(--ease); }
-.k-pill--link .k-pill__text { color: var(--text); white-space: normal; }
-.k-pill--link:hover { background: color-mix(in srgb, currentColor 16%, var(--surface)); }
-.k-pill--link:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 /* ---------- Count badge (cards, tabs, disclosures) ---------- */
 .k-count {
@@ -227,6 +222,15 @@ textarea.k-control { min-height: 4.5rem; resize: vertical; }
 .k-check__text { min-width: 0; }
 .k-check__hint { display: block; font-size: var(--fs-small); color: var(--muted); }
 .k-check:has(.k-check__box:disabled) { opacity: 0.5; cursor: not-allowed; }
+
+/* ---------- Meter: a figure as a bar (used, then a hatched "more") ---------- */
+.k-meter { display: flex; width: 100%; height: 6px; border-radius: 3px; overflow: hidden; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--border); }
+.k-meter__used { flex: none; height: 100%; background: currentColor; }
+.k-meter__used--work, .k-meter__used--neutral { color: var(--st-work); }
+.k-meter__used--you { color: var(--st-you); }
+.k-meter__used--done { color: var(--st-done); }
+.k-meter__used--fail { color: var(--st-fail); }
+.k-meter__more { flex: none; height: 100%; background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--st-work) 45%, transparent) 0 3px, transparent 3px 6px); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--st-work) 35%, transparent); }
 
 /* ---------- Disclosure ---------- */
 .k-disc { margin: 0; min-width: 0; font-size: var(--fs-meta); }

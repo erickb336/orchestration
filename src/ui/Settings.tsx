@@ -1,15 +1,17 @@
-// Settings: five sections with a side menu, so no section is a long scroll.
-//   Working style · Project · Agents · Quality · Advanced
+// Settings: seven sections with a side menu, so no section is a long scroll.
+//   Working style · Project · Budgets · How your project runs · Agents · Quality · Advanced
 // Each section has its address (#/settings/<section>, #/settings opens the first) and its own draft with one Save.
-// All five stay mounted while you switch, so an unsaved change in one survives a visit to another; the menu
+// All seven stay mounted while you switch, so an unsaved change in one survives a visit to another; the menu
 // marks a section that has one, and the browser asks before the page is closed with one.
 
 import { useCallback, useEffect, useState } from "react";
 import { SideNav, SideNavLayout } from "./kit";
 import { AdvancedSection } from "./settings/Advanced";
 import { AgentsSection } from "./settings/Agents";
+import { BudgetsSection } from "./settings/BudgetsSection";
 import { ProjectSection } from "./settings/Project";
 import { QualitySection } from "./settings/Quality";
+import { RunsSection } from "./settings/Runs";
 import { WorkingStyleSection } from "./settings/WorkingStyle";
 import { SECTIONS, parseSettingsHash, settingsHref, type SectionId } from "./settings/sections";
 import "./settings/settings.css";
@@ -72,6 +74,8 @@ export function Settings() {
       >
         <WorkingStyleSection current={on("working-style")} onDirty={onDirty} />
         <ProjectSection current={on("project")} onDirty={onDirty} />
+        <BudgetsSection current={on("budgets")} onDirty={onDirty} />
+        <RunsSection current={on("how-it-runs")} onDirty={onDirty} />
         <AgentsSection current={on("agents")} onDirty={onDirty} />
         <QualitySection current={on("quality")} onDirty={onDirty} />
         <AdvancedSection current={on("advanced")} onDirty={onDirty} />

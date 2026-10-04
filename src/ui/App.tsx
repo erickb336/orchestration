@@ -1,7 +1,8 @@
-// The shell: the demo bar with its Simulation menu, the header with Home · Vision · Tasks · Results · Settings, the
-// two places (Vision and the Factory, each a link that says where it stands; ORC-029 pass 5), "Message the lead"
-// (the one primary action) and the Project menu that pauses and resumes. The lead drawer opens from the header on every page. The kit's ConfirmProvider
-// and ToastRegion are mounted once here, so every screen can confirm in page and show one toast.
+// The shell: the demo bar with its Simulation menu, and the header: the project's menu (named by the project; it
+// pauses and resumes), Home · Vision · Tasks · Results · Settings with the two places' states in their items (Home says
+// where the factory stands, Vision whether a draft waits; ORC-030 a-header-phone), and "Message the lead" (the one
+// primary action). One row on a desktop, two on a phone. The lead drawer opens from the header on every page. The
+// kit's ConfirmProvider and ToastRegion are mounted once here, so every screen can confirm in page and show one toast.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as M from "../domain/model";
@@ -18,19 +19,19 @@ import { LeadDrawer, LeadDrawerContext, type LeadContext } from "./LeadDrawer";
 import { messageStatusText } from "./notes";
 import { useBrowserNotifications } from "./notifications";
 import { agentsStopping, agentsWorking, liveIndicatorText, prsNeedingYou, unreadLeadReplies } from "./progress";
-import { factoryPlaceWords, visionPlaceWords } from "./placesView";
+import { factoryPlaceState, visionPlaceState, type PlaceState } from "./placesView";
+import { resultsHref } from "./resultsView";
 import { parseRoute, tabOf } from "./route";
 import { ShapingBanner } from "./Shaping";
 import { SIM_MENU_BUTTON_ID, TourButton, useFirstRunTour } from "./Tour";
 import { Gallery } from "./kit/Gallery";
 import { ChangeOrderPage } from "./changeOrder/ChangeOrder";
-import { factoryPlaceLink } from "./changeOrder/changeOrderView";
 import { PreflightPage } from "./preflight/Preflight";
 import { LockInPage } from "./studio/LockIn";
 import { Reality } from "./studio/Reality";
 import { Studio } from "./studio/Studio";
 import { waitingForYourMark } from "./studio/studioView";
-import { Banner, Button, ConfirmProvider, StatePill, ToastRegion, placeInWindow, useConfirm } from "./kit";
+import { Banner, Button, ConfirmProvider, ToastRegion, placeInWindow, useConfirm } from "./kit";
 import { cx } from "./kit/cx";
 
 /**
@@ -139,26 +140,7 @@ function Shell() {
     <LeadDrawerContext.Provider value={leadApi}>
       <SimBanner />
       <ConnectionBanner />
-      <header className="top">
-        <div className="brand">
-          Orchestrator
-          <ProjectName />
-        </div>
-        <nav className="tabs" aria-label="Main">
-          {TABS.map((t) => (
-            <a key={t.page} href={t.href} aria-current={tab === t.page ? "page" : undefined} data-tour={"tour" in t ? t.tour : undefined}>
-              {t.label}
-              {t.page === "review" && <ResultsBadge />}
-              {t.page === "vision" && <VisionBadge />}
-            </a>
-          ))}
-        </nav>
-        <Places />
-        <div className="right">
-          <LeadButton open={leadOpen} onClick={() => (leadOpen ? closeLead() : openLead())} />
-          <ProjectMenu />
-        </div>
-      </header>
+      <Header tab={tab} leadOpen={leadOpen} onLead={() => (leadOpen ? closeLead() : openLead())} />
       {/* There is no stage chip. While shaping, the banner says so on every page; Home shows the shaping panel, the board its own banner, and the studio is Vision itself. */}
       {route.page !== "tasks" && route.page !== "overview" && route.page !== "vision" && route.page !== "lock-in" && route.page !== "preflight" && (
         <div className="shell-banner">
@@ -186,10 +168,43 @@ function Shell() {
 }
 
 /**
+ * The header. One row on a desktop: the brand, the project's menu, the places, Message the lead. Two on a phone: the
+ * project's menu and Message the lead, then the places, each with its state under its name (ORC-030 a-header-phone).
+ * There is no row of pills: Home says where the factory stands, Vision whether a draft waits.
+ */
+export function Header({ tab, leadOpen, onLead }: { tab: string; leadOpen: boolean; onLead: () => void }) {
+  const { state } = useStore();
+  return (
+    <header className="top">
+      <div className="brand">
+        <span className="brand__name">Orchestrator</span>
+        <ProjectMenu />
+      </div>
+      <nav className="tabs" aria-label="Main">
+        {TABS.map((t) => (
+          <a key={t.page} href={t.page === "review" ? resultsHref(state) : t.href} aria-current={tab === t.page ? "page" : undefined} data-tour={"tour" in t ? t.tour : undefined}>
+            <span className="tab__name">
+              {t.label}
+              {t.page === "review" && <ResultsBadge />}
+              {t.page === "vision" && <VisionBadge />}
+            </span>
+            {t.page === "overview" && <FactoryState />}
+            {t.page === "vision" && <VisionState />}
+          </a>
+        ))}
+      </nav>
+      <div className="right">
+        <LeadButton open={leadOpen} onClick={onLead} />
+      </div>
+    </header>
+  );
+}
+
+/**
  * A small menu on a button: a native details/summary, so it is keyboard-operable as is. It closes on a click
  * outside, on Escape (focus returns to the button), and when an item calls `close`. Its list stays inside the window.
  */
-function Menu({ label, id, className, children }: { label: string; id?: string; className?: string; children: (close: () => void) => ReactNode }) {
+function Menu({ label, name = label, id, className, title, children }: { label: string; name?: string; id?: string; className?: string; title?: string; children: (close: () => void) => ReactNode }) {
   const ref = useRef<HTMLDetailsElement>(null);
   const pop = useRef<HTMLDivElement>(null);
   const close = useCallback(() => {
@@ -225,11 +240,11 @@ function Menu({ label, id, className, children }: { label: string; id?: string; 
   }, []);
   return (
     <details ref={ref} className={cx("menu", className)}>
-      <summary id={id} className="menu__btn">
-        {label}
+      <summary id={id} className="menu__btn" title={title}>
+        <span className="menu__label">{label}</span>
         <span className="menu__caret" aria-hidden="true" />
       </summary>
-      <div ref={pop} className="menu__pop" role="group" aria-label={label}>
+      <div ref={pop} className="menu__pop" role="group" aria-label={name}>
         {children(close)}
       </div>
     </details>
@@ -293,11 +308,6 @@ export function VisionBadge() {
   );
 }
 
-function ProjectName() {
-  const { state } = useStore();
-  return <small>{state.project.name}</small>;
-}
-
 /** The demo bar is one line, and the Simulation menu holds the clock, the tour and the reset. */
 export function SimBanner() {
   const { state, service, setSim, step, reset, disabled } = useStore();
@@ -356,28 +366,40 @@ export function SimBanner() {
 }
 
 /**
- * The two places, side by side on every screen (ORC-029 pass 5, screen 1): Vision says whether a draft waits for your
- * Lock in, and the Factory whether it runs and how many agents work. Each is a link: Vision opens the studio, the
- * Factory opens the tasks, or the change order while one is open. The Factory's title keeps the live count of runs
- * working and stopping.
+ * A place's state in its menu item (ORC-030 a-header-phone): a dot in the state's colour (pulsing while agents work,
+ * two bars while paused) and the words; on a desktop after the item's name, on a phone under it, in fewer words.
  */
-export function Places() {
+export function PlaceStateText({ s }: { s: PlaceState }) {
+  return (
+    <span className={cx("tab-state", `tab-state--${s.tone}`, s.pulse && "tab-state--pulse")} title={s.title}>
+      <span className="tab-state__sep" aria-hidden="true">
+        ·
+      </span>
+      {s.paused ? (
+        <svg className="tab-state__pause" viewBox="0 0 8 9" aria-hidden="true" focusable="false">
+          <rect x="0.5" y="0.5" width="2.4" height="8" rx="0.6" fill="currentColor" />
+          <rect x="5.1" y="0.5" width="2.4" height="8" rx="0.6" fill="currentColor" />
+        </svg>
+      ) : (
+        <span className="tab-state__dot" aria-hidden="true" />
+      )}
+      <span className={cx("tab-state__text", s.short && "tab-state__text--long")}>{s.text}</span>
+      {s.short && <span className="tab-state__text tab-state__text--short">{s.short}</span>}
+    </span>
+  );
+}
+
+/** The factory's state beside Home: running and how many agents work, pausing, paused, stopped at the budget, or not started. */
+export function FactoryState() {
+  const { state } = useStore();
+  return <PlaceStateText s={factoryPlaceState(factoryPlace(state), liveIndicatorText(agentsWorking(state), agentsStopping(state)))} />;
+}
+
+/** Vision's state beside it: a draft and what it holds, or when the version in force was locked in. */
+export function VisionState() {
   const { state } = useStore();
   const now = useNow();
-  const vision = visionPlaceWords(visionPlace(state), now);
-  const factory = factoryPlace(state);
-  const words = factoryPlaceWords(factory, liveIndicatorText(agentsWorking(state), agentsStopping(state)));
-  const link = factoryPlaceLink(state, words.title);
-  return (
-    <nav className="places" aria-label="Vision and the factory">
-      <StatePill tone={vision.tone} href="#/vision" title={vision.title}>
-        {vision.text}
-      </StatePill>
-      <StatePill tone={words.tone} pulse={words.tone === "work"} paused={factory.state === "paused"} href={link.href} title={link.title}>
-        {words.text}
-      </StatePill>
-    </nav>
-  );
+  return <PlaceStateText s={visionPlaceState(visionPlace(state), now)} />;
 }
 
 function ConnectionBanner() {
@@ -409,8 +431,10 @@ function ConnectionBanner() {
 }
 
 /**
- * Pause project and Resume project live in a small Project menu. The header still says truthfully when the
- * project is paused or pausing: "Paused" only once every run acknowledged the stop, "Pausing…" until then.
+ * The project's menu, named by the project (ORC-030 a-header-phone: the name and the menu are one control). Pause
+ * project and Resume project live here. The menu says truthfully when the project is paused or pausing, as Home's
+ * state does (one source, `projectPause`): "Project paused" only once every run acknowledged the stop, "Pausing…"
+ * until then. The change of state is announced.
  */
 export function ProjectMenu() {
   const { state, send, disabled } = useStore();
@@ -421,21 +445,13 @@ export function ProjectMenu() {
   const status = pause ? (stopping ? `Pausing… ${stopping} run${stopping === 1 ? "" : "s"} still stopping` : "Project paused") : undefined;
   return (
     <>
-      <span aria-live="polite">
-        {hold &&
-          (stopping ? (
-            <StatePill tone="work" pulse title={status}>
-              Pausing…
-            </StatePill>
-          ) : (
-            <StatePill tone="neutral" paused title={status}>
-              Paused
-            </StatePill>
-          ))}
+      <span className="sr-only" aria-live="polite">
+        {status}
       </span>
-      <Menu label="Project" className="project-menu">
+      <Menu label={state.project.name} name="Project" className="project-menu" title={`${state.project.name}: pause or resume the project`}>
         {(close) => (
           <>
+            <p className="menu__note menu__name">{state.project.name}</p>
             {status && <p className="menu__note">{status}</p>}
             {hold ? (
               <Button
@@ -462,7 +478,7 @@ export function ProjectMenu() {
                 Pause project
               </Button>
             )}
-            <p className="menu__note">{hold ? "Agents start again when you resume." : "Every run and the lead are asked to stop; nothing starts until you resume. The pause shows as Paused once the runtime acknowledges."}</p>
+            <p className="menu__note">{hold ? "Agents start again when you resume." : "Every run and the lead are asked to stop; nothing starts until you resume. Home says paused once every run has stopped."}</p>
           </>
         )}
       </Menu>

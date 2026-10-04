@@ -1,11 +1,17 @@
 /* The factory floor (ORC-029 pass 6): Home after the start. */
 
-/* The two budgets side by side, as equals; stacked when narrow (the kit's grid rule). */
-.ff-budgets { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-@media (max-width: 860px) { .ff-budgets { grid-template-columns: minmax(0, 1fr); } }
-.ff-budgets .k-card__body { display: grid; gap: var(--space-1); align-content: start; }
-.ff-figure { margin: 0; font-size: var(--fs-h3); font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.ff-stop { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); margin: var(--space-1) 0 0; }
+/* The Budgets card (ORC-030 a-home-budgets): two lines, each a figure (the summary of its reasons) and a bar. */
+.ff-budget-lines { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); }
+.ff-budget { min-width: 0; }
+.ff-budget__line > .k-disc__summary { display: flex; align-items: flex-start; color: var(--text); font-weight: 450; font-size: var(--fs-body); }
+.ff-budget__line > .k-disc__summary::before { margin-top: 0.55em; }
+/* The figure, then its bar under it; the bar keeps a readable length on a wide screen. */
+.ff-budget__sum { display: grid; gap: var(--space-1); flex: 1 1 auto; min-width: 0; }
+.ff-budget__sum .k-meter { max-width: 32rem; }
+.ff-budget__head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); min-width: 0; }
+.ff-budget__figure { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.ff-budget__figure b { font-weight: 600; }
+.ff-budget__reasons { margin: 0; padding-left: 1.1rem; display: grid; gap: var(--space-1); }
 
 /* One line per area: the area on the left, its tasks on a belt to the right; the area above its belt when narrow. */
 .ff-lines { list-style: none; margin: var(--space-2) 0 0; padding: 0; display: grid; gap: var(--space-3); }
@@ -34,6 +40,21 @@
 .ff-job--landed .ff-job__name { color: var(--muted); }
 .ff-job--more { color: var(--muted); }
 .ff-job__name { min-width: 0; overflow-wrap: anywhere; }
+
+/* On a phone each area is one row (ORC-030 a-home-phone): the area and its counts, "needs you", and a way in to its
+   tasks. The belt and its tasks stay on wider screens. After the belt's rules, so these win on a phone. */
+.ff-line__row { display: none; }
+@media (max-width: 600px) {
+  .ff-lines { gap: 0; }
+  .ff-line { display: block; border-top: 1px solid var(--border); }
+  .ff-line:first-child { border-top: 0; }
+  .ff-line__area, .ff-belt { display: none; }
+  .ff-line__row { display: flex; align-items: center; gap: var(--space-2); min-height: 2.75rem; padding: var(--space-2) 0; color: var(--text); text-decoration: none; }
+  .ff-line__row:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-control); }
+  .ff-line__row-text { display: grid; gap: 2px; flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  .ff-line__row .k-chip { flex: none; }
+  .ff-line__go { flex: none; width: 0.45rem; height: 0.45rem; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(-45deg); margin-right: var(--space-1); }
+}
 
 /* Decided by the PE: the reasons under the call. */
 .ff-reasons { margin-top: var(--space-1); }

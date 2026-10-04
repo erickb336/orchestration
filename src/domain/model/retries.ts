@@ -51,6 +51,8 @@ export function rerunInto(s: State, t: Task, st: Step, now: string, actor: "user
       }
     }
   }
+  // A paused run's changes were built on the old output too: the steps run again from the base (ORC-030 C4).
+  for (const d of t.steps) if (invalid.has(d.id)) delete d.pausedWork;
   // Downstream work in flight was built on the old upstream output: stop it, and bump its
   // step revision so a late completion is discarded rather than integrated.
   for (const a of activeAttempts(s, t.id)) {

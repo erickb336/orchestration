@@ -117,11 +117,11 @@ export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[]
   const items: NeedsYouEntry[] = [];
   // The costs with no full record count at an estimate (spend.ts), which the budgets show: only the stop waits for you.
   const stop = budgetStop(state);
-  if (stop) items.push({ kind: "open", key: "budget", what: stop.why, detail: budgetDetail(state, stop.spend.unknown), action: "Settings", href: "#/settings/project/budgets" });
+  if (stop) items.push({ kind: "open", key: "budget", what: stop.why, detail: budgetDetail(state, stop.spend.unknown), action: "Settings", href: "#/settings/budgets" });
   // A run's agent started the provider's own subagents where none is allowed (ORC-031): the owner knows, until they mark it as seen.
   for (const x of slippedThrough(state)) {
     const task = x.taskId ? state.tasks.find((t) => t.id === x.taskId) : undefined;
-    items.push({ kind: "helpers", key: `helpers-${x.runId}`, ...(task ? { task } : {}), runId: x.runId, what: HELPER_SLIPPED_THROUGH, detail: helperDetail(x.name, x.count), action: "Open", href: x.href });
+    items.push({ kind: "helpers", key: `helpers-${x.runId}`, ...(task ? { task } : {}), runId: x.runId, what: HELPER_SLIPPED_THROUGH, detail: helperDetail(state, x.runId, x.count), action: "Open", href: x.href });
   }
   // A change order the lead answered that still waits for you: its updates for your go-ahead ("ask me first"), or what
   // the lead left (pass 5). "Open" goes to the change order's screen (#/tasks/change-order/<rev>).
@@ -131,7 +131,7 @@ export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[]
   }
   // A dev container that changed (or appeared) at the trusted base is not used until the owner confirms it.
   const dc = unconfirmedDevcontainer(state);
-  if (dc) items.push({ kind: "open", key: "devcontainer", what: "the repository's dev container is not confirmed", detail: `${dc.file} at ${dc.sha.slice(0, 12)} chooses the image the checks and the evidence run in. It is not used until you confirm it (sha256 ${dc.sha256.slice(0, 12)}…): until then they use the image you confirmed, or run on this computer.`, action: "Settings", href: "#/settings/project/environment" });
+  if (dc) items.push({ kind: "open", key: "devcontainer", what: "the repository's dev container is not confirmed", detail: `${dc.file} at ${dc.sha.slice(0, 12)} chooses the image the checks and the evidence run in. It is not used until you confirm what it sets: until then they use the image you confirmed, or the checks run on this computer and no evidence is captured.`, action: "Settings", href: "#/settings/how-it-runs/environment" });
   const gh = state.project.github;
   if (gh?.problem && (state.project.prDelivery.enabled || D.openPrTasks(state).length > 0)) {
     items.push({ kind: "open", key: "gh", what: "GitHub delivery is stopped", detail: gh.problem.message, action: "Settings", href: "#/settings/project/delivery" });
@@ -179,23 +179,39 @@ function changeOrderDetail(state: State, co: ChangeOrder, waits: string): string
 /** The "what" of a run whose agent started subagents where none is allowed (ORC-031). */
 export const HELPER_SLIPPED_THROUGH = "A helper agent started where none is allowed";
 
-/** What happened and what the service did: "T-4 S1's run run-12 started 2 helper agents. …" */
-function helperDetail(name: string, count: number): string {
-  return `${name} started ${count === 1 ? "a helper agent" : `${count} helper agents`}. The provider should have switched them off. They are counted and shown on the run, and their cost counts in the budget. Mark them as seen once you know why.`;
+/** What happened and what the service did: "WT-002 S1 started 2 helper agents. …" (the run named in words, never by its id). */
+function helperDetail(s: State, runId: string, count: number): string {
+  const run = runWords(s, runId);
+  return `${run[0].toUpperCase()}${run.slice(1)} started ${count === 1 ? "a helper agent" : `${count} helper agents`}. The provider should have switched them off. They are counted and shown on the run, and their cost counts in the budget. Mark them as seen once you know why.`;
+}
+
+/** "10:42": the local time of day, as the owner reads a time on a screen. */
+export function clockTime(iso: string): string {
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
 /**
- * A run in the owner's words, never its internal id ("lead-1127"): a task run by its task and step ("WT-002 S1"), a
- * lead run, a Vision run by its kind; a helper by the run that started it. `UnknownCost.runId` names a helper as
- * "<run> helper <id>" or "<run> unlisted helper <n>".
+ * A run in the owner's words, never its internal id ("lead-1127"; ORC-030 a-words-ids): a task run by its task and step
+ * ("WT-002 S1"); a lead run by its reply ("the lead's reply at 10:42"), or by when it started when it wrote none ("the
+ * lead's run at 10:41"); a Vision run by its kind ("a PE run in Vision"); a helper by the run that started it.
+ * `UnknownCost.runId` names a helper as "<run> helper <id>" or "<run> unlisted helper <n>".
  */
-function runWords(s: State, runId: string): string {
+export function runWords(s: State, runId: string): string {
   const id = runId.split(" ")[0];
   const helper = id !== runId;
   const a = s.attempts.find((x) => x.id === id);
   const studio = a ? undefined : s.studio.runs.find((x) => x.id === id);
-  const run = a ? `${a.taskId} ${a.stepId}` : studio ? `a ${studio.kind === "pe" ? "PE" : studio.kind} run in Vision` : "a lead run";
+  const run = a ? `${a.taskId} ${a.stepId}` : studio ? `a ${studio.kind === "pe" ? "PE" : studio.kind} run in Vision` : leadRunWords(s, id);
   return helper ? `a helper of ${run}` : run;
+}
+
+/** "the lead's reply at 10:42", "the lead's run at 10:41", or "a lead run" when the record has no such run. */
+function leadRunWords(s: State, id: string): string {
+  const reply = s.conversation.find((m) => m.author === "lead" && m.leadRunId === id);
+  if (reply) return `the lead's reply at ${clockTime(reply.at)}`;
+  const r = s.leadRuns.find((x) => x.id === id);
+  return r ? `the lead's run at ${clockTime(r.startedAt)}` : "a lead run";
 }
 
 /** What the budget stop means, and the runs it cannot count, if any (the first five are named). */
