@@ -38,7 +38,7 @@ import type { Store } from "../store";
 import { clearReport, readTestReport } from "../testReport";
 import type { WorkspaceManager } from "../workspaces";
 import type { StagedArtifact } from "./artifacts";
-import { captureEvidence, copyChange, evidenceDir, type EnvironmentLender } from "./evidence";
+import { captureEvidence, evidenceDir, type EnvironmentLender } from "./evidence";
 import { sharedEnvironments } from "../environment/prepared";
 import { readDevcontainer, type ReadAtBase } from "../environment/devcontainer";
 import { repoAt, repoFiles } from "./existing";
@@ -218,49 +218,37 @@ export class EnvironmentImport implements ImportRunner {
     if (!job.environment) return none(job.noEnvironment ?? NO_ENVIRONMENT, "not-set-up");
     if (!job.source) return none("No copy of the commit could be made.");
     const outDir = job.outDir;
-    // A copy of the commit with the import's capture plan and tapes: the repository and its checkout are never written.
-    const src = `${outDir}.src-${randomBytes(4).toString("hex")}`;
-    try {
-      const copied = copyChange(job.source, src);
-      if (copied) return none(`The commit could not be copied for the capture: ${copied}.`);
-      const items: CaptureItem[] = job.parts.map((p, i) => ({ itemId: `bi-${i + 1}`, kind: p.kind, title: p.title, artifactId: p.artifactId, version: p.version }));
-      const terminals = job.parts.flatMap((p, i) => {
-        if (!p.tape) return [];
-        const tape = posix.join(".orchestrator", "import", `p${i + 1}`, basename(p.tape.path));
-        mkdirSync(join(src, dirname(tape)), { recursive: true });
-        writeFileSync(join(src, tape), p.tape.text);
-        return [{ item: `bi-${i + 1}`, tape }];
-      });
-      const screens = job.parts.flatMap((p, i) => (p.kind === "screen" && p.page ? [{ item: `bi-${i + 1}`, path: p.page, devices: CAPTURE_DEVICES.filter((d) => p.devices?.includes(d)) }] : []));
-      mkdirSync(join(src, ".orchestrator"), { recursive: true });
-      writeFileSync(join(src, ".orchestrator", "capture.json"), JSON.stringify({ screens, terminals }));
-      rmSync(outDir, { recursive: true, force: true });
-      const run = await captureEvidence({
-        source: src,
-        sha: job.commit,
-        items,
-        preview: job.preview ?? { rev: 0 },
-        outDir,
-        environment: job.environment,
-        signal: job.signal,
-        ...(this.o.lender ? { lender: this.o.lender } : {}),
-        ...(this.o.env ? { env: this.o.env } : {}),
-        ...(this.o.docker ? { docker: this.o.docker } : {}),
-        ...(this.o.recorderRoot ? { root: this.o.recorderRoot } : {}),
-        log: (m) => job.log?.(`import: ${m}`),
-        attemptId: `import-${randomBytes(4).toString("hex")}`,
-      });
-      // The capture keys its files by item (bi-1/…); the import keys them by part (<artifactId>/…).
-      const parts = run.items.map((x, i): ImportPartCapture => {
-        const p = job.parts[i];
-        if (x.status !== "captured") return { artifactId: p.artifactId, version: p.version, status: "none", reason: x.reason, detail: p.kind === "screen" && !p.page ? NO_PAGE : x.detail, ...(x.log ? { log: x.log } : {}) };
-        if (existsSync(join(outDir, x.itemId))) renameSync(join(outDir, x.itemId), join(outDir, p.artifactId));
-        return { artifactId: p.artifactId, version: p.version, status: "captured", files: x.files.map((f) => ({ ...f, path: `${p.artifactId}/${f.path.split("/").slice(1).join("/")}` })), ...(x.warnings?.length ? { warnings: x.warnings } : {}) };
-      });
-      return { parts, ...(run.path ? { path: run.path } : {}) };
-    } finally {
-      rmSync(src, { recursive: true, force: true });
-    }
+    // The import's capture plan and its tapes are the service's, kept in memory: nothing is written into the copy of
+    // the repository, whose links could lead anywhere on this computer (CR-2, SR-1). The tapes' paths only name them.
+    const items: CaptureItem[] = job.parts.map((p, i) => ({ itemId: `bi-${i + 1}`, kind: p.kind, title: p.title, artifactId: p.artifactId, version: p.version }));
+    const tapes = new Map(job.parts.flatMap((p, i) => (p.tape ? [[posix.join("import", `p${i + 1}`, basename(p.tape.path)), p.tape.text] as const] : [])));
+    const terminals = job.parts.flatMap((p, i) => (p.tape ? [{ item: `bi-${i + 1}`, tape: posix.join("import", `p${i + 1}`, basename(p.tape.path)) }] : []));
+    const screens = job.parts.flatMap((p, i) => (p.kind === "screen" && p.page ? [{ item: `bi-${i + 1}`, path: p.page, devices: CAPTURE_DEVICES.filter((d) => p.devices?.includes(d)) }] : []));
+    rmSync(outDir, { recursive: true, force: true });
+    const run = await captureEvidence({
+      source: job.source,
+      sha: job.commit,
+      items,
+      preview: job.preview ?? { rev: 0 },
+      outDir,
+      environment: job.environment,
+      signal: job.signal,
+      plan: { text: JSON.stringify({ screens, terminals }), files: tapes },
+      ...(this.o.lender ? { lender: this.o.lender } : {}),
+      ...(this.o.env ? { env: this.o.env } : {}),
+      ...(this.o.docker ? { docker: this.o.docker } : {}),
+      ...(this.o.recorderRoot ? { root: this.o.recorderRoot } : {}),
+      log: (m) => job.log?.(`import: ${m}`),
+      attemptId: `import-${randomBytes(4).toString("hex")}`,
+    });
+    // The capture keys its files by item (bi-1/…); the import keys them by part (<artifactId>/…).
+    const parts = run.items.map((x, i): ImportPartCapture => {
+      const p = job.parts[i];
+      if (x.status !== "captured") return { artifactId: p.artifactId, version: p.version, status: "none", reason: x.reason, detail: p.kind === "screen" && !p.page ? NO_PAGE : x.detail, ...(x.log ? { log: x.log } : {}) };
+      if (existsSync(join(outDir, x.itemId))) renameSync(join(outDir, x.itemId), join(outDir, p.artifactId));
+      return { artifactId: p.artifactId, version: p.version, status: "captured", files: x.files.map((f) => ({ ...f, path: `${p.artifactId}/${f.path.split("/").slice(1).join("/")}` })), ...(x.warnings?.length ? { warnings: x.warnings } : {}) };
+    });
+    return { parts, ...(run.path ? { path: run.path } : {}) };
   }
 }
 
