@@ -10,6 +10,7 @@ import * as M from "../../domain/model";
 import { buildSeed } from "../../domain/seed";
 import { blueprintScene } from "../../domain/testing/blueprintScene";
 import { inVision } from "../../domain/testing/factory";
+import { at, tallyImport } from "../../domain/testing/import";
 import { lockInArgs } from "../../domain/testing/studio";
 import type { State } from "../../domain/types";
 import { HISTORY_HASH, historyRequested, parseRoute } from "../route";
@@ -43,6 +44,17 @@ describe("the vision at the top of Vision", () => {
     const { text } = card(blank);
     expect(text).toContain("Write the vision");
     expect(text).toContain("Not written yet. Tell the lead what you want to build, or write it yourself.");
+  });
+
+  it("an imported project in review: the card names no author for an empty text, and the lead's draft comes from the import (UX-R2-2)", () => {
+    const s = tallyImport("review").s;
+    const review = M.startLeadRun(s, { provider: "claude", model: "claude-sample-large", trigger: "message" }, at(200));
+    const drafted = M.completeLeadRun(review.state, review.runId, { reply: "tally splits shared costs.", proposals: [], vision: { text: "tally splits shared costs.", focus: "What the product is today", reason: "A first draft from the import" } }, at(201));
+    const { text } = card(drafted);
+    expect(text).toMatch(/^The vision Write the vision The lead drafted a vision \S+( \S+)? ago · from the import /);
+    expect(text).toContain("Not written yet. The lead's draft above comes from the import: accept it, edit it, or write your own.");
+    expect(text).not.toContain("by you");
+    expect(text).not.toContain("messages");
   });
 
   it("a long text shows its first lines, with Show all", () => {

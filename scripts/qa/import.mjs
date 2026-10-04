@@ -103,7 +103,7 @@ await runJourney(
       // The sample's agents still run: the start waits for them, and says so (QA-F2).
       await page.getByText("Pausing the sample's agents…").waitFor({ timeout: 10_000 });
       const waiting = flat(await text(page));
-      j.check(/\d+ runs? still stops?\. The import of "tally" starts when they have stopped\./.test(waiting) && waiting.includes("The import is starting: it waits for the sample's agents to stop."), "Start: in the demo's default state, it pauses the sample's agents first and says so (QA-F2)");
+      j.check(/\d+ (run is|runs are) stopping\. The import of "tally" starts when they have stopped\./.test(waiting) && waiting.includes("The import is starting: it waits for the sample's agents to stop."), "Start: in the demo's default state, it pauses the sample's agents first and says so (QA-F2)");
       j.check(service.state().project.sample && !service.state().studio.import, "the record: the sample stays until its agents stopped");
       await page.getByText("Pausing the sample's agents…").scrollIntoViewIfNeeded();
       await j.shot("1-start-pausing", { full: false });
@@ -183,8 +183,13 @@ await runJourney(
       await page.getByText(/The import waits at its budget/).waitFor({ timeout: 10_000 });
       j.check(true, "Baseline: the import's stop shows there too (QA-F1)");
       await page.goto(`${service.origin}/#/overview`);
-      await page.getByText("The import budget is reached: $3.10 of $3.00. Raise it in Vision to go on.").waitFor({ timeout: 10_000 });
+      await page.getByText("The import budget is reached: $3.10 of $3.00. Raise it in Vision to go on.").first().waitFor({ timeout: 10_000 });
       j.check(true, "Home: it says the import waits at its budget (QA-F1)");
+      {
+        const nav = flat(await page.getByRole("navigation", { name: "Main" }).innerText());
+        const card = flat(await page.locator("section, article, div").filter({ has: page.getByRole("heading", { name: "Needs you" }) }).last().innerText());
+        j.check(card.startsWith("Needs you 1") && card.includes("The import's review") && (width < 600 || nav.includes("1 needs you")), "Home: the header and Needs you count the same, and Needs you lists the import's review (UX-R2-1)", `${nav} | ${card.slice(0, 120)}`);
+      }
       await j.shot("3-home-budget-stop", { full: false });
       await page.goto(`${service.origin}/#/vision`);
       await page.getByLabel("New import budget (dollars)").fill("6");
@@ -301,7 +306,7 @@ await runJourney(
       const home = flat(await text(page));
       j.check(home.includes("Nothing to build yet: 2 changes to design wait."), "Home: Nothing to build, with the changes to design that wait");
       const nav = flat(await page.getByRole("navigation", { name: "Main" }).innerText());
-      j.check(/nothing to build|idle/.test(nav) && /2 changes/.test(nav), "the header: Home says nothing to build; Vision, 2 changes to design", nav);
+      j.check(/nothing to build/.test(nav) && !/idle/.test(nav) && /2 changes/.test(nav), "the header: Home says nothing to build; Vision, 2 changes to design", nav);
       await j.shot("5-home");
       await j.pageChecks("Home after the baseline");
     });

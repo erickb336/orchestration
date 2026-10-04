@@ -86,7 +86,7 @@ export function VisionCard() {
       className="st-vision"
       actions={
         <>
-          <span className="small muted">{revisionMeta(vision)}</span>
+          {vision.text.trim() && <span className="small muted">{revisionMeta(vision)}</span>}
           {!editing && (
             <Button size="small" onClick={() => setEditing(true)}>
               {vision.text.trim() ? (draft.waiting ? "Edit the draft's text" : "Edit") : "Write the vision"}
@@ -127,7 +127,10 @@ export function VisionCard() {
             )}
           </div>
         ) : (
-          <p className="muted no-margin">Not written yet. Tell the lead what you want to build, or write it yourself.</p>
+          <p className="muted no-margin">
+            {/* An open draft that answers no message is the import's (UX-R2-2). */}
+            {M.openVisionDraft(state)?.messageIds.length === 0 ? "Not written yet. The lead's draft above comes from the import: accept it, edit it, or write your own." : "Not written yet. Tell the lead what you want to build, or write it yourself."}
+          </p>
         )}
         {!editing && (
           <p className="small no-margin">

@@ -192,7 +192,7 @@ function VisionDraftCard({ state, draft, onEditing }: { state: State; draft: Vis
       <div className="v-draft__head">
         <strong>The lead drafted a vision</strong>
         <span className="small muted">
-          {relTime(draft.at)} · from your {messages === 1 ? "message" : `${messages} messages`}
+          {relTime(draft.at)} · {messages === 0 ? "from the import" : messages === 1 ? "from your message" : `from your ${messages} messages`}
           {messages > 0 && (
             <>
               {" · "}
