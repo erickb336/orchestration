@@ -11,6 +11,7 @@ import { Banner, Button, ButtonLink, Card, Chip, Disclosure, Field, Meter, Simul
 import { cx } from "../kit/cx";
 import { useStore } from "../store";
 import { kindWord, roundLead } from "../studio/studioView";
+import { VisionCard } from "../studio/VisionCard";
 import { ImportBudgetStop } from "./ImportPanel";
 import {
   BASELINE_HASH,
@@ -89,6 +90,7 @@ export function ImportReview() {
         </p>
       </header>
       <ImportBudgetStop />
+      <VisionCard />
       <div className="imp-cols">
         <div className="k-stack">
           <Card className="imp-sum">

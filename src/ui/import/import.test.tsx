@@ -15,6 +15,7 @@ import { ImportHome } from "../Overview";
 import { importPlaces } from "../placesView";
 import { ShapingBanner } from "../Shaping";
 import { ItemDetail, Reality } from "../studio/Reality";
+import { Studio } from "../studio/Studio";
 import { renderScreen, testService, visible } from "../testStore";
 import { BaselineLockIn } from "./BaselineLockIn";
 import { ImportPanel } from "./ImportPanel";
@@ -197,6 +198,17 @@ describe("3 · Review (C5, C8, C9, C15)", () => {
     expect(t).toContain("Your answer: tally does something else today. A designer fixes the part from your words, and it goes into the baseline as you wrote.");
     expect(t).toContain("4 of 5 answered. 1 stays open if you send now.");
     expect(t).toContain("4 answers are recorded.");
+  });
+
+  it("during the review, Vision still shows the vision text, the lead's draft and the editor, where Edit it in Vision and Home's Open Vision lead (UX-6)", () => {
+    let s = stage("answered");
+    s = M.postMessage(s, "Draft the vision from the import.", at(101));
+    const lead = M.startLeadRun(s, { provider: "claude", model: "auto", trigger: "message" }, at(102));
+    s = M.completeLeadRun(lead.state, lead.runId, { reply: "Here is a draft.", proposals: [], vision: { text: "tally splits shared costs in a group, from the terminal.", reason: "What the import found" } }, at(103));
+    const t = text(<Studio />, s);
+    expect(t).toContain("Round 0 · As it is today");
+    expect(t).toMatch(/The vision .*Write the vision/);
+    expect(t).toContain("tally splits shared costs in a group, from the terminal.");
   });
 
   it("a test that fails makes its rule a conflict: the code as it is, or the test (Q2)", () => {
