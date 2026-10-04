@@ -22,9 +22,16 @@ import * as C from "./checks";
 import * as D from "./delivery";
 import * as M from "./model";
 import { DEMO_SCRIPT, type ScriptFinding } from "./demoScript";
+import { demoVersion, fileList, shotName } from "./demoVision";
+import { setEnvironment } from "./environment";
 import { builtInCatalog, builtInOrInternal, flowRef } from "./flows";
 import { instantiate, toDef } from "./pipeline";
-import { emptyBlueprint, emptyStudio } from "./studio/types";
+import * as B from "./studio/blueprint";
+import { setPreview } from "./studio/evidence";
+import * as R from "./studio/runs";
+import * as S from "./studio/studio";
+import type { FeedbackInput, VerdictInput } from "./studio/studio";
+import { emptyBlueprint, emptyStudio, type BudgetEstimate, type Mark } from "./studio/types";
 import {
   DEFAULT_AUTONOMY,
   DEFAULT_CHECKS,
@@ -129,6 +136,8 @@ const PASS_EXCERPTS: Record<string, string> = {
 };
 
 const utf8Length = (text: string) => new TextEncoder().encode(text).length;
+/** The project's environment: the Node image the app proposes for a package.json, pinned by digest. */
+const DEMO_IMAGE = "node:22-trixie-slim@sha256:b26b04c123d9ff8ab646ceb18b9d75a1173acf64b9a401094b906d27b29338d4";
 
 /** FNV-1a over the text, twice, as 12 hex characters: a deterministic finding key (pure, no crypto). */
 function hash12(text: string): string {
@@ -226,7 +235,7 @@ class DemoBuilder {
 
   private baseState(): State {
     const at = (m: number) => this.at(m);
-    const doc: VisionDoc = { id: "doc-1", name: "trail-research.md", path: "trail-research.md", size: utf8Length(DEMO_DOC_TEXT), hash: DEMO_DOC_HASH, text: true, addedAt: at(4336) };
+    const doc: VisionDoc = { id: "doc-1", name: "trail-research.md", path: "trail-research.md", size: utf8Length(DEMO_DOC_TEXT), hash: DEMO_DOC_HASH, text: true, addedAt: at(4436) };
     const leadRunId = "lead-1001";
     const draftId = `vd-${leadRunId}`;
     const visionText =
@@ -244,7 +253,7 @@ class DemoBuilder {
         visions: [
           {
             rev: 1,
-            at: at(4320),
+            at: at(4430),
             author: "user",
             text: visionText,
             focus: "Trip sharing first.",
@@ -265,14 +274,15 @@ class DemoBuilder {
         runLimits: { ...DEFAULT_RUN_LIMITS },
         autonomy: { ...DEFAULT_AUTONOMY, autoDeliver: { ...DEFAULT_AUTONOMY.autoDeliver } },
         steeringMode: "apply",
-        stage: "building",
+        // It starts in Vision; Start the factory (visionStory) moves it to building.
+        stage: "shaping",
         devices: ["desktop", "mobile"],
         domains: ["screen"],
         factoryStarts: [],
         changeOrders: "lead",
         // The demo's factory started before PE review of new work existed (ORC-030 retakes the demo).
         peReviewsNewWork: false,
-        shapingSince: at(4340),
+        shapingSince: at(4440),
         checks: structuredClone(DEFAULT_CHECKS),
         triage: { askUserBy: "user" },
         budgets: { ...NO_BUDGETS },
@@ -298,8 +308,8 @@ class DemoBuilder {
           trigger: "message",
           provider: "claude",
           model: CLAUDE.model,
-          startedAt: at(4334),
-          endedAt: at(4332),
+          startedAt: at(4434),
+          endedAt: at(4432),
           outcome: "completed",
           messageIds: [],
           coverage: { intent: "clear", audience: "clear", problem: "clear", outcome: "clear", scope: "clear", constraints: "clear", risks: "clear", priorities: "clear", material: "clear" },
@@ -307,7 +317,7 @@ class DemoBuilder {
         },
       ],
       steering: [],
-      visionDrafts: [{ id: draftId, at: at(4332), leadRunId, messageIds: [], text: visionText, focus: "Trip sharing first.", reason: draftReason, basedOnVisionRev: 0, status: "accepted", resolvedAt: at(4320), visionRev: 1, simulated: true }],
+      visionDrafts: [{ id: draftId, at: at(4432), leadRunId, messageIds: [], text: visionText, focus: "Trip sharing first.", reason: draftReason, basedOnVisionRev: 0, status: "accepted", resolvedAt: at(4430), visionRev: 1, simulated: true }],
       decisions: [],
       // The built-in catalog until the server loads the files (it replaces this at start).
       flows: builtInCatalog(),
@@ -315,17 +325,18 @@ class DemoBuilder {
       studio: emptyStudio(),
       blueprint: emptyBlueprint(),
       events: [
-        { id: "ev-1", at: at(4340), actor: "system", kind: "config", message: `${DEMO_PROJECT_NAME} created; it starts in Vision` },
-        { id: "ev-2", at: at(4332), actor: "lead", kind: "vision", message: `Lead run ${leadRunId} drafted the vision (${draftId}) from the conversation in Vision: ${draftReason}. It waits for you to accept, edit or dismiss it.` },
-        { id: "ev-3", at: at(4320), actor: "user", kind: "vision", message: `Vision r1 by you: accepted the lead's draft ${draftId}` },
+        { id: "ev-1", at: at(4440), actor: "system", kind: "config", message: `${DEMO_PROJECT_NAME} created; it starts in Vision` },
+        { id: "ev-2", at: at(4432), actor: "lead", kind: "vision", message: `Lead run ${leadRunId} drafted the vision (${draftId}) from the conversation in Vision: ${draftReason}. It waits for you to accept, edit or dismiss it.` },
+        { id: "ev-3", at: at(4430), actor: "user", kind: "vision", message: `Vision r1 by you: accepted the lead's draft ${draftId}` },
       ],
     };
   }
 
-  /** Delivery as pull requests held for you, the project's checks on, and the simulated GitHub checked (all through the real commands). */
+  /**
+   * After the start (which set delivery to pull requests held for you): the simulated GitHub checked, the project's
+   * checks on, and how the project runs for captures of evidence (all through the real commands).
+   */
   private settings() {
-    this.event(4318, "user", "config", "The factory started");
-    this.s = D.setDeliveryMode(this.s, { mode: "pr" }, this.at(4317));
     this.preflight(4317);
     this.s = D.reportBaseFetched(this.s, SIM_BASE, this.at(4316));
     this.s = C.setChecks(
@@ -335,6 +346,9 @@ class DemoBuilder {
       this.at(4315),
     );
     this.checksReady(4314);
+    // How the built product runs, so the Capture evidence step can show it (the fake runtime runs nothing).
+    this.s = setEnvironment(this.s, { image: DEMO_IMAGE, prepare: [["npm", "ci"]], hosts: [] }, this.at(4313));
+    this.s = setPreview(this.s, { preview: ["npm", "run", "preview"], port: 4173 }, this.at(4313));
   }
 
   private preflight(m: number) {
@@ -355,6 +369,187 @@ class DemoBuilder {
 
   private checksReady(m: number) {
     this.s = C.reportChecksHealth(this.s, { sandbox: "codex", status: "ready", detail: "Simulated: no command runs and nothing is spawned.", checkedAt: this.at(m) }, this.at(m));
+  }
+
+  // ---------- Vision: the studio's rounds, through the studio's own commands ----------
+
+  /** The owner writes to the lead; the simulated lead answers, with a studio block when it opens or closes a round or asks the designer. */
+  private studioExchange(m: number, message: string, reply: string, studio?: Record<string, unknown>): string {
+    this.say(message, m);
+    return this.leadReplies(m, m - 2, reply, undefined, studio);
+  }
+
+  /** The studio runs asked for start, as the scheduler starts them on the fake runtime (simulated: a known $0). */
+  private startStudioRuns(m: number): string[] {
+    const r = R.dispatchStudioRuns(this.s, this.at(m), { simulated: ["claude", "codex"] });
+    this.s = r.state;
+    return r.started;
+  }
+
+  /**
+   * A designer run hands in versions (by title and number, from demoVision.ts), as the service imports them: each
+   * recorded with its files' hashes and the run as its maker, then its screenshots taken (a screen), then the run
+   * completes. With `revises`, the run makes the next version of that artifact.
+   */
+  private designerHandsIn(runId: string, m: number, versions: { title: string; version: number }[], summary: string): Record<string, string> {
+    const run = R.getStudioRun(this.s, runId)!;
+    const ids: Record<string, string> = {};
+    for (const { title, version } of versions) {
+      const v = demoVersion(title, version);
+      const prev = version > 1 ? S.latestArtifacts(this.s).find((a) => a.title === title) : undefined;
+      const r = S.addArtifact(
+        this.s,
+        {
+          ...(prev ? { artifactId: prev.id } : {}),
+          round: run.round!,
+          kind: v.kind,
+          title,
+          variants: v.variants,
+          files: fileList(v),
+          devices: v.devices,
+          madeBy: { role: "designer", provider: run.provider, model: run.model, attemptId: run.id },
+          ...(v.dictionary ? { dictionary: structuredClone(v.dictionary) } : {}),
+          ...(v.rules ? { rules: structuredClone(v.rules) } : {}),
+        },
+        this.at(m),
+      );
+      this.s = r.state;
+      ids[title] = r.artifactId;
+      if (v.kind === "screen") this.s = S.startArtifactMedia(this.s, r.artifactId, r.version);
+    }
+    // The service takes each variant's screenshot on each device after import (rendered for the demo by scripts/media/demo-shots.mjs).
+    for (const { title, version } of versions) {
+      const v = demoVersion(title, version);
+      if (v.kind !== "screen") continue;
+      const shots = v.variants.flatMap((x) => v.devices.filter((d) => d !== "terminal").map((device) => ({ variant: x.id, device, path: `shots/${shotName(x.id, device as "desktop" | "mobile")}` })));
+      this.s = S.recordArtifactMedia(this.s, ids[title], version, { shots: { status: "taken", at: this.at(m - 0.5), shots, failed: [] } }, this.at(m - 0.5));
+    }
+    this.s = R.completeStudioRun(this.s, runId, this.at(m - 0.5), { summary });
+    return ids;
+  }
+
+  /** The service asks the PE for each version that waits for review; they start. */
+  private askPe(m: number): string[] {
+    this.s = R.askForPeReviews(this.s, this.at(m));
+    return this.startStudioRuns(m);
+  }
+
+  /** A PE run answers with its verdicts on the newest version of `title` (with its checks of the earlier asks on a later pass). */
+  private peAnswers(runId: string, m: number, title: string, verdicts: VerdictInput[], summary: string) {
+    const run = R.getStudioRun(this.s, runId)!;
+    const a = S.latestVersion(this.s, run.artifactId!)!;
+    if (a.title !== title) throw new Error(`demo: PE run ${runId} reviews ${a.title}, not ${title}`);
+    const asks = S.earlierAsks(this.s, a);
+    const full = verdicts.map((v) => ({ ...v, ...(asks.length ? { earlier: S.asksOn(asks, v.variant).map((x) => ({ ask: x.id, met: v.verdict === "feasible" })) } : {}) }));
+    this.s = S.addPeVerdicts(this.s, { artifactId: a.id, version: a.version, verdicts: full, by: { provider: run.provider, model: run.model, runId } }, this.at(m)).state;
+    this.s = R.completeStudioRun(this.s, runId, this.at(m), { summary });
+  }
+
+  /** The PE's run on the newest version of `title` among those started. */
+  private peRunOn(runs: string[], title: string): string {
+    const id = runs.find((r) => S.latestVersion(this.s, R.getStudioRun(this.s, r)!.artifactId!)?.title === title);
+    if (!id) throw new Error(`demo: no PE run on ${title}`);
+    return id;
+  }
+
+  /** The service asks the designer to revise a version the PE asked a change of (the loop), as askForRevisions does. */
+  private askRevision(m: number, title: string, brief: string): string {
+    const a = S.latestArtifacts(this.s).find((x) => x.title === title)!;
+    if (!S.revisionDue(this.s, a)) throw new Error(`demo: ${title} v${a.version} is not waiting for a revision`);
+    this.s = R.requestStudioRun(this.s, { kind: "designer", round: a.round, artifactId: a.id, brief }, this.at(m)).state;
+    const started = this.startStudioRuns(m);
+    if (started.length !== 1) throw new Error(`demo: the revision of ${title} did not start`);
+    return started[0];
+  }
+
+  /**
+   * The owner's answer to a round, as Vision sends it: the marks on each version, then each Keep put into the draft
+   * (with the pick) and each Drop taken out when the draft holds it, then one message to the lead.
+   */
+  private ownerAnswers(m: number, marks: { title: string; mark: Mark; pick?: string; note?: string }[], message: string, reply: string, studio?: Record<string, unknown>) {
+    const entries: FeedbackInput[] = marks.map((x) => {
+      const a = S.latestArtifacts(this.s).find((v) => v.title === x.title)!;
+      return { artifactId: a.id, version: a.version, mark: x.mark, ...(x.pick ? { pickedVariant: x.pick } : {}), pins: [], note: x.note ?? "" };
+    });
+    this.s = S.sendFeedback(this.s, entries, this.at(m));
+    for (const [i, x] of marks.entries()) {
+      const e = entries[i];
+      if (x.mark === "keep") this.s = B.approveArtifact(this.s, { artifactId: e.artifactId, version: e.version, ...(x.pick ? { variant: x.pick } : {}) }, this.at(m));
+      const held = B.draftItems(this.s).find((it) => it.artifactId === e.artifactId && it.status !== "dropped");
+      if (x.mark === "drop" && held) this.s = B.dropBlueprintItem(this.s, held.id, this.at(m));
+    }
+    return this.studioExchange(m, message, reply, studio);
+  }
+
+  /**
+   * Vision, before the factory: the experience (round 1), then inputs and outputs (round 2). In each round the designer
+   * hands in its parts, the PE reviews each, asks one change that the designer makes, then agrees; the owner keeps,
+   * changes or drops each part. Then the budgets, and Start the factory: the first Lock in, with its summary and settings.
+   */
+  private visionStory() {
+    const est = (build: [number, number], month: [number, number], basis: string): BudgetEstimate => ({ buildUsd: build, maintenanceUsdPerMonth: month, basis });
+    // Round 1, the experience.
+    this.studioExchange(4428, "Let's start with the experience: the map at the trailhead, the trip page and the packing list.", "I opened a round on the experience and asked the designer for the screens: the trail map, the trip page in two variants, the packing list and a group chat.", {
+      openRound: { focus: "experience", summary: "The screens a group uses before and on a hike: the trail map, the trip page, the packing list." },
+      designerRuns: [{ brief: "Design the trail map, the trip page (two variants: plan first, people first), the packing list and a group chat, for a phone at the trailhead.", kinds: ["screen"], variants: 2, devices: ["desktop", "mobile"] }],
+      questions: [{ text: "Should the group chat live in the app, or stay in the chat app people already use?", reason: "The research note says the chat was fine until the day, and useless at the trailhead." }],
+    });
+    const [designer] = this.startStudioRuns(4426);
+    this.designerHandsIn(designer, 4410, [{ title: "Trail map", version: 1 }, { title: "Trip page", version: 1 }, { title: "Packing list", version: 1 }, { title: "Group chat", version: 1 }], "4 screens: Trail map, Trip page (2 variants), Packing list, Group chat");
+    let pe = this.askPe(4409);
+    this.peAnswers(this.peRunOn(pe, "Trail map"), 4404, "Trail map", [{ verdict: "feasible-if", reasons: "The map fetches its tiles as you move it, and most trailheads in the research note have no signal: the map would be a blank grid where it matters.", change: "Save the trail's map on the phone before the hike, and show when it was saved and that the map is offline." }], "Trail map v1: feasible if the trail's map is saved before the hike");
+    this.peAnswers(this.peRunOn(pe, "Trip page"), 4404, "Trip page", ["A", "B"].map((variant) => ({ variant, verdict: "feasible" as const, reasons: "One read of the trip record; friends open it by link.", budget: est([4, 7], [1, 2], "Similar screens, and a trip record for 1,000 groups") })), "Trip page v1: both variants feasible");
+    this.peAnswers(this.peRunOn(pe, "Packing list"), 4404, "Packing list", [{ verdict: "feasible", reasons: "A list per trip, suggested from the trail's length and the forecast the trip already fetches.", budget: est([3, 5], [0.5, 1], "A small list screen, and storage for shared lists") }], "Packing list v1: feasible");
+    // Three agents at most at once: the fourth review starts when one ends.
+    pe = [...pe, ...this.startStudioRuns(4404)];
+    this.peAnswers(this.peRunOn(pe, "Group chat"), 4401, "Group chat", [{ verdict: "feasible", reasons: "A message list per trip; needs a connection.", budget: est([6, 10], [4, 8], "Messages and push notifications for 1,000 groups") }], "Group chat v1: feasible");
+    const revision = this.askRevision(4400, "Trail map", "Revise Trail map for the PE: save the trail's map on the phone before the hike, and show that the map is offline and when it was saved.");
+    this.designerHandsIn(revision, 4396, [{ title: "Trail map", version: 2 }], "Trail map v2: saved for offline, with the offline banner");
+    pe = this.askPe(4395);
+    this.peAnswers(pe[0], 4392, "Trail map", [{ verdict: "feasible", reasons: "The map is saved before the hike, so it works with no signal; the banner says how old it is.", budget: est([5, 9], [2, 4], "Map tiles for 1,000 trails, 20 km around each route") }], "Trail map v2: feasible; the ask is met");
+    // Your answer: Keep, Change and Drop.
+    this.ownerAnswers(
+      4385,
+      [
+        { title: "Trail map", mark: "keep" },
+        { title: "Trip page", mark: "keep", pick: "A" },
+        { title: "Packing list", mark: "change", note: "Show who brings each shared item, so we never pack two stoves again." },
+        { title: "Group chat", mark: "drop", note: "The chat stays in the chat app; it was useless at the trailhead anyway." },
+      ],
+      "Kept Trail map and Trip page (plan first). Change Packing list: show who brings each shared item. Drop the group chat.",
+      "I put Trail map and Trip page (plan first) in the draft, and asked the designer for the next version of Packing list, with your note. The group chat is out.",
+    );
+    // The lead's reply asked the designer for Packing list v2.
+    const packingId = S.latestArtifacts(this.s).find((a) => a.title === "Packing list")!.id;
+    this.s = R.requestStudioRun(this.s, { kind: "designer", round: 1, artifactId: packingId, brief: "Packing list v2: show who brings each shared item (the owner's note).", fromLead: { leadRunId: this.s.leadRuns.at(-1)!.id, kinds: ["screen"], variants: 1, devices: ["desktop", "mobile"] } }, this.at(4383)).state;
+    const [packingRun] = this.startStudioRuns(4383);
+    this.designerHandsIn(packingRun, 4372, [{ title: "Packing list", version: 2 }], "Packing list v2: who brings each shared item");
+    pe = this.askPe(4371);
+    this.peAnswers(pe[0], 4368, "Packing list", [{ verdict: "feasible", reasons: "Who brings an item is one more field on the shared list.", budget: est([3, 6], [0.5, 1], "A small list screen, and storage for shared lists") }], "Packing list v2: feasible");
+
+    // Round 2, inputs and outputs: closed round 1 and opened round 2 in one reply.
+    this.ownerAnswers(4360, [{ title: "Packing list", mark: "keep" }], "Keep the packing list. Next, what a trip holds.", "Round 1 is closed. I opened a round on inputs and outputs and asked the designer for the trip's data and the project's words.", {
+      closeRound: { summary: "Kept: Trail map v2, Trip page (plan first), Packing list v2. Dropped: Group chat." },
+      openRound: { focus: "data", summary: "What a trip holds, and the words the app and its agents use." },
+      designerRuns: [{ brief: "The trip's data (trip, person, packing item) with a worked example, and the project's words.", kinds: ["contract", "dictionary"], variants: 1 }],
+    });
+    const [dataRun] = this.startStudioRuns(4358);
+    this.designerHandsIn(dataRun, 4346, [{ title: "Trip data", version: 1 }, { title: "Words", version: 1 }], "Trip data (contract) and Words (dictionary)");
+    pe = this.askPe(4345);
+    this.peAnswers(pe[0], 4342, "Trip data", [{ verdict: "feasible-if", reasons: "Friends join without an account, but the contract does not say what is kept about them, or for how long.", change: "Name what is kept about a friend who joins by link, and for how long." }], "Trip data v1: feasible if it says what is kept about guests");
+    const dataRevision = this.askRevision(4342, "Trip data", "Revise Trip data for the PE: name what is kept about a friend who joins by link, and for how long.");
+    this.designerHandsIn(dataRevision, 4334, [{ title: "Trip data", version: 2 }], "Trip data v2: guest links, and what is kept");
+    pe = this.askPe(4333);
+    this.peAnswers(pe[0], 4330, "Trip data", [{ verdict: "feasible", reasons: "A guest's name and link id for 30 days is small and easy to delete.", budget: est([2, 4], [0.5, 1], "Storage for 1,000 groups") }], "Trip data v2: feasible; the ask is met");
+    this.ownerAnswers(4326, [{ title: "Trip data", mark: "keep" }, { title: "Words", mark: "keep" }], "Keep both. I think we are ready to build.", "Round 2 is closed. The draft holds five parts; the pre-flight shows them with the PE's estimates.", {
+      closeRound: { summary: "Kept: Trip data v2 and Words." },
+    });
+
+    // The pre-flight: the two budgets, then Start the factory with the settings shown.
+    this.s = M.setBudgets(this.s, { buildingUsd: 60, maintenanceUsdPerMonth: 15 }, this.at(4322));
+    const req = M.startFactoryRequest(this.s);
+    this.s = M.startFactory(this.s, { ...req, settings: { ...req.settings, delivery: { mode: "pr", branch: "main", merge: "user" }, pausePoints: { ...req.settings.pausePoints, tradeoffs: "user", changeOrders: "lead" } } }, this.at(4318));
+    if (this.s.project.stage !== "building" || this.s.blueprint.revisions.length !== 1) throw new Error("demo: the factory did not start from blueprint r1");
   }
 
   // ---------- tasks ----------
@@ -650,17 +845,20 @@ class DemoBuilder {
   }
 
   /** A simulated lead reply: the real run record, completed with the flag the fake runtime's replies carry. */
-  private leadReplies(startM: number, endM: number, reply: string, steer?: Record<string, unknown>) {
+  private leadReplies(startM: number, endM: number, reply: string, steer?: Record<string, unknown>, studio?: Record<string, unknown>) {
     const r = M.startLeadRun(this.s, { provider: CLAUDE.provider, model: CLAUDE.model, trigger: "message" }, this.at(startM));
-    this.s = M.completeLeadRun(r.state, r.runId, { reply, proposals: [], ...(steer ? { steer } : {}) }, this.at(endM), { simulated: true });
+    this.s = M.completeLeadRun(r.state, r.runId, { reply, proposals: [], ...(steer ? { steer } : {}), ...(studio ? { studio } : {}) } as M.LeadOutput, this.at(endM), { simulated: true });
     const run = this.s.leadRuns.find((x) => x.id === r.runId)!;
     if (run.outcome !== "completed") throw new Error(`demo: lead run ${r.runId} is ${run.outcome}`);
+    const notes = this.s.conversation.filter((x) => x.leadRunId === r.runId).flatMap((x) => (x as { notes?: string[] }).notes ?? []);
+    if (studio && notes.length) throw new Error(`demo: lead run ${r.runId}'s studio block was refused in part: ${notes.join("; ")}`);
     return r.runId;
   }
 
   // ---------- the story ----------
 
   build() {
+    this.visionStory(); // Vision: two rounds with PE review and your marks, the budgets, Start the factory
     this.settings();
     this.specs();
     this.offlineMapsTileCache(); // WT-001: failed check → finding → repair → merged, in Review

@@ -185,16 +185,17 @@ describe("the demo state", () => {
     const coverage = M.coverageOf(s)!;
     expect(Object.values(coverage)).toHaveLength(9);
     expect(Object.values(coverage).every((c) => c === "clear")).toBe(true);
-    // The conversation: four messages, oldest first, and the change set with Undo.
-    expect(s.conversation.map((m) => m.author)).toEqual(["user", "lead", "user", "lead"]);
-    expect(s.conversation[0].text).toMatch(/offline maps ahead of sharing/);
-    expect(s.conversation[1].text).toMatch(/^Done\. Offline maps is now the focus/);
-    expect(s.conversation[2].text).toMatch(/Keep the VoiceOver work going/);
-    expect(s.conversation[3].text).toMatch(/Claude is reviewing/);
+    // The conversation in the factory: four messages, oldest first, and the change set with Undo (the exchanges in Vision come before them).
+    const talk = s.conversation.slice(-4);
+    expect(talk.map((m) => m.author)).toEqual(["user", "lead", "user", "lead"]);
+    expect(talk[0].text).toMatch(/offline maps ahead of sharing/);
+    expect(talk[1].text).toMatch(/^Done\. Offline maps is now the focus/);
+    expect(talk[2].text).toMatch(/Keep the VoiceOver work going/);
+    expect(talk[3].text).toMatch(/Claude is reviewing/);
     expect(s.steering).toHaveLength(1);
     const set = s.steering[0];
     expect(set.simulated).toBe(true);
-    expect(s.conversation[1].changeSetId).toBe(set.id);
+    expect(talk[1].changeSetId).toBe(set.id);
     expect(set.changes.map((c) => [c.kind, c.status, c.taskId])).toEqual([
       ["focus", "applied", undefined],
       ["defer", "applied", "WT-010"],
@@ -213,17 +214,62 @@ describe("the demo state", () => {
     expect(M.pendingMessages(s)).toEqual([]);
   });
 
+  it("tells Vision: two rounds, each with the designer's parts, one PE ask revised then agreed, and your Keep, Change and Drop; then the recorded start", () => {
+    const s = demo();
+    const [r1, r2] = s.studio.rounds;
+    expect([r1, r2].map((r) => `${r.n} ${r.focus} ${r.closedAt ? "closed" : "open"}`)).toEqual(["1 experience closed", "2 data closed"]);
+    const versions = (round: number) => s.studio.artifacts.filter((a) => a.round === round).map((a) => `${a.title} v${a.version}`);
+    expect(versions(1)).toEqual(["Trail map v1", "Trip page v1", "Packing list v1", "Group chat v1", "Trail map v2", "Packing list v2"]);
+    expect(versions(2)).toEqual(["Trip data v1", "Words v1", "Trip data v2"]);
+    // Every version is the simulated designer's, from a run the fake runtime ran; every studio run is simulated.
+    for (const a of s.studio.artifacts) expect(a.madeBy).toMatchObject({ role: "designer", provider: "claude" });
+    expect(s.studio.runs.every((r) => r.status === "completed" && r.simulated)).toBe(true);
+    // In each round the PE asked one change, the designer made it, and the PE found the ask met.
+    const verdictsOf = (title: string) => {
+      const id = s.studio.artifacts.find((a) => a.title === title)!.id;
+      return s.studio.verdicts.filter((v) => v.artifactId === id);
+    };
+    for (const title of ["Trail map", "Trip data"]) {
+      const [ask, agreed] = verdictsOf(title);
+      expect(ask).toMatchObject({ version: 1, verdict: "feasible-if", pass: 1 });
+      expect(ask.change).toBeTruthy();
+      expect(agreed).toMatchObject({ version: 2, verdict: "feasible", pass: 2, earlier: [{ ask: ask.id, met: true }] });
+      expect(agreed.budget?.buildUsd).toBeDefined();
+    }
+    // Your marks: Keep, Change (with a note) and Drop, then Keep on the revised packing list.
+    const mark = (title: string, version: number) => {
+      const a = s.studio.artifacts.find((x) => x.title === title && x.version === version)!;
+      return s.studio.feedback.filter((f) => f.artifactId === a.id && f.version === version).at(-1);
+    };
+    expect(mark("Trail map", 2)?.mark).toBe("keep");
+    expect(mark("Trip page", 1)).toMatchObject({ mark: "keep", pickedVariant: "A" });
+    expect(mark("Packing list", 1)).toMatchObject({ mark: "change", note: expect.stringMatching(/who brings each shared item/) });
+    expect(mark("Group chat", 1)?.mark).toBe("drop");
+    expect(mark("Packing list", 2)?.mark).toBe("keep");
+    // Start the factory was the first Lock in: blueprint r1, with its summary and the settings you saw.
+    expect(s.project.factoryStarts).toHaveLength(1);
+    const start = s.project.factoryStarts[0];
+    expect(start).toMatchObject({ by: "user", blueprintRev: 1, visionRev: 1, openItems: [], settings: { delivery: { mode: "pr", merge: "user" }, pausePoints: { tradeoffs: "user", changeOrders: "lead" } } });
+    const r1Items = s.blueprint.revisions[0];
+    expect(r1Items.lockIn?.summary.changes.added.map((i) => i.title)).toEqual(["Trail map", "Trip page", "Packing list", "Trip data", "Words"]);
+    expect(r1Items.at).toBe(start.at);
+    expect(s.project.budgets).toMatchObject({ buildingUsd: 60, maintenanceUsdPerMonth: 15 });
+    // The tasks came after the start.
+    for (const t of s.tasks) expect(t.createdAt > start.at, t.id).toBe(true);
+  });
+
   it("the lead's note reached WT-005's coder while it ran: sent live, acknowledged by the simulated runtime, applied in the change", () => {
     const s = demo();
+    const talk = s.conversation.slice(-4);
     expect(s.notes).toHaveLength(1);
     const n = s.notes[0];
     const row = s.steering[0].changes[2];
     const run = s.attempts.find((a) => a.id === n.attemptId)!;
     expect(n).toMatchObject({ taskId: "WT-005", stepId: "S1", status: "delivered", via: "live", simulated: true, text: "Put a first-aid kit on every packing list, whatever the trail's length or forecast." });
-    expect(n.from).toEqual({ by: "lead", leadRunId: s.steering[0].leadRunId, changeSetId: s.steering[0].id, changeId: row.id, messageIds: [s.conversation[0].id] });
+    expect(n.from).toEqual({ by: "lead", leadRunId: s.steering[0].leadRunId, changeSetId: s.steering[0].id, changeId: row.id, messageIds: [talk[0].id] });
     expect(row).toMatchObject({ kind: "note", status: "applied", appliedBy: "lead", noteId: n.id, stepId: "S1", after: n.text });
-    expect(s.conversation[0].text).toMatch(/tell the coder on the packing list to put a first-aid kit on every list/);
-    expect(s.conversation[1].text).toMatch(/I also passed your note to the coder working on the packing list\.$/);
+    expect(talk[0].text).toMatch(/tell the coder on the packing list to put a first-aid kit on every list/);
+    expect(talk[1].text).toMatch(/I also passed your note to the coder working on the packing list\.$/);
     // The coder was running when the note was sent and when it was acknowledged, and finished after it.
     expect(run).toMatchObject({ taskId: "WT-005", stepId: "S1", outcome: "completed", snapshot: { provider: "codex", role: "coder" } });
     expect(run.startedAt < n.sentAt! && n.sentAt! <= n.settledAt! && n.settledAt! < run.endedAt!).toBe(true);
@@ -509,7 +555,7 @@ describe("the demo state", () => {
     expect(r.project.name).toBe(DEMO_PROJECT_NAME);
     expect(r.tasks.map((t) => t.id)).toEqual(s0.tasks.map((t) => t.id));
     expect(task(r, "WT-002").hold).toBe(false);
-    expect(r.conversation).toHaveLength(4);
+    expect(r.conversation).toHaveLength(s0.conversation.length);
     expect(r.notes).toHaveLength(1);
     expect(r.flows).toEqual(s.flows);
     expect(r.seq).toBeGreaterThan(s.seq);
