@@ -153,7 +153,9 @@ async function body(j, page, service, width) {
 
   // ---------- 3. How your project runs ----------
   const runs = page.locator('[id="environment"]');
-  await j.step("How your project runs in the demo: no environment, so evidence is not captured, and the card says what to set", async () => {
+  // Since ORC-030 C5 the demo's project has its environment and its preview set (its captures of evidence are simulated):
+  // the card says so; with the image emptied, it says evidence is not captured and what to set.
+  await j.step("How your project runs in the demo: set up; with no image, evidence is not captured, and the card says what to set", async () => {
     await page.goto(`${service.origin}/#/settings/how-it-runs`);
     await runs.waitFor({ timeout: 5_000 });
     const words = await runs.innerText();
@@ -166,10 +168,10 @@ async function body(j, page, service, width) {
       return i < 0;
     });
     j.check(!missing.length, "one card: the image and the prepare commands, then the preview command, its port and the CLI entry", missing);
-    await page.getByLabel("Preview command").fill("npm run preview");
-    await page.getByLabel("Port", { exact: true }).fill("4173");
+    j.check(/Confirmed image/.test(words) && /Set up \(r1\)/.test(words), "the demo's image is confirmed and its evidence is set up", words.split("\n").find((l) => /Set up|Not captured/.test(l)));
+    await page.getByLabel("Image", { exact: true }).fill("");
     j.check((await save("how-it-runs")) === "Saved", 'Save: the bar says "Saved"');
-    j.check(service.state().project.preview?.port === 4173 && !("install" in (service.state().project.preview ?? {})), "the record: the preview on 4173, with no install", service.state().project.preview);
+    j.check(!service.state().project.environment?.image && service.state().project.preview?.port === 4173 && !("install" in (service.state().project.preview ?? {})), "the record: no image, and the preview on 4173 with no install", service.state().project.preview);
     await runs.getByText("Not captured").waitFor({ timeout: 5_000 }).catch(() => {});
     const after = await runs.innerText();
     j.check(/Not captured/.test(after) && /set an image above, or confirm the repository's dev container/.test(after), "the card says evidence is not captured, and what to set to get it", after.split("\n").find((l) => /captured/.test(l)));
