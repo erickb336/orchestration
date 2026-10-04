@@ -1,8 +1,8 @@
 // ORC-032 for real: the import's service steps on tally, the bundled sample, in Docker. The baseline test run runs
 // tally's tests in the project's environment with no network and reads their JUnit report; the capture types each
 // terminal demo's tape into tally's own CLI in the project's image and records it. Nothing runs on this computer.
-// Gated on Docker: skipped, with the reason, when it is not running. Pulls the official Python image by digest the
-// first time.
+// Gated on Docker: skipped, with the reason, when it is not running; the screen capture also needs the recorder's
+// image (npm run recorder:build). Pulls the official Python image by digest the first time.
 
 import { cpSync, mkdtempSync, readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -11,7 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { IMAGE_TABLE, environmentPlan, environmentSource } from "../../src/domain/environment";
 import { PreparedEnvironments } from "../environment/prepared";
 import { removeTree } from "../environment/copy";
-import { dockerEnv, findDocker, runDocker } from "./container";
+import { dockerEnv, dockerReady, findDocker, runDocker } from "./container";
 import { EnvironmentImport, TALLY_FIXTURE, reportCases, tallyRepo, type CapturePart } from "./import";
 
 const docker = findDocker(process.env);
@@ -19,6 +19,9 @@ const up = docker ? await runDocker(docker, ["version", "--format", "{{.Server.V
 const ready = !!up && up.code === 0 && !!up.stdout.trim();
 const WEB_FIXTURE = resolve(__dirname, "fixtures", "import-web", "repo");
 const skipReason = ready ? "" : ` (skipped: ${docker ? "Docker is not running" : "Docker is not installed"})`;
+/** A screen's capture also needs the recorder's image (npm run recorder:build), as the evidence tests do. */
+const recorder = ready ? await dockerReady() : undefined;
+const recorderSkip = recorder?.ok ? "" : ` (skipped: ${recorder ? recorder.reason : "Docker is not running"})`;
 
 /** The test's project, so its prepared images (orc-env-<project>:<key>) are removed afterwards, and only its. */
 const PROJECT = `importtest-${Math.random().toString(36).slice(2, 8)}`;
@@ -86,7 +89,7 @@ describe(`the import of tally, in Docker${skipReason}`, () => {
     expect(capture.parts.every((p) => p.status === "captured" && p.files.some((f) => f.type === "cast" && f.path.startsWith(`${p.artifactId}/`)))).toBe(true);
   }, 900_000);
 
-  it.skipIf(!ready)("records a screen product's page on each of its devices, from the preview the owner set (U2-F2)", async () => {
+  it.skipIf(!recorder?.ok)(`records a screen product's page on each of its devices, from the preview the owner set (U2-F2)${recorderSkip}`, async () => {
     // A small screen product: one static page, served by Python's standard library in the project's image.
     const src = join(scratch, "web");
     cpSync(WEB_FIXTURE, src, { recursive: true });
