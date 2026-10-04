@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { isCode, repoFiles, repoGlance, trackedAmong } from "./existing";
+import { isCode, localFilterDrivers, repoAt, repoFiles, repoGlance, trackedAmong } from "./existing";
 
 let dir: string;
 beforeEach(() => {
@@ -58,6 +58,32 @@ describe("an existing repository", () => {
     // A folder is not a file it came from.
     expect(trackedAmong(r, ["src"])?.has("src")).toBe(false);
     expect(trackedAmong(join(dir, "missing"), ["src/index.html"])).toBeUndefined();
+  });
+
+  it("the provenance lookup reads the import's commit when given one (C11): a file committed later is not there", () => {
+    const r = repo({ "src/index.html": "<h1>Trips</h1>" });
+    const first = execFileSync("git", ["-C", r, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    writeFileSync(join(r, "src", "later.js"), "1");
+    execFileSync("git", ["-C", r, "add", "-A"]);
+    execFileSync("git", ["-C", r, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "later"]);
+    expect(trackedAmong(r, ["src/index.html", "src/later.js"])).toEqual(new Set(["src/index.html", "src/later.js"]));
+    expect(trackedAmong(r, ["src/index.html", "src/later.js"], first)).toEqual(new Set(["src/index.html"]));
+    expect(trackedAmong(r, ["src/index.html"], "f".repeat(40))).toBeUndefined();
+  });
+
+  it("the import's start reads the commit, the branch and the size: source and test files apart, and their kilobytes", () => {
+    const r = repo({ "README.md": "# tally\n", "tally/cli.py": "x".repeat(2048), "tally/money.py": "1", "tests/test_add.py": "x".repeat(1024), "src/app.test.ts": "1", "pkg/a_test.go": "1", "logo.png": "png" });
+    const head = execFileSync("git", ["-C", r, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    expect(repoAt(r)).toEqual({ commit: head, branch: "main", size: { sourceFiles: 2, testFiles: 3, kb: 3.0 } });
+    expect(repoAt(join(dir, "missing"))).toBeUndefined();
+  });
+
+  it("names the filter drivers the repository's own config defines, which a checkout would run", () => {
+    const r = repo({ "a.txt": "1" });
+    expect(localFilterDrivers(r)).toEqual([]);
+    execFileSync("git", ["-C", r, "config", "--local", "filter.evil.smudge", "touch /tmp/pwned"]);
+    execFileSync("git", ["-C", r, "config", "--local", "filter.lfs.process", "git-lfs filter-process"]);
+    expect(localFilterDrivers(r)).toEqual(["evil", "lfs"]);
   });
 
   it("a repository with documents only has no code; one that cannot be read gives nothing", () => {

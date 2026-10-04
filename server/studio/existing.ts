@@ -49,15 +49,15 @@ export function repoFiles(repoPath: string): string[] | undefined {
 }
 
 /**
- * Which of these paths the repository tracks at HEAD, or undefined when it cannot be read. Lists only these paths
- * (literal pathspecs), so its size does not grow with the repository.
+ * Which of these paths the repository tracks at `commit` (an import's, C11), else at HEAD; undefined when it cannot be
+ * read. Lists only these paths (literal pathspecs), so its size does not grow with the repository.
  */
-export function trackedAmong(repoPath: string, paths: readonly string[]): Set<string> | undefined {
-  const at = head(repoPath);
+export function trackedAmong(repoPath: string, paths: readonly string[], commit?: string): Set<string> | undefined {
+  const at = commit ?? head(repoPath);
   if (!at) return undefined;
   if (!paths.length) return new Set();
   try {
-    return new Set(git(repoPath, ["--literal-pathspecs", "ls-tree", "-r", "-z", "--name-only", at, "--", ...paths]).split("\0").filter(Boolean));
+    return new Set(git(repoPath, ["--literal-pathspecs", "ls-tree", "-r", "-z", "--name-only", "--end-of-options", at, "--", ...paths]).split("\0").filter(Boolean));
   } catch {
     return undefined;
   }
@@ -77,4 +77,65 @@ export function repoGlance(repoPath: string, max = 40): RepoGlance | undefined {
   if (!files) return undefined;
   const code = files.filter(isCode);
   return { files: files.length, codeFiles: code.length, code: code.slice(0, max) };
+}
+
+// ---------- the import's start (ORC-032) ----------
+
+/** A test file, in any language: under a tests or spec folder, or named as a test (test_x.py, x_test.go, x.test.ts). */
+const TEST_FILE = /(^|\/)(tests?|__tests__|specs?)\/|(^|\/)(test_[^/]*|[^/]*_test\.[^/.]+|[^/]*\.(test|spec)\.[^/.]+)$/i;
+
+/** What the import's Start screen reads: the commit at HEAD, its branch, and the code's size (C7: files, not tests). */
+export interface RepoAt {
+  commit: string;
+  /** The branch HEAD is on; absent when HEAD is detached. */
+  branch?: string;
+  size: { sourceFiles: number; testFiles: number; kb: number };
+}
+
+/**
+ * The repository at HEAD, from git's own records (rev-parse, symbolic-ref, ls-tree): never `git status`, which can run
+ * the repository's fsmonitor and filters. Undefined when it cannot be read.
+ */
+export function repoAt(repoPath: string): RepoAt | undefined {
+  const commit = head(repoPath);
+  if (!commit) return undefined;
+  let branch: string | undefined;
+  try {
+    branch = git(repoPath, ["symbolic-ref", "--quiet", "--short", "HEAD"]).trim() || undefined;
+  } catch {
+    /* detached */
+  }
+  try {
+    let sourceFiles = 0;
+    let testFiles = 0;
+    let bytes = 0;
+    // "<mode> <type> <object> <size>\t<path>", one per file.
+    for (const row of git(repoPath, ["ls-tree", "-r", "-l", "-z", "--end-of-options", commit], 64 * 1024 * 1024).split("\0")) {
+      const tab = row.indexOf("\t");
+      if (tab < 0) continue;
+      const path = row.slice(tab + 1);
+      if (!isCode(path)) continue;
+      if (TEST_FILE.test(path)) testFiles++;
+      else sourceFiles++;
+      const size = Number(row.slice(0, tab).trim().split(/\s+/)[3]);
+      if (Number.isFinite(size)) bytes += size;
+    }
+    return { commit, ...(branch ? { branch } : {}), size: { sourceFiles, testFiles, kb: Math.round((bytes / 1024) * 10) / 10 } };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The filter drivers the repository's own config defines (filter.<name>.*). A checkout runs them, so a repository from
+ * someone else could run a command on this computer that way: the import refuses one that has any. Read with
+ * `git config`, which runs nothing. Empty when there are none or the config cannot be read.
+ */
+export function localFilterDrivers(repoPath: string): string[] {
+  try {
+    const out = git(repoPath, ["config", "--local", "--name-only", "--get-regexp", "^filter\\."]);
+    return [...new Set(out.split("\n").map((l) => /^filter\.(.+)\.[^.]+$/.exec(l.trim())?.[1]).filter((x): x is string => !!x))].sort();
+  } catch {
+    return [];
+  }
 }

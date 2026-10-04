@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="tally" tests="22" failures="0" errors="0">
+  <testcase classname="test_add.py" name="test_default_after_join" time="0.001"></testcase>
+  <testcase classname="test_add.py" name="test_default_everyone" time="0.001"></testcase>
+  <testcase classname="test_add.py" name="test_records_date" time="0.001"></testcase>
+  <testcase classname="test_add.py" name="test_records_expense" time="0.001"></testcase>
+  <testcase classname="test_add.py" name="test_rejects_empty" time="0.001"></testcase>
+  <testcase classname="test_add.py" name="test_rejects_other_currency" time="0.001"></testcase>
+  <testcase classname="test_add.py" name="test_rejects_symbols" time="0.001"></testcase>
+  <testcase classname="test_add.py" name="test_rejects_text" time="0.001"></testcase>
+  <testcase classname="test_add.py" name="test_unknown_payer" time="0.001"></testcase>
+  <testcase classname="test_ledger.py" name="test_damaged_message" time="0.001"></testcase>
+  <testcase classname="test_ledger.py" name="test_damaged_untouched" time="0.001"></testcase>
+  <testcase classname="test_ledger.py" name="test_missing" time="0.001"></testcase>
+  <testcase classname="test_money.py" name="test_no_floats" time="0.001"></testcase>
+  <testcase classname="test_money.py" name="test_whole_cents" time="0.001"></testcase>
+  <testcase classname="test_report.py" name="test_by_date" time="0.001"></testcase>
+  <testcase classname="test_report.py" name="test_since" time="0.001"></testcase>
+  <testcase classname="test_report.py" name="test_since_empty" time="0.001"></testcase>
+  <testcase classname="test_split.py" name="test_balances" time="0.001"></testcase>
+  <testcase classname="test_split.py" name="test_balances_sum_to_zero" time="0.001"></testcase>
+  <testcase classname="test_split.py" name="test_even" time="0.001"></testcase>
+  <testcase classname="test_split.py" name="test_fewest_payments" time="0.001"></testcase>
+  <testcase classname="test_split.py" name="test_settles_all" time="0.001"></testcase>
+</testsuite>

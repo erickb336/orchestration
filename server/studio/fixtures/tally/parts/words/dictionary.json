@@ -1,0 +1,8 @@
+[
+  { "term": "expense", "meaning": "One cost that one person paid for some people in the group.", "avoid": ["cost item"] },
+  { "term": "payer", "meaning": "The person who paid an expense.", "avoid": [] },
+  { "term": "group", "meaning": "The people who share costs in one ledger.", "avoid": [] },
+  { "term": "balance", "meaning": "What a person paid minus their share. Above zero: others owe them.", "avoid": [] },
+  { "term": "settle up", "meaning": "The payments that bring every balance to zero.", "avoid": [] },
+  { "term": "ledger", "meaning": "The file that holds a group's expenses.", "avoid": [] }
+]
