@@ -17,8 +17,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { chromium } from "playwright-core";
-import { DEMO_VERSIONS, SAMPLE_BAND, demoVersion } from "../../src/domain/demoVision.ts";
-import { builtShotFile, designShotFile, DEMO_SHOTS_DIR } from "../../server/demoFiles.ts";
+import { DEMO_VERSIONS, SAMPLE_BAND, builtShotFile, demoVersion, designShotFile } from "../../src/domain/demoVision.ts";
+import { DEMO_SHOTS_DIR } from "../../server/demoFiles.ts";
 
 const ROOT = resolve(import.meta.dirname, "..", "..");
 const DEVICES = {

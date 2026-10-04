@@ -8,7 +8,7 @@
 
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { DEMO_VERSIONS, fileList, sha256Hex } from "../src/domain/demoVision";
+import { DEMO_VERSIONS, builtShotFile, designShotFile, fileList, sha256Hex } from "../src/domain/demoVision";
 import type { State } from "../src/domain/types";
 import { studioRoot, versionDir, writeVersion, VERSION_MANIFEST } from "./studio/artifacts";
 import { evidenceDir } from "./studio/evidence";
@@ -16,9 +16,6 @@ import { evidenceDir } from "./studio/evidence";
 /** Where the rendered screenshots are kept in this repository. */
 export const DEMO_SHOTS_DIR = resolve(import.meta.dirname, "demo-shots");
 
-/** The rendered design screenshot of a version's variant on a device. */
-export const designShotFile = (title: string, version: number, variant: string, device: string) => `${slug(title)}-v${version}-${variant}-${device}.png`;
-const slug = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 
 /** Write what the sample's records name and is not on disk yet. Returns how many folders it wrote. */
 export function writeDemoFiles(dataDir: string, s: State): number {
@@ -49,9 +46,6 @@ export function writeDemoFiles(dataDir: string, s: State): number {
   }
   return written;
 }
-
-/** The rendered screenshot of what the demo "built" for a screen, on a device (labelled simulated in the image). */
-export const builtShotFile = (title: string, device: string) => `${slug(title)}-built-${device}.png`;
 
 function copyOnce(from: string, to: string): boolean {
   if (existsSync(to) || !existsSync(from)) return false;

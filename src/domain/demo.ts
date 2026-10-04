@@ -23,11 +23,13 @@ import { runCommand } from "./commands";
 import * as D from "./delivery";
 import * as M from "./model";
 import { DEMO_SCRIPT, type ScriptFinding } from "./demoScript";
-import { demoVersion, fileList, shotName } from "./demoVision";
+import { DEMO_BUILT_SHOTS } from "./demoShots";
+import { builtShotFile, demoVersion, fileList, shotName } from "./demoVision";
 import { builtInCatalog, builtInOrInternal, flowRef } from "./flows";
 import { instantiate, toDef } from "./pipeline";
 import * as B from "./studio/blueprint";
 import * as R from "./studio/runs";
+import { captureItems, evidenceSummary, notSetUpReason, type EvidenceFile, type EvidenceRun, type ItemCapture } from "./studio/evidence";
 import * as S from "./studio/studio";
 import type { FeedbackInput, VerdictInput } from "./studio/studio";
 import { emptyBlueprint, emptyStudio, type BudgetEstimate, type Mark } from "./studio/types";
@@ -638,6 +640,37 @@ class DemoBuilder {
         artifacts: [],
       };
       this.event(m, "lead", "dispatch", `Dispatched ${stepId} (checks) to the service as ${attemptId} on ${target.ref.slice(0, 12)} with settings r${cfg.rev}`, id);
+    } else if (st.role === "evidence") {
+      // A capture of evidence, as dispatch starts one: the screens the spec cites, on the commit the checks ran on.
+      const target = C.checkTargetOf(this.s, t, st);
+      const items = target ? captureItems(this.s, t) : [];
+      const preview = this.s.project.preview;
+      if (!target || !items.length || !preview || notSetUpReason(this.s)) throw new Error(`demo: ${id} ${stepId} has nothing to capture, or capture is not set up`);
+      a = {
+        id: attemptId,
+        taskId: id,
+        stepId,
+        snapshot: {
+          provider: "service",
+          model: "evidence",
+          source: "service",
+          routingReason: `Run by the service in the project's environment (preview r${preview.rev}, environment r${this.s.project.environment!.rev})`,
+          specRev: spec.rev,
+          stepRev: st.revision,
+          visionRev: vision.rev,
+          workspace,
+          pipelineRev: t.pipelineRev,
+          role: st.role,
+          purpose: st.purpose,
+          inputs: M.consumedInputs(this.s, t, st),
+          evidence: { target, items, preview: structuredClone(preview) },
+        },
+        startedAt: this.at(m),
+        outcome: "running",
+        progress: 0,
+        artifacts: [],
+      };
+      this.event(m, "lead", "dispatch", `Dispatched ${stepId} (evidence) to the service as ${attemptId} on ${target.ref.slice(0, 12)}: ${items.map((i) => i.itemId).join(", ")}`, id);
     } else {
       const r = M.resolveStep(this.s, t, st);
       if (!r.ok) throw new Error(`demo: ${id} ${stepId} does not resolve: ${r.reason}`);
@@ -734,6 +767,27 @@ class DemoBuilder {
     this.complete(attemptId, endM, [{ name, summary: C.runSummary(record), checkRun: record, findings: C.findingsFromRun(record, plan.commands) }]);
   }
 
+  /**
+   * A capture of evidence on the fake runtime, with screenshots: each screen the task cites, on each of its devices.
+   * The run is labelled simulated (its caption and summary say so), and each screenshot is a rendered stand-in that
+   * says it is simulated in the image (server/demo-shots/, with the sizes and hashes in demoShots.ts).
+   */
+  private capture(id: string, stepId: string, startM: number, endM: number) {
+    const attemptId = this.dispatch(id, stepId, startM);
+    const snap = this.s.attempts.find((x) => x.id === attemptId)!.snapshot.evidence!;
+    const items: ItemCapture[] = snap.items.map((i) => {
+      const devices = demoVersion(i.title, i.version).devices.filter((d): d is "desktop" | "mobile" => d === "desktop" || d === "mobile");
+      const files: EvidenceFile[] = devices.map((device) => {
+        const shot = DEMO_BUILT_SHOTS[builtShotFile(i.title, device)];
+        if (!shot) throw new Error(`demo: no rendered screenshot of ${i.title} built, on ${device}`);
+        return { path: `${i.itemId}/${device}.png`, type: "png", device, bytes: shot.bytes, sha256: shot.sha256 };
+      });
+      return { ...i, status: "captured", files };
+    });
+    const run: EvidenceRun = { sha: snap.target.ref, at: this.at(endM), durationMs: 41_000, previewRev: snap.preview!.rev, simulated: true, items };
+    this.complete(attemptId, endM, [{ name: this.step(id, stepId).outputs[0].name, summary: evidenceSummary(run), evidence: run }]);
+  }
+
   /** A review step. A code review is handed the change's file list and accounts for every file (complete coverage); findings are structured. */
   private review(id: string, stepId: string, startM: number, endM: number, change: CodeChange | undefined, summary: string, findings: Finding[] = []) {
     const st = this.step(id, stepId);
@@ -826,7 +880,7 @@ class DemoBuilder {
   }
 
   /** You chose Merge; the app merged it at your request; it landed and is listed for review. */
-  private mergePr(id: string, requestM: number, mergeM: number) {
+  private mergePr(id: string, requestM: number, mergeM: number, flags: string[] = []) {
     const pr = D.livePr(this.task(id))!;
     const number = pr.number!;
     this.s = D.requestPrMerge(this.s, id, pr.headSha, this.at(requestM));
@@ -838,7 +892,7 @@ class DemoBuilder {
     this.s = D.reportPrOp(begun.state, { op, observed: this.observation(id, mergeM - 0.05, "MERGED", number) }, this.at(mergeM - 0.05));
     const t = this.task(id);
     if (t.integration?.pr?.phase !== "merged" || !t.integration.landed) throw new Error(`demo: ${id} did not land`);
-    if (t.integration.landed.flags.length) throw new Error(`demo: ${id} landed with flags ${t.integration.landed.flags.join(", ")}`);
+    if (t.integration.landed.flags.join() !== flags.join()) throw new Error(`demo: ${id} landed with flags ${t.integration.landed.flags.join(", ")}`);
     // The base branch's check after the merge.
     this.s = D.reportObservations(this.s, { at: this.at(mergeM - 1), prs: [], commits: [{ oid: t.integration.landed.commit, checks: [{ ...SIM_CHECK }] }], rateRemaining: 5000 }, this.at(mergeM - 1), { repo: SIM_REPO });
   }
@@ -874,6 +928,9 @@ class DemoBuilder {
     this.inviteScreenDesign(); // WT-013: the design, a UX finding revised away, the lead's brief; nothing to integrate
     this.tripSharingGoal(); // WT-004 and its children; WT-004.1's security finding repaired, merged and reviewed
     this.fasterTrailSearch(); // WT-011: your own Change task, merged, in Review
+    this.screenSpecs(); // WT-014 and WT-015: the trip page and the packing list screen, as Feature tasks
+    this.tripPageBuilt(); // WT-014: captured, matches its design: built and verified
+    this.packingScreenBuilt(); // WT-015: captured, one difference the lead accepted: fails a check
     const fix = this.bugReproduced(); // WT-009: reproduced; the fix starts
     this.voiceOver(); // WT-007: UX review raised a finding that needs you; the code review runs at start
     this.pauseFix(fix); // WT-009: paused by you, acknowledged by the runtime
@@ -892,6 +949,7 @@ class DemoBuilder {
       5,
       spec({
         title: "Cache trail map tiles for offline use",
+        blueprintRefs: [this.item("Trail map")],
         area: "Offline maps",
         whyNow: "At most trailheads the map shows a blank grid: tiles are fetched on demand and there is no signal.",
         outcome: "Tiles a person has looked at stay on the phone and show without a connection.",
@@ -914,6 +972,7 @@ class DemoBuilder {
       1,
       spec({
         title: "Show a clear offline state on the map",
+        blueprintRefs: [this.item("Trail map")],
         area: "Offline maps",
         whyNow: "With no signal the map looks the same as online, so nobody knows whether it is current.",
         outcome: "The map says when it is offline and how old the cached tiles are.",
@@ -936,6 +995,7 @@ class DemoBuilder {
       4,
       spec({
         title: "Download a trail area before you leave",
+        blueprintRefs: [this.item("Trail map")],
         area: "Offline maps",
         whyNow: "A cache only holds what someone looked at; the first visit to a trail happens with no signal.",
         outcome: "A trail's map can be saved on the phone from home, with its size shown first.",
@@ -983,6 +1043,7 @@ class DemoBuilder {
       5,
       spec({
         title: "Suggest a packing list from trail length and weather",
+        blueprintRefs: [this.item("Packing list")],
         area: "Packing lists",
         whyNow: "Two stoves and no first-aid kit: packing is decided from memory.",
         outcome: "A new trip starts with a packing list that fits its length and the forecast.",
@@ -1005,6 +1066,7 @@ class DemoBuilder {
       6,
       spec({
         title: "Check items off together",
+        blueprintRefs: [this.item("Packing list")],
         area: "Packing lists",
         whyNow: "A list one person owns does not stop two people bringing stoves.",
         outcome: "Everyone on the trip can tick items off the same list and see who took what.",
@@ -1050,6 +1112,7 @@ class DemoBuilder {
       7,
       spec({
         title: "Larger tap targets on the trip page",
+        blueprintRefs: [this.item("Trip page")],
         area: "Accessibility",
         whyNow: "Several controls on the trip page are under 30 pt; with gloves on they are missed.",
         outcome: "Every control on the trip page is at least 44 pt with 8 pt between controls.",
@@ -1299,6 +1362,129 @@ class DemoBuilder {
     this.prHead(id, 2369, change);
     this.openPr(id, 2368, 999);
     this.mergePr(id, 2300, 2299);
+  }
+
+  /** The id of an approved part of the blueprint in force, by its title. */
+  private item(title: string): string {
+    const i = B.blueprintItems(this.s).find((x) => x.title === title && x.status === "approved");
+    if (!i) throw new Error(`demo: no approved blueprint item "${title}"`);
+    return i.id;
+  }
+
+  /** The two screens the lead planned once the first changes had landed: Feature tasks, so each is captured and compared with its design. */
+  private screenSpecs() {
+    const T = 2290;
+    this.addTask(
+      "WT-014",
+      11,
+      spec({
+        title: "Build the trip page",
+        area: "Trip sharing",
+        blueprintRefs: [this.item("Trip page"), this.item("Trip data")],
+        whyNow: "The trip page is the one place for the plan and the people; the invite links have landed and need a page to open.",
+        outcome: "The trip page as approved: the plan first, then who is coming, with Share the invite link.",
+        benefit: "Friends see the plan and who is coming in one place.",
+        options: [
+          opt("A", "As approved (plan first)", "Build Trip page variant A on the trip record of Trip data", "Matches the design you kept", "Medium", "The people list is below the fold on small phones", "High"),
+          opt("B", "People first", "Build variant B instead", "Who is coming is seen first", "Medium", "Not the variant you kept", "High"),
+        ],
+        rationale: "You kept variant A in Vision.",
+        acceptance: ["The built page matches Trip page v1 (plan first) on desktop and mobile", "The trip record holds what Trip data v2 names"],
+        validationPlan: "Component tests; the capture of evidence and the UX review compare the built page with the design.",
+        effort: "medium",
+      }),
+      "feature",
+      T,
+    );
+    this.addTask(
+      "WT-015",
+      12,
+      spec({
+        title: "Build the packing list screen",
+        area: "Packing lists",
+        blueprintRefs: [this.item("Packing list")],
+        whyNow: "The suggested packing list needs its screen: shared items and each person's items.",
+        outcome: "The packing list as approved: shared items with who brings each, and each person's items.",
+        benefit: "The group sees what is packed and what is not.",
+        options: [
+          opt("A", "As approved", "Build Packing list v2 on the list the suggestion makes", "Matches the design you kept", "Small", "Who brings an item needs the trip's people", "High"),
+          opt("B", "Without who brings it", "Build the list first; who brings each item later", "Smaller first step", "Small", "Differs from the design", "High"),
+        ],
+        rationale: "You kept v2, which shows who brings each shared item.",
+        acceptance: ["The built screen matches Packing list v2 on desktop and mobile"],
+        validationPlan: "Component tests; the capture of evidence and the UX review compare the built screen with the design.",
+      }),
+      "feature",
+      T,
+    );
+    this.event(T, "lead", "spec", "Published specs for WT-014 and WT-015 from blueprint r1");
+    this.promote(["WT-014", "WT-015"], T - 1);
+  }
+
+  /** A Feature task from its design to its pull request: design, change, checks, capture, the three reviews, (repair), final checks, verification. */
+  private featureRun(id: string, t0: number, change: CodeChange, words: { design: string; change: string; handoff: string; ux: string; verification: string }, uxFindings: Finding[] = [], afterUx?: (m: number) => void): CodeChange {
+    this.output(id, "S1", t0, t0 - 30, words.design);
+    this.change(id, "S2", t0 - 31, t0 - 80, change, words.change, words.handoff);
+    this.checks(id, "C1", t0 - 81, t0 - 83);
+    this.capture(id, "E1", t0 - 84, t0 - 85);
+    this.reviews(id, "S3", "SR1", t0 - 86, t0 - 98, t0 - 100, change, "No findings: the screen reads the trip record only, and its tests cover each state.", "No security findings: nothing new is stored or sent.");
+    this.review(id, "S4", t0 - 101, t0 - 108, undefined, words.ux, uxFindings);
+    afterUx?.(t0 - 110);
+    this.skip(id, "S5", t0 - 116);
+    this.checks(id, "C2", t0 - 117, t0 - 119);
+    this.output(id, "S6", t0 - 120, t0 - 128, words.verification);
+    this.prHead(id, t0 - 129, change);
+    return change;
+  }
+
+  /** WT-014: built, captured on desktop and mobile, and the UX review found no difference from the design: built and verified. Merged, and you looked at it. */
+  private tripPageBuilt() {
+    const id = "WT-014";
+    const change = { sha: fakeSha("WT-014 S2"), paths: ["src/trip/TripPage.tsx", "src/trip/TripPage.test.tsx", "src/trip/People.tsx", "src/trip/record.ts"], files: 4, additions: 188, deletions: 22 };
+    this.featureRun(id, 2280, change, {
+      design: "The trip page as approved: the plan first, then who is coming, and Share the invite link at the top.",
+      change: "The trip page, plan first, on the trip record (+188 −22, 4 files)",
+      handoff: "The page reads the trip record of Trip data v2; people show in, out or maybe.",
+      ux: "No findings: the built page matches Trip page v1 (plan first) on desktop and mobile.",
+      verification: "The trip page matches its design on both devices; checks passed on the final change.",
+    });
+    this.openPr(id, 2150, 1002);
+    this.mergePr(id, 2100, 2099);
+    this.s = D.markLandedReviewed(this.s, [id], true, this.at(2050));
+  }
+
+  /**
+   * WT-015: built and captured; the UX review found that the list does not show who brings each item. You sent the
+   * decision to the lead, which accepted it because WT-006 builds it; the work landed. Only you can accept a
+   * difference from the design, so Design and reality says the packing list fails a check.
+   */
+  private packingScreenBuilt() {
+    const id = "WT-015";
+    const change = { sha: fakeSha("WT-015 S2"), paths: ["src/packing/PackingList.tsx", "src/packing/PackingList.test.tsx", "src/packing/items.ts"], files: 3, additions: 121, deletions: 9 };
+    this.featureRun(
+      id,
+      2040,
+      change,
+      {
+        design: "The packing list as approved: shared items with who brings each, then each person's items.",
+        change: "The packing list screen: shared items and each person's items (+121 −9, 3 files)",
+        handoff: "Who brings an item needs the trip's people on the list record; the field is there, not shown yet.",
+        ux: "1 finding for you to decide: the built list does not show who brings each shared item.",
+        verification: "The packing list screen works; it differs from its design in one place (the lead accepted it until WT-006); checks passed on the final change.",
+      },
+      [finding("F1", { severity: "warning", action: "ask-user", title: "The list does not show who brings each shared item", detail: "Packing list v2 shows a name beside each shared item (Ana, Ben, Nobody yet). The built screen shows the items only.", why: "It differs from the design you kept. Fixing it now, or later with WT-006, is a product choice." })],
+      (m) => {
+        const d = this.s.decisions.find((x) => x.taskId === id && x.status === "open");
+        if (!d || d.routedTo !== "user") throw new Error("demo: WT-015's finding did not come to you");
+        // You handed this one to the lead; the lead accepted it, since WT-006 (shared check-off) builds who brings each item.
+        this.owner("routeDecision", { decisionId: d.id, to: "lead" }, m);
+        const r = M.startLeadRun(this.s, { provider: CLAUDE.provider, model: CLAUDE.model, trigger: "decisions" }, this.at(m - 1));
+        this.s = M.completeLeadRun(r.state, r.runId, { reply: "Accepted for now: WT-006 builds who brings each item.", proposals: [], decisions: [{ id: d.id, decision: "accept", why: "WT-006 (check items off together) adds who brings each item; building it twice would cost more than waiting for it." }] }, this.at(m - 3), { simulated: true });
+        if (this.s.decisions.find((x) => x.id === d.id)?.status !== "accept") throw new Error("demo: the lead did not accept WT-015's finding");
+      },
+    );
+    this.openPr(id, 1905, 1004);
+    this.mergePr(id, 1850, 1849, ["findings-accepted"]); // the landing records that a finding was accepted
   }
 
   /** WT-007: designed and implemented; the UX review asks you about units; the code review is next (it starts when the service does). */

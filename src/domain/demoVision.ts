@@ -225,3 +225,9 @@ export const fileList = (v: DemoVersion) => Object.entries(v.files).map(([path, 
 
 /** The screenshots the demo's screens carry (rendered by scripts/media/demo-shots.mjs): shots/<variant>-<device>.png. */
 export const shotName = (variant: string, device: "desktop" | "mobile") => `${variant}-${device}.png`;
+
+const slug = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+/** The rendered design screenshot of a version's variant on a device, in server/demo-shots/. */
+export const designShotFile = (title: string, version: number, variant: string, device: string) => `${slug(title)}-v${version}-${variant}-${device}.png`;
+/** The rendered screenshot of what the demo "built" for a screen, on a device (labelled simulated in the image), in server/demo-shots/. */
+export const builtShotFile = (title: string, device: string) => `${slug(title)}-built-${device}.png`;
