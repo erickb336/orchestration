@@ -20,7 +20,7 @@ import { currentSpec, currentVision, draft, event, nextId } from "../model/core"
 import { pushVision } from "../model/vision";
 import { newWorkReview } from "../peReview";
 import { ControlError, StaleWriteError, type Finding, type State, type Task } from "../types";
-import { artifactName, currentFeedback, latestArtifacts, latestVersion, openObjections, peReview, readyForOwner, versionsOf } from "./studio";
+import { artifactName, currentFeedback, isAsIs, latestArtifacts, latestVersion, openObjections, peReview, readyForOwner, versionsOf } from "./studio";
 import type { BlueprintItem, BlueprintRevision, ChangeOrder, DictionaryEntry, DraftVision, Feedback, ItemEstimate, LockInSummary, StudioArtifact, TaskHandling, TouchedTask, TouchedTaskState, UsdRange } from "./types";
 
 // ---------- the version in force ----------
@@ -320,7 +320,8 @@ export function openBlueprintItems(s: State): OpenItem[] {
  * - the tasks it touches: those whose current spec cites an added, changed or dropped item, with their state and
  *   what happens to each (r14): queued, the lead updates its spec; running, it finishes and then the lead revises it;
  *   landed, the lead plans a revision; queued and building only dropped items, it is retired;
- * - the new work: added items no task cites;
+ * - the new work: added items no task cites, but not a reproduction of the code as it is today (an import's part,
+ *   ORC-032), which is built already;
  * - the budgets: the spend and the maintenance estimate so far, and the PE's estimate of each added or changed item
  *   (null where the PE gave none: never $0);
  * - what stays open: the draft's open items, with what the factory keeps meanwhile.
@@ -339,7 +340,9 @@ export function lockInSummary(s: State): LockInSummary {
     tasks.push({ taskId: t.id, title: currentSpec(t).content.title, state, items, handling: handlingOf(state, refs.every(droppedAfter)) });
   }
   const cited = new Set(s.tasks.filter((t) => t.lifecycle !== "cancelled").flatMap(refsOf));
-  const estimates = [...c.added, ...c.changed.map((x) => x.item)].map((i) => itemEstimate(s, i));
+  // A reproduction of the code as it is today (an import's part) is built already: no new work, no PE estimate (2.4).
+  const toBuild = (i: BlueprintItem) => !isAsIs(s, i);
+  const estimates = [...c.added, ...c.changed.map((x) => x.item)].filter(toBuild).map((i) => itemEstimate(s, i));
   const spend = buildingSpend(s);
   const m = maintenanceEstimate(s);
   const why = new Map(openBlueprintItems(s).map((o) => [o.item.id, o.why]));
@@ -348,7 +351,7 @@ export function lockInSummary(s: State): LockInSummary {
     inForceRev: blueprintRev(s),
     changes: { added: c.added, changed: c.changed, dropped: c.dropped, ...(c.vision ? { vision: { text: c.vision.text, reason: c.vision.reason, replacesRev: currentVision(s).rev } } : {}) },
     tasks,
-    newWork: c.added.filter((i) => !cited.has(i.id)).map((i) => i.id),
+    newWork: c.added.filter((i) => !cited.has(i.id) && toBuild(i)).map((i) => i.id),
     budgets: {
       building: { budgetUsd: s.project.budgets.buildingUsd, spentUsd: spend.usd, unknownRuns: spend.unknown.length },
       maintenance: { budgetUsdPerMonth: s.project.budgets.maintenanceUsdPerMonth, estimateUsdPerMonth: m.partsUsd === null ? null : m.partsUsd + m.callsUsd },

@@ -10,9 +10,11 @@
 
 import { buildSeed } from "../seed";
 import * as M from "../model";
-import { baselineSummary } from "../studio/import";
+import { baselineSummary, importFixesDue } from "../studio/import";
 import { summaryDigest } from "../studio/blueprint";
 import * as R from "../studio/runs";
+import * as S from "../studio/studio";
+import { setSubagentProviders } from "../subagents";
 import type { ImportAnswer, ImportStep } from "../studio/types";
 import type { State, TestCaseResult } from "../types";
 import { run, sha } from "./studio";
@@ -156,22 +158,25 @@ export interface ImportScene {
 
 const SIM = { simulated: ["claude", "codex"] as ("claude" | "codex")[] };
 
-/** Ask for an import run and start it (simulated). */
-function startRun(s: State, step: ImportStep, sec: number): { s: State; id: string } {
-  const r = R.requestStudioRun(s, { kind: step === "rules" ? "reader" : "designer", round: 0, brief: `The import's ${step}.`, importStep: step }, at(sec));
+/** Ask for an import run and start it (simulated); a fix names the part it revises. */
+function startRun(s: State, step: ImportStep, sec: number, artifactId?: string): { s: State; id: string } {
+  const r = R.requestStudioRun(s, { kind: step === "rules" ? "reader" : "designer", round: 0, brief: `The import's ${step}.`, importStep: step, ...(artifactId ? { artifactId } : {}) }, at(sec));
   return { s: R.dispatchStudioRuns(r.state, at(sec), SIM).state, id: r.runId };
 }
 
 /**
  * tally's import, through the real commands, up to `stage` (default: in review). A new project "tally (sample)", a
  * screen and code product on the terminal, a $3 budget. Seconds from T0: started 1, checks 10, rules and words 20–30,
- * parts 40–50, capture 60, answers 100, the baseline Lock in 120.
+ * parts 40–50, capture 60, answers 100, a designer's fix of each part the owner said was misread 105–107 (with the
+ * default answers: The ledger, v2), the baseline Lock in 120.
  */
 export function tallyImport(stage: ImportStage = "review", o: ImportOptions = {}): ImportScene {
   const upTo = (x: ImportStage) => STAGES.indexOf(stage) >= STAGES.indexOf(x);
   let s = M.initProject(buildSeed(T0, { inFlightRuns: false }), { name: "tally (sample)", repoPath: "/tmp/tally", vision: "", focus: "" }, at(0));
   s = run(s, "setDomains", { domains: ["screen", "code"] }, at(0)).state;
   s = run(s, "setDevices", { devices: ["terminal"] }, at(0)).state;
+  // Helpers need a provider that tracks them (ORC-031): the service writes which at start.
+  if (o.helpers) s = setSubagentProviders(s, ["claude"], at(0));
   s = run(s, "startImport", { commit: TALLY_COMMIT, branch: "main", budgetUsd: 3, helpers: o.helpers ?? null, size: TALLY_SIZE }, at(1)).state;
   const importId = s.studio.import!.id;
   const scene: ImportScene = { s, importId, parts: {}, runs: {} };
@@ -188,8 +193,8 @@ export function tallyImport(stage: ImportStage = "review", o: ImportOptions = {}
   s = reader.s;
   s = run(s, "recordImportRules", { importId, runId: reader.id, ...tallyReading({ failing, noTests: o.checks === "not-run" }) }, at(25)).state;
   s = R.completeStudioRun(s, reader.id, at(25), { summary: "17 rules" });
-  const designer = (id: string) => ({ role: "designer", provider: "claude", model: s.studio.runs.find((x) => x.id === id)!.model, attemptId: id });
-  const dict = run<{ artifactId: string }>(s, "addStudioArtifact", { round: 0, kind: "dictionary", title: "Words", devices: [], variants: [{ id: "a", label: "As it is today", entry: "words/dictionary.json" }], files: [{ path: "words/dictionary.json", sha256: sha("5") }], madeBy: designer(words.id), provenance: { files: ["README.md", "tally/cli.py"] }, dictionary: TALLY_WORDS }, at(30));
+  const designer = (st: State, id: string) => ({ role: "designer", provider: "claude", model: st.studio.runs.find((x) => x.id === id)!.model, attemptId: id });
+  const dict = run<{ artifactId: string }>(s, "addStudioArtifact", { round: 0, kind: "dictionary", title: "Words", devices: [], variants: [{ id: "a", label: "As it is today", entry: "words/dictionary.json" }], files: [{ path: "words/dictionary.json", sha256: sha("5") }], madeBy: designer(s, words.id), provenance: { files: ["README.md", "tally/cli.py"] }, dictionary: TALLY_WORDS }, at(30));
   s = R.completeStudioRun(dict.state, words.id, at(30), { summary: "6 words" });
   const parts: ImportScene["parts"] = { words: dict.result.artifactId };
   const runs: ImportScene["runs"] = { words: words.id, rules: reader.id };
@@ -202,7 +207,7 @@ export function tallyImport(stage: ImportStage = "review", o: ImportOptions = {}
   for (const key of Object.keys(TALLY_PARTS) as PartKey[]) {
     const { provenance, ...def } = TALLY_PARTS[key];
     const rules = TALLY_RULES.filter((r) => r.part === key).map((r) => ({ id: r.id, text: r.text, ...(r.tests.length && o.checks !== "not-run" ? { tests: r.tests } : {}) }));
-    const added = run<{ artifactId: string }>(s, "addStudioArtifact", { round: 0, ...def, madeBy: designer(p.id), provenance: { files: provenance }, rules: [{ variant: "a", path: `${key}/rules.json`, rules }] }, at(45));
+    const added = run<{ artifactId: string }>(s, "addStudioArtifact", { round: 0, ...def, madeBy: designer(s, p.id), provenance: { files: provenance }, rules: [{ variant: "a", path: `${key}/rules.json`, rules }] }, at(45));
     s = added.state;
     parts[key] = added.result.artifactId;
   }
@@ -214,6 +219,14 @@ export function tallyImport(stage: ImportStage = "review", o: ImportOptions = {}
   if (!upTo("answered")) return { s, importId, parts, runs };
   s = run(s, "answerImport", { answers: o.answers ?? PROTOTYPE_ANSWERS }, at(100)).state;
   if (!upTo("baseline")) return { s, importId, parts, runs };
+  // Each part the owner said the reader misread gets a designer's fix: its next version, as is, with the same rules.
+  for (const f of importFixesDue(s)) {
+    const fix = startRun(s, "fix", 105, f.artifactId);
+    const v = S.latestVersion(fix.s, f.artifactId)!;
+    s = run(fix.s, "addStudioArtifact", { artifactId: v.id, round: 0, kind: v.kind, title: v.title, devices: v.devices, variants: v.variants, files: v.files, madeBy: designer(fix.s, fix.id), provenance: { files: v.provenance!.files }, ...(v.rules ? { rules: v.rules } : {}) }, at(106)).state;
+    s = R.completeStudioRun(s, fix.id, at(107), { summary: "fixed" });
+    runs.fix = fix.id;
+  }
   return { s: lockInBaselineAsOwner(s, at(120)), importId, parts, runs };
 }
 

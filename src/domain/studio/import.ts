@@ -18,9 +18,9 @@ import { PRICES, fmtUsd } from "../spend";
 import { canAllowSubagents } from "../subagents";
 import { ControlError, MAX_SUBAGENT_CAP, type ProviderId, type State, type TestCaseResult } from "../types";
 import { blueprintItems, draftItems, lockInSummary, putDraftInForce, assertSummarySeen, type SummarySeen } from "./blueprint";
-import { NO_EVIDENCE, isCapturedKind, type EvidenceFile } from "./evidence";
-import { isInsidePath, latestArtifacts } from "./studio";
-import { IMPORT_SOURCE_KINDS, isUnderWay, type BlueprintItem, type ImportAnswer, type ImportCapture, type ImportChecks, type ImportEstimate, type ImportPartCapture, type ImportRule, type ImportSource, type ProjectImport, type RepoSize, type StudioArtifact, type StudioRun, type UsdRange } from "./types";
+import { NO_EVIDENCE, isCapturedKind, type EvidenceFile, type EvidencePath } from "./evidence";
+import { isInsidePath, latestArtifacts, latestVersion } from "./studio";
+import { IMPORT_SOURCE_KINDS, isUnderWay, type ImportAnswer, type ImportCapture, type ImportChecks, type ImportEstimate, type ImportPartCapture, type ImportRule, type ImportSource, type ProjectImport, type RepoSize, type StudioArtifact, type StudioRun, type UsdRange } from "./types";
 import { MAX_RULE_TESTS, MAX_RULE_TEXT, MAX_TEST_ID, type Parsed, rulePattern } from "./words";
 
 // ---------- bounds (C14) ----------
@@ -45,9 +45,6 @@ const show = (x: string, max = 60) => JSON.stringify(x.length > max ? `${x.slice
 const short = (sha: string) => sha.slice(0, 7);
 
 // ---------- lookups ----------
-
-/** The project's import, if it has one. */
-export const currentImport = (s: State): ProjectImport | undefined => s.studio.import;
 
 function getImport(s: State, importId?: string): ProjectImport {
   const imp = s.studio.import;
@@ -324,7 +321,16 @@ export function parseImportCapture(raw: unknown): ImportCaptureInput {
     if (p.status !== "none" || !NO_EVIDENCE.includes(p.reason as (typeof NO_EVIDENCE)[number]) || typeof p.detail !== "string") throw new ControlError(`Part ${i + 1}: a part with no capture says why: { "status": "none", "reason", "detail" }.`);
     return { ...base, status: "none", reason: p.reason as (typeof NO_EVIDENCE)[number], detail: line(p.detail).slice(0, 300), ...(typeof p.log === "string" && p.log.trim() ? { log: p.log.trim().slice(-600) } : {}) };
   });
-  return { parts, ...(raw.simulated === true ? { simulated: true as const } : {}), ...(isObj(raw.path) ? { path: raw.path as unknown as ImportCapture["path"] } : {}) };
+  return { parts, ...(raw.simulated === true ? { simulated: true as const } : {}), ...(raw.path === undefined ? {} : { path: environmentPath(raw.path) }) };
+}
+
+/** Which way the capture ran: only in the project's environment (E2), with the image and how it was prepared. */
+function environmentPath(v: unknown): Extract<EvidencePath, { via: "environment" }> {
+  const prepares = ["ran", "reused", "failed", "none"] as const;
+  if (!isObj(v) || v.via !== "environment" || (v.from !== "devcontainer" && v.from !== "setting") || typeof v.image !== "string" || !v.image) throw new ControlError('The capture\'s path is { "via": "environment", "from", "image" }.');
+  if (v.prepare !== undefined && !prepares.includes(v.prepare as (typeof prepares)[number])) throw new ControlError("The capture's prepare is ran, reused, failed or none.");
+  const opt = (k: "imageId" | "key") => (typeof v[k] === "string" && v[k] ? { [k]: line(v[k] as string).slice(0, 200) } : {});
+  return { via: "environment", from: v.from, image: line(v.image).slice(0, 300), ...opt("imageId"), ...(v.prepare ? { prepare: v.prepare as (typeof prepares)[number] } : {}), ...opt("key") };
 }
 
 /**
@@ -371,37 +377,128 @@ export function stopImport(state: State, input: { importId: string; reason: stri
   return s;
 }
 
+// ---------- the review: each rule's confidence, the questions and their options (2.3) ----------
+
+/**
+ * How sure the import is of a rule, derived from the baseline run and the sources, never the reader's claim. The first
+ * case that applies:
+ * 1. a test the rule names failed or ended with an error: a conflict (the test says one thing, the code does another);
+ * 2. a source says something other than the rule: a conflict (the README and a test, say);
+ * 3. it names at least one test, and every one passed: confirmed;
+ * 4. no test, only skipped ones, or no baseline run: inferred.
+ */
+export type Confidence =
+  | { level: "conflict"; why: "test-fails"; test: TestCaseResult }
+  | { level: "conflict"; why: "sources-differ"; source: ImportSource }
+  | { level: "confirmed"; tests: number }
+  | { level: "inferred"; why: "no-test" | "skipped" | "no-baseline-run" };
+
+export function ruleConfidence(imp: ProjectImport, rule: ImportRule): Confidence {
+  const cases = rule.tests.flatMap((id) => imp.reading?.cases.filter((c) => testId(c) === id) ?? []);
+  const bad = cases.find((c) => c.status === "failed" || c.status === "error");
+  if (bad) return { level: "conflict", why: "test-fails", test: bad };
+  const differs = rule.sources.find((x) => x.differs);
+  if (differs) return { level: "conflict", why: "sources-differ", source: differs };
+  if (cases.length && cases.every((c) => c.status === "passed")) return { level: "confirmed", tests: cases.length };
+  return { level: "inferred", why: imp.checks.status !== "read" ? "no-baseline-run" : cases.length ? "skipped" : "no-test" };
+}
+
+/** One choice of an answer. `keeps`: the code stays as it is. `needsText`: it comes with the owner's words. */
+export interface ImportOption {
+  id: string;
+  keeps: boolean;
+  label: string;
+  needsText?: true;
+}
+
+/** A question of the review: a conflict, or a guess that matters (inferred, with `important`). */
+export interface ImportQuestion {
+  ruleId: string;
+  kind: "conflict" | "guess";
+  confidence: Confidence;
+  options: ImportOption[];
+}
+
+const FROM_WORDS: Record<ImportSource["from"], string> = { test: "The test", code: "The code", docs: "The docs" };
+const NEITHER: ImportOption = { id: "neither", keeps: false, label: "Neither", needsText: true };
+/** Every item that is not a conflict, confirmed rules and parts too (C15): confirm it, or correct it. */
+const CONFIRM_OR_CORRECT: ImportOption[] = [
+  { id: "confirm", keeps: true, label: "Confirm" },
+  { id: "correct", keeps: false, label: "Correct", needsText: true },
+];
+
+/**
+ * A rule's options. A conflict: keep the code (named by the first source that agrees with it), or take what the failing
+ * test or a source that differs says, or neither. Anything else: confirm or correct.
+ */
+function ruleOptions(rule: ImportRule, c: Confidence): ImportOption[] {
+  if (c.level !== "conflict") return CONFIRM_OR_CORRECT;
+  const agrees = rule.sources.find((x) => !x.differs);
+  const keep = c.why === "test-fails" ? "The code: as it is today" : agrees ? `${FROM_WORDS[agrees.from]}: ${agrees.says}` : `The code: ${rule.text}`;
+  return [
+    { id: "keep", keeps: true, label: keep },
+    ...(c.why === "test-fails" ? [{ id: "test", keeps: false, label: `The test: ${testId(c.test)}` }] : []),
+    ...rule.sources.flatMap((x, i) => (x.differs ? [{ id: `source-${i + 1}`, keeps: false, label: `${FROM_WORDS[x.from]}: ${x.says}` }] : [])),
+    NEITHER,
+  ];
+}
+
+/**
+ * The review's questions (Q4): every conflict, then every important guess, in the rules' order; at most 10 are asked.
+ * The rest are not asked: they go into the baseline as the code has them, "not confirmed", and stay open in Vision.
+ */
+export function importQuestions(imp: ProjectImport): { asked: ImportQuestion[]; notAsked: ImportQuestion[] } {
+  const all = (imp.reading?.rules ?? []).map((rule): ImportQuestion => {
+    const confidence = ruleConfidence(imp, rule);
+    return { ruleId: rule.id, kind: confidence.level === "conflict" ? "conflict" : "guess", confidence, options: ruleOptions(rule, confidence) };
+  });
+  const important = new Set((imp.reading?.rules ?? []).filter((r) => r.important).map((r) => r.id));
+  const ordered = [...all.filter((q) => q.confidence.level === "conflict"), ...all.filter((q) => q.confidence.level === "inferred" && important.has(q.ruleId))];
+  return { asked: ordered.slice(0, MAX_IMPORT_QUESTIONS), notAsked: ordered.slice(MAX_IMPORT_QUESTIONS) };
+}
+
+/** What an answer is on: a rule of the import, or one of its parts. */
+export type ImportTarget = ImportAnswer["on"];
+
+/** The options of a rule or a part; none for one the import does not have. */
+export function importOptions(s: State, on: ImportTarget): ImportOption[] {
+  const imp = s.studio.import;
+  if (!imp) return [];
+  if ("part" in on) return importParts(s).some((p) => p.id === on.part) ? CONFIRM_OR_CORRECT : [];
+  const rule = imp.reading?.rules.find((r) => r.id === on.rule);
+  return rule ? ruleOptions(rule, ruleConfidence(imp, rule)) : [];
+}
+
 // ---------- the owner answers ----------
 
 export type ImportAnswerInput = Omit<ImportAnswer, "at">;
 
 /**
- * The owner's answers on the import's rules and parts, sent together. Each names a rule of the reading or a part of
- * round 0, and an option; "correct" comes with its kind and the owner's words. The newest answer on an item counts.
+ * The owner's answers on the import's rules and parts, sent together, in the review or after the baseline. Each names
+ * a rule of the reading or a part of round 0, and one of its options; Neither and Correct come with the owner's words,
+ * and Correct with its kind. The newest answer on an item counts.
  */
 export function answerImport(state: State, answers: ImportAnswerInput[], now: string): State {
   const imp = getImport(state);
   if (imp.stopped) throw new ControlError(`The import stopped: ${imp.stopped.reason}`);
-  if (!imp.reading) throw new ControlError("The import is still reading: there is nothing to answer yet.");
+  if (importStatus(state) === "reading") throw new ControlError("The import is still reading: there is nothing to answer yet.");
   if (!answers.length) throw new ControlError("Answer at least one question first.");
   const seen = new Set<string>();
   const records = answers.map((a): ImportAnswer => {
-    const key = "rule" in a.on ? `rule:${a.on.rule}` : `part:${a.on.part}`;
-    if ("rule" in a.on) {
-      const id = a.on.rule;
-      if (!imp.reading!.rules.some((r) => r.id === id)) throw new ControlError(`The import has no rule ${show(id, 30)}.`);
-    } else {
-      const id = a.on.part;
-      if (!importParts(state).some((p) => p.id === id)) throw new ControlError(`${show(id, 30)} is not a part of the import.`);
-    }
+    const on: ImportTarget = "rule" in a.on ? { rule: a.on.rule } : { part: a.on.part };
+    const name = "rule" in on ? on.rule : (importParts(state).find((p) => p.id === on.part)?.title ?? on.part);
+    const options = importOptions(state, on);
+    if (!options.length) throw new ControlError("rule" in on ? `The import has no rule ${show(on.rule, 30)}.` : `${show(on.part, 30)} is not a part of the import.`);
+    const key = JSON.stringify(on);
     if (seen.has(key)) throw new ControlError("Each rule or part is answered once in a send.");
     seen.add(key);
-    const option = a.option.trim();
-    if (!/^[a-z0-9-]{1,40}$/.test(option)) throw new ControlError(`${show(option, 40)} is not an option.`);
-    if ((option === "correct") !== (a.correction !== undefined)) throw new ControlError('"Correct" says whether tally should do something else or the reader misread it; no other option does.');
+    const option = options.find((o) => o.id === a.option);
+    if (!option) throw new ControlError(`${name} has no option ${show(a.option, 40)}: ${options.map((o) => o.id).join(", ")}.`);
+    if ((option.id === "correct") !== (a.correction !== undefined)) throw new ControlError('"Correct" says whether tally should do something else or the reader misread it; no other option does.');
     const text = a.text === undefined ? "" : a.text.replace(/\r\n?/g, "\n").trim();
+    if (option.needsText && !text) throw new ControlError(`${option.label} needs your words: what is right.`);
     if (text.length > 2000) throw new ControlError("Your words are over 2000 characters.");
-    return { on: "rule" in a.on ? { rule: a.on.rule } : { part: a.on.part }, option, ...(a.correction ? { correction: a.correction } : {}), ...(text ? { text } : {}), at: now };
+    return { on, option: option.id, ...(a.correction ? { correction: a.correction } : {}), ...(text ? { text } : {}), at: now };
   });
   const s = draft(state);
   s.studio.import!.answers.push(...records);
@@ -409,12 +506,103 @@ export function answerImport(state: State, answers: ImportAnswerInput[], now: st
   return s;
 }
 
-// ---------- the baseline Lock in ----------
+// ---------- what an answer does (2.3) ----------
 
-/** Whether a blueprint item stands for a reproduction of the code as it is today (an "as is" version). */
-export function isAsIsItem(s: State, item: Pick<BlueprintItem, "artifactId" | "version">): boolean {
-  return s.studio.artifacts.some((a) => a.id === item.artifactId && a.version === item.version && !!a.provenance);
+/**
+ * What an answer does:
+ * - kept: the code stays as it is (Keep, Confirm): the baseline holds the item, "you confirmed it";
+ * - change: an answer unlike the code (another source, the failing test, Neither, Correct "do something else", and
+ *   after the Lock in any correction, Q6): the baseline keeps what the code does, and the owner's words wait as a
+ *   change request on the part (C5);
+ * - fixed: Correct "the reader misread it", before the Lock in: a designer's fix writes the part's next version, which
+ *   the baseline holds.
+ * An item with no answer is "open": it goes in as the code has it, "not confirmed", and its question stays in Vision.
+ */
+export type AnswerEffect = "kept" | "change" | "fixed";
+
+export function answerEffect(imp: ProjectImport, a: ImportAnswer): AnswerEffect {
+  if (a.option === "correct") return a.correction === "misread" && !(imp.lockedInAt && a.at >= imp.lockedInAt) ? "fixed" : "change";
+  return a.option === "keep" || a.option === "confirm" ? "kept" : "change";
 }
+
+const sameTarget = (a: ImportTarget, b: ImportTarget) => JSON.stringify(a) === JSON.stringify(b);
+
+/** The answer that counts on each answered item, in the order the items were first answered. */
+function currentAnswers(imp: ProjectImport): ImportAnswer[] {
+  const latest = new Map<string, ImportAnswer>();
+  for (const a of imp.answers) latest.set(JSON.stringify(a.on), a);
+  return [...latest.values()];
+}
+
+/** What the answer that counts on an item does, or "open" when the item has none. */
+export function itemAnswerEffect(imp: ProjectImport, on: ImportTarget): AnswerEffect | "open" {
+  const a = currentAnswers(imp).find((x) => sameTarget(x.on, on));
+  return a ? answerEffect(imp, a) : "open";
+}
+
+/** The part an answer is about: the part itself, or the part whose rules place the rule. */
+function partOf(s: State, on: ImportTarget): StudioArtifact | undefined {
+  return "part" in on ? latestVersion(s, on.part) : partOfRule(s, on.rule);
+}
+
+/** The newest version of a part made at or before `at`. */
+const versionAt = (s: State, artifactId: string, at: string) => Math.max(0, ...s.studio.artifacts.filter((a) => a.id === artifactId && a.at <= at).map((a) => a.version));
+
+/** The owner's words for an answer: what they wrote, else the option they picked. */
+function answerWords(s: State, a: ImportAnswer): string {
+  return a.text ?? importOptions(s, a.on).find((o) => o.id === a.option)?.label ?? a.option;
+}
+
+/**
+ * A change the owner asked for in an answer (C5): on which part, in their words, and whether it is still open. It is
+ * open while no newer version of its part exists than the one the owner answered on (derived, never stored). The
+ * lead's next round designs the open ones.
+ */
+export interface ChangeRequest {
+  on: ImportTarget;
+  artifactId: string;
+  text: string;
+  at: string;
+  open: boolean;
+}
+
+export function changeRequests(s: State): ChangeRequest[] {
+  const imp = s.studio.import;
+  if (!imp) return [];
+  return currentAnswers(imp).flatMap((a) => {
+    const part = answerEffect(imp, a) === "change" ? partOf(s, a.on) : undefined;
+    return part ? [{ on: a.on, artifactId: part.id, text: answerWords(s, a), at: a.at, open: part.version === versionAt(s, part.id, a.at) }] : [];
+  });
+}
+
+/** A part that waits for a designer's fix: the owner said the reader misread it, before the Lock in. */
+export interface FixDue {
+  on: ImportTarget;
+  artifactId: string;
+  text: string;
+  at: string;
+}
+
+/**
+ * The fixes the service asks a designer for, before the Lock in: each "misread" answer whose part has no newer version
+ * than the one the owner answered on, and no fix run under way. The baseline Lock in waits for them.
+ */
+export function importFixesDue(s: State): FixDue[] {
+  const imp = s.studio.import;
+  if (!imp || imp.lockedInAt || imp.stopped) return [];
+  const fixing = new Set(importRuns(s, "fix").filter(isUnderWay).map((r) => r.artifactId));
+  const due = new Map<string, FixDue>();
+  for (const a of currentAnswers(imp)) {
+    const part = answerEffect(imp, a) === "fixed" ? partOf(s, a.on) : undefined;
+    if (!part || fixing.has(part.id) || part.version !== versionAt(s, part.id, a.at)) continue;
+    // One fix for each part, with every misreading the owner named on it.
+    const prev = due.get(part.id);
+    due.set(part.id, prev ? { ...prev, text: `${prev.text}\n${answerWords(s, a)}` } : { on: a.on, artifactId: part.id, text: answerWords(s, a), at: a.at });
+  }
+  return [...due.values()];
+}
+
+// ---------- the baseline Lock in ----------
 
 /**
  * The state as the baseline Lock in would put it into force: the draft, with every part of round 0 the draft does not
@@ -434,10 +622,30 @@ function withBaseline(state: State): State {
 export const baselineSummary = (s: State) => lockInSummary(withBaseline(s));
 
 /**
+ * Why the baseline Lock in is refused now, or undefined: it is the first Lock in, in Vision, once the review is open,
+ * and after every fix the owner asked for (the baseline holds the fixed versions).
+ */
+export function baselineBlocker(s: State): string | undefined {
+  const imp = s.studio.import;
+  if (!imp) return "This project has no import.";
+  if (s.project.stage !== "shaping") return "The baseline is your first Lock in, in Vision.";
+  if (s.blueprint.revisions.length) return "The baseline is the first Lock in, and the blueprint has one already.";
+  const status = importStatus(s);
+  if (status === "stopped") return `The import stopped: ${imp.stopped!.reason}`;
+  if (status === "reading") return "The import is still reading: the baseline waits for the review.";
+  const fixing = new Set([...importFixesDue(s).map((f) => f.artifactId), ...importRuns(s, "fix").filter(isUnderWay).map((r) => r.artifactId!)]);
+  if (fixing.size) return `A part waits for its fix: ${importParts(s).filter((p) => fixing.has(p.id)).map((p) => p.title).join(", ")}. The baseline holds the fixed version.`;
+  return undefined;
+}
+
+/**
  * The baseline Lock in (C4): the owner's command, in Vision. It puts every part of the import into force as blueprint
  * revision 1, marked as the baseline, with the summary the owner saw (`seen`: compare-and-set), and closes round 0.
+ * Refused as `baselineBlocker` says.
  */
 export function lockInBaseline(state: State, seen: SummarySeen, now: string): State {
+  const why = baselineBlocker(state);
+  if (why) throw new ControlError(why);
   const imp = getImport(state);
   const s = withBaseline(draft(state));
   assertSummarySeen(s, seen);
@@ -453,5 +661,7 @@ export function lockInBaseline(state: State, seen: SummarySeen, now: string): St
 
 /** The part of round 0 whose rules place this rule, if any. */
 export function partOfRule(s: State, ruleId: string): StudioArtifact | undefined {
-  return importParts(s).find((a) => a.rules?.some((v) => v.rules.some((r) => r.id === ruleId)));
+  // Its newest version, a later round's too: a change request on the rule closes once that version exists.
+  const placed = s.studio.artifacts.find((a) => a.round === 0 && !!a.provenance && a.rules?.some((v) => v.rules.some((r) => r.id === ruleId)));
+  return placed && latestVersion(s, placed.id);
 }

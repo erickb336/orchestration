@@ -22,11 +22,17 @@
 // Known limit: a landed task does not hold the tests of a task that landed while it was being built, so the newest
 // run that has the tag decides, not the newest run. A later change that deletes a test therefore leaves the earlier
 // result standing; the code review judges a deleted acceptance test.
+//
+// An imported repository (ORC-032, 2.4). Its own tests carry no tags, and the import may not rename them, so a rule
+// may name the tests that prove it (`FlowRule.tests`, by id "suite::name"): such a test proves the line as a tag
+// would. The import's baseline run is one more run, older than any landed one, with the cases its rules name; it
+// ran before the baseline Lock in, and it counts at the time of that Lock in, which put the lines into force.
 
 import { sameSha } from "../checks";
 import * as M from "../model";
 import type { Artifact, State, Task, TestCaseResult, TestReport } from "../types";
 import { blueprintItems, ruleTag } from "./blueprint";
+import { testId } from "./import";
 import { versionsOf } from "./studio";
 import type { BlueprintItem, StudioArtifact, StudioArtifactKind, VariantRules } from "./types";
 
@@ -46,16 +52,23 @@ export const carriesTag = (c: Pick<TestCaseResult, "name" | "suite">, tag: strin
 
 // ---------- an item's rules and examples ----------
 
-/** Kinds whose rules and examples are proved by tests. */
+/**
+ * Kinds that only their rules and examples check: a flow or a contract with none is not verified ("no-rules",
+ * itemStatus.ts). Any part may carry rules (ORC-032 D1), and tests prove the rules of every part that has them.
+ */
 export const TESTED_KINDS: readonly StudioArtifactKind[] = ["flow", "contract"];
 
-/** One rule or example of a blueprint item, with its tag. */
+/** One rule or example of a blueprint item, with its tag, and the existing tests a rule names (ORC-032). */
 export interface RuleLine {
   kind: "rule" | "example";
   id: string;
   text: string;
   tag: string;
+  named?: string[];
 }
+
+/** Does this test prove the line: it carries the line's tag, or the line names it. */
+const proves = (c: TestCaseResult, line: RuleLine) => carriesTag(c, line.tag) || !!line.named?.includes(testId(c));
 
 /** The rules of the item's variant (the one approved, or the only one), from the artifact version the item names. */
 function itemRules(s: State, item: BlueprintItem): VariantRules | undefined {
@@ -69,17 +82,20 @@ function itemRules(s: State, item: BlueprintItem): VariantRules | undefined {
 export function itemRuleLines(s: State, item: BlueprintItem): RuleLine[] {
   const r = itemRules(s, item);
   if (!r) return [];
-  return [...r.rules.map((x) => ({ kind: "rule" as const, id: x.id, text: x.text })), ...r.examples.map((x) => ({ kind: "example" as const, id: x.id, text: x.text }))].map((l) => ({ ...l, tag: ruleTag(item.id, l.id) }));
+  return [
+    ...r.rules.map((x) => ({ kind: "rule" as const, id: x.id, text: x.text, ...(x.tests?.length ? { named: x.tests } : {}) })),
+    ...r.examples.map((x) => ({ kind: "example" as const, id: x.id, text: x.text })),
+  ].map((l) => ({ ...l, tag: ruleTag(item.id, l.id) }));
 }
 
 /**
- * The items in force that tests prove (flows and contracts with rules), with their lines; with `ids`, only those
- * items (a task spec's `blueprintRefs`), in that order. A dropped item has no rules to prove (pass 5).
+ * The items in force that tests prove (any part with rules or examples, ORC-032 D1), with their lines; with `ids`,
+ * only those items (a task spec's `blueprintRefs`), in that order. A dropped item has no rules to prove (pass 5).
  */
 export function testedItems(s: State, ids?: readonly string[]): { item: BlueprintItem; lines: RuleLine[] }[] {
   const items = blueprintItems(s).filter((i) => i.status !== "dropped");
   const chosen = ids ? ids.map((id) => items.find((i) => i.id === id)).filter((i): i is BlueprintItem => !!i) : items;
-  return chosen.filter((item) => TESTED_KINDS.includes(item.kind)).map((item) => ({ item, lines: itemRuleLines(s, item) })).filter((x) => x.lines.length > 0);
+  return chosen.map((item) => ({ item, lines: itemRuleLines(s, item) })).filter((x) => x.lines.length > 0);
 }
 
 /**
@@ -142,14 +158,19 @@ export function landedTestRuns(s: State): LandedTestRun[] {
 
 export type RuleStatus = "passed" | "failed" | "skipped" | "no-test";
 
+/** Where a result comes from: landed work's checks, or (ORC-032) the import's baseline run at its commit. */
+export type ResultSource =
+  | { taskId: string; sha: string; landedAt: string; artifactId: string; simulated?: true; importId?: never }
+  | { importId: string; sha: string; at: string; simulated?: true; taskId?: never };
+
 export interface RuleResult extends RuleLine {
   status: RuleStatus;
-  /** The tests with the tag in the run the result comes from; 0 for "no-test". */
+  /** The tests that prove the line in the run the result comes from; 0 for "no-test". */
   tests: number;
   /** failed: the first failing test and its message; skipped: the first skipped test and its reason; no-test: why there is none. */
   message?: string;
-  /** The landed work the result comes from. Absent for "no-test", except when that run left out a test with the tag. */
-  from?: { taskId: string; sha: string; landedAt: string; artifactId: string; simulated?: true };
+  /** The run the result comes from. Absent for "no-test", except when that run left out a test with the tag. */
+  from?: ResultSource;
 }
 
 export interface ItemRuleResults {
@@ -165,12 +186,41 @@ export interface ItemRuleResults {
   allPass: boolean;
 }
 
+/** A run whose tests can prove a line: a landed task's checks, or the import's baseline run. `at`: when it counts. */
+interface ProvingRun {
+  from: ResultSource;
+  at: string;
+  report: Pick<Extract<TestReport, { status: "read" }>, "cases" | "counts" | "droppedTags">;
+}
+
+const landedRun = (r: LandedTestRun): ProvingRun => ({
+  from: { taskId: r.taskId, sha: r.sha, landedAt: r.landedAt, artifactId: r.artifact.id, ...(r.simulated ? { simulated: true as const } : {}) },
+  at: r.artifact.createdAt,
+  report: r.report,
+});
+
+/**
+ * The import's baseline run (ORC-032), once the baseline is locked in and its tests were read: the cases its rules
+ * name, counted at the time of the Lock in, which put the lines into force.
+ */
+function baselineRun(s: State): ProvingRun | undefined {
+  const imp = s.studio.import;
+  if (!imp?.lockedInAt || imp.checks.status !== "read" || !imp.reading) return undefined;
+  return { from: { importId: imp.id, sha: imp.commit, at: imp.lockedInAt, ...(imp.checks.simulated ? { simulated: true as const } : {}) }, at: imp.lockedInAt, report: { cases: imp.reading.cases, counts: imp.checks.counts } };
+}
+
+/** Every run that can prove a line, newest first: landed work's checks, then the import's baseline run. */
+function provingRuns(s: State): ProvingRun[] {
+  const base = baselineRun(s);
+  return [...landedTestRuns(s).map(landedRun), ...(base ? [base] : [])];
+}
+
 const MESSAGE_CAP = 300;
 const clipped = (t: string) => (t.length > MESSAGE_CAP ? `${t.slice(0, MESSAGE_CAP - 1)}…` : t);
 
-/** The result of one line from one run's tests that carry its tag (at least one). */
-function fromCases(line: RuleLine, run: LandedTestRun, cases: TestCaseResult[]): RuleResult {
-  const from = { taskId: run.taskId, sha: run.sha, landedAt: run.landedAt, artifactId: run.artifact.id, ...(run.simulated ? { simulated: true as const } : {}) };
+/** The result of one line from one run's tests that prove it (at least one). */
+function fromCases(line: RuleLine, run: ProvingRun, cases: TestCaseResult[]): RuleResult {
+  const from = run.from;
   const bad = cases.find((c) => c.status === "failed" || c.status === "error");
   if (bad) return { ...line, status: "failed", tests: cases.length, message: clipped(`${bad.name}: ${bad.message || (bad.status === "error" ? "the test stopped with an error" : "the test failed")}`), from };
   const skipped = cases.find((c) => c.status === "skipped");
@@ -179,37 +229,46 @@ function fromCases(line: RuleLine, run: LandedTestRun, cases: TestCaseResult[]):
 }
 
 /** Did this run's report leave out a test with the tag (a report of more than 400 tests)? */
-function leftOut(run: LandedTestRun, tag: string): boolean {
+function leftOut(run: ProvingRun, tag: string): boolean {
   const d = run.report.droppedTags;
   return d === "unlisted" || !!d?.includes(tag);
 }
 
 /** The result of a line whose tag lost a test in this run: failed when a kept test failed, else not known. */
-function cutFrom(line: RuleLine, run: LandedTestRun, cases: TestCaseResult[]): RuleResult {
+function cutFrom(line: RuleLine, run: ProvingRun, cases: TestCaseResult[]): RuleResult {
   if (cases.some((c) => c.status === "failed" || c.status === "error")) return fromCases(line, run, cases);
   const total = Object.values(run.report.counts).reduce((a, b) => a + b, 0);
-  const from = { taskId: run.taskId, sha: run.sha, landedAt: run.landedAt, artifactId: run.artifact.id, ...(run.simulated ? { simulated: true as const } : {}) };
-  return { ...line, status: "no-test", tests: 0, message: `The newest checks with ${line.tag} wrote ${total} tests, more than the service keeps, and left out some with this tag: the result is not known.`, from };
+  return { ...line, status: "no-test", tests: 0, message: `The newest checks with ${line.tag} wrote ${total} tests, more than the service keeps, and left out some with this tag: the result is not known.`, from: run.from };
 }
 
-/** Why a line has no test: no report was ever read, its tests ran before its current text, or no test carries its tag. */
-function noTest(s: State, line: RuleLine, runs: LandedTestRun[]): RuleResult {
-  const message = !runs.length
-    ? s.project.checks.testReport
-      ? "No landed work has a test report yet."
-      : "The check settings name no test report, so no test result is read (Settings → Checks)."
-    : runs.some((r) => r.report.cases.some((c) => carriesTag(c, line.tag)))
-      ? `The tests that carry ${line.tag} ran before this text was approved, and no later landed checks have one.`
-      : `No test in the checks of landed work carries ${line.tag}.`;
+/**
+ * Why a line has no test: in an imported project, the import's tests did not run, or neither they nor landed checks
+ * prove it; else no report was ever read, its tests ran before its current text, or no test carries its tag.
+ */
+function noTest(s: State, line: RuleLine, runs: ProvingRun[]): RuleResult {
+  const imp = s.studio.import?.lockedInAt ? s.studio.import : undefined;
+  const landed = runs.filter((r) => r.from.taskId !== undefined);
+  const message =
+    imp && imp.checks.status === "not-run" && !landed.length
+      ? `The import's tests did not run: ${imp.checks.reason}.`
+      : landed.some((r) => r.report.cases.some((c) => carriesTag(c, line.tag)))
+        ? `The tests that carry ${line.tag} ran before this text was approved, and no later landed checks have one.`
+        : imp
+          ? `No test proves it yet: the import's tests name none, and no landed checks carry ${line.tag}.`
+          : !runs.length
+            ? s.project.checks.testReport
+              ? "No landed work has a test report yet."
+              : "The check settings name no test report, so no test result is read (Settings → Checks)."
+            : `No test in the checks of landed work carries ${line.tag}.`;
   return { ...line, status: "no-test", tests: 0, message };
 }
 
-function resultsFor(s: State, item: BlueprintItem, lines: RuleLine[], runs: LandedTestRun[]): ItemRuleResults {
+function resultsFor(s: State, item: BlueprintItem, lines: RuleLine[], runs: ProvingRun[]): ItemRuleResults {
   const results = lines.map((line) => {
     const since = lineSince(s, item.id, line) ?? "";
     for (const run of runs) {
-      if (run.artifact.createdAt < since) continue;
-      const cases = run.report.cases.filter((c) => carriesTag(c, line.tag));
+      if (run.at < since) continue;
+      const cases = run.report.cases.filter((c) => proves(c, line));
       if (leftOut(run, line.tag)) return cutFrom(line, run, cases);
       if (cases.length) return fromCases(line, run, cases);
     }
@@ -233,11 +292,11 @@ function resultsFor(s: State, item: BlueprintItem, lines: RuleLine[], runs: Land
 /** The rule results of one blueprint item; undefined when it is not in the blueprint or has no rules. */
 export function ruleResults(s: State, itemId: string): ItemRuleResults | undefined {
   const [x] = testedItems(s, [itemId]);
-  return x && resultsFor(s, x.item, x.lines, landedTestRuns(s));
+  return x && resultsFor(s, x.item, x.lines, provingRuns(s));
 }
 
-/** The rule results of every flow and contract with rules in the current blueprint, in the blueprint's order. */
+/** The rule results of every part with rules in the current blueprint, in the blueprint's order. */
 export function blueprintRuleResults(s: State): ItemRuleResults[] {
-  const runs = landedTestRuns(s);
+  const runs = provingRuns(s);
   return testedItems(s).map((x) => resultsFor(s, x.item, x.lines, runs));
 }

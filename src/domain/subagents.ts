@@ -6,7 +6,7 @@
 import { draft, event } from "./model/core";
 import { baseId } from "./model/fanout";
 import { providerLabel } from "./model/resolution";
-import { isResearchRun, type StudioRun } from "./studio/types";
+import type { StudioRun } from "./studio/types";
 import {
   ControlError,
   MAX_SUBAGENTS_LISTED,
@@ -109,20 +109,26 @@ export function setResearchHelpers(state: State, key: string, cap: number | null
 // ---------- what a run may start ----------
 
 /**
- * What a run may start, from the setting's key and the run's provider: the cap when the owner allows it there, else
- * none. On a provider whose cap holds only at once (HELPER_CAP), the allowance says so.
+ * What a run may start, from the cap the owner set for its step and the run's provider: the cap when the provider
+ * tracks helpers, else none. On a provider whose cap holds only at once (HELPER_CAP), the allowance says so.
  */
-function allowance(s: State, key: string | undefined, provider: Runner): SubagentAllowance | undefined {
-  if (!key || !isProvider(provider) || !s.project.subagentProviders.includes(provider)) return undefined;
-  const set = s.project.researchHelpers[key];
-  return set ? { cap: set.cap, ...(HELPER_CAP[provider] === "at once" ? { atOnce: true as const } : {}) } : undefined;
+function allowance(s: State, cap: number | null | undefined, provider: Runner): SubagentAllowance | undefined {
+  if (!cap || !isProvider(provider) || !s.project.subagentProviders.includes(provider)) return undefined;
+  return { cap, ...(HELPER_CAP[provider] === "at once" ? { atOnce: true as const } : {}) };
 }
 
-/** What a task step's run may start, resolved at dispatch and recorded in its snapshot. */
-export const allowSubagentsForStep = (s: State, t: Task, st: Pick<StepDef, "id" | "research">, provider: Runner) => allowance(s, taskStepKey(t, st), provider);
+/** The cap the owner set for a research step's setting, if any. */
+const capOf = (s: State, key: string | undefined) => (key ? s.project.researchHelpers[key]?.cap : undefined);
 
-/** What a studio run may start: a probe's run, under the probes' setting; no other studio run. */
-export const allowSubagentsForStudioRun = (s: State, r: Pick<StudioRun, "kind" | "provider">) => (isResearchRun(r.kind) ? allowance(s, PROBE_KEY, r.provider) : undefined);
+/** What a task step's run may start, resolved at dispatch and recorded in its snapshot. */
+export const allowSubagentsForStep = (s: State, t: Task, st: Pick<StepDef, "id" | "research">, provider: Runner) => allowance(s, capOf(s, taskStepKey(t, st)), provider);
+
+/**
+ * What a studio run may start: a probe's run, under the probes' setting; the import's reader (ORC-032), under the cap
+ * the owner set when starting the import; no other studio run.
+ */
+export const allowSubagentsForStudioRun = (s: State, r: Pick<StudioRun, "kind" | "provider">) =>
+  allowance(s, r.kind === "reader" ? s.studio.import?.helpers : r.kind === "probe" ? capOf(s, PROBE_KEY) : undefined, r.provider);
 
 // ---------- the record ----------
 
