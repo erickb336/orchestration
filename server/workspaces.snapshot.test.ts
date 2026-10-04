@@ -117,10 +117,12 @@ describe("a snapshot of a commit (SR-2, INT-F3)", () => {
       expect(() => ws.snapshot({ repoPath: repo, projectId: "p", attemptId: "g", commit: gitlinks })).toThrow(/more than 3 files/);
       SNAPSHOT_CAPS.files = 4;
       expect(existsSync(join(ws.snapshot({ repoPath: repo, projectId: "p", attemptId: "g2", commit: gitlinks }).path, "s3"))).toBe(true);
-      // A path 65 folders deep.
+      // A file with 64 folders above it is written; with 65, the commit is refused (L1).
       let deep = tree([`100644 blob ${blob("x\n")}\tx`]);
       for (let i = 0; i < 64; i++) deep = tree([`040000 tree ${deep}\td`]);
-      expect(() => ws.snapshot({ repoPath: repo, projectId: "p", attemptId: "d", commit: commitOf(deep) })).toThrow(/more than 64 folders deep/);
+      expect(existsSync(join(ws.snapshot({ repoPath: repo, projectId: "p", attemptId: "d64", commit: commitOf(deep) }).path, ...Array(64).fill("d"), "x"))).toBe(true);
+      deep = tree([`040000 tree ${deep}\td`]);
+      expect(() => ws.snapshot({ repoPath: repo, projectId: "p", attemptId: "d", commit: commitOf(deep) })).toThrow("the commit has a file with more than 64 folders above it");
       expect(existsSync(ws.pathFor(repo, "d", "p"))).toBe(false);
       // Batches of at most 4 bytes (or one larger file): every file still has its own bytes.
       SNAPSHOT_CAPS.batch = 4;

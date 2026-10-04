@@ -112,8 +112,8 @@ export interface RepoSnapshot {
 }
 
 /**
- * What one snapshot may hold: paths (files, links and submodules), bytes, and folders above a path (the capture's copy
- * has the same caps); and the most bytes one read of git's object store holds (SR-4).
+ * What one snapshot may hold: paths (files, links and submodules), bytes, and folders above a file (64 pass, 65 are
+ * refused; the capture's copy has its own caps, COPY_CAPS in studio/evidence.ts); and the most bytes one read of git's object store holds (SR-4).
  */
 export const SNAPSHOT_CAPS = { files: 20_000, bytes: 512 * 1024 * 1024, depth: 64, batch: 16 * 1024 * 1024 };
 
@@ -379,7 +379,8 @@ export class WorkspaceManager {
       const rel = row.slice(tab + 1);
       const parts = rel.split("/");
       if (tab < 0 || parts.some((p) => !p || p === "." || p === ".." || p.toLowerCase() === ".git")) throw new Error(`the commit names a path the service does not write: ${JSON.stringify(rel.slice(0, 120))}`);
-      if (parts.length > SNAPSHOT_CAPS.depth) throw new Error(`the commit has a path more than ${SNAPSHOT_CAPS.depth} folders deep`);
+      // The folders above a path: every part but its last.
+      if (parts.length - 1 > SNAPSHOT_CAPS.depth) throw new Error(`the commit has a file with more than ${SNAPSHOT_CAPS.depth} folders above it`);
       // ls-tree gives "-" for the size of a blob that is not in the object store: fail closed (SR-3).
       if (type === "blob" && !/^\d+$/.test(size ?? "")) throw new Error(`could not read the files of commit ${base.slice(0, 12)}: ${rel.slice(0, 120)} is missing`);
       return { mode, type, oid, size: Number(size) || 0, rel };
