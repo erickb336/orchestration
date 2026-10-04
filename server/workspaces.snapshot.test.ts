@@ -143,6 +143,11 @@ describe("a snapshot of a commit (SR-2, INT-F3)", () => {
     // Without the promisor config, the missing file is still never fetched: the snapshot stops.
     execFileSync("git", ["-C", partial, "config", "--unset", "extensions.partialClone"]);
     execFileSync("git", ["-C", partial, "config", "--unset", "remote.origin.promisor"]);
+    // git 2.17 to 2.26 marked a partial clone with core.partialClone only (S3-1): it is refused too.
+    execFileSync("git", ["-C", partial, "config", "core.partialClone", "origin"]);
+    expect(() => ws.snapshot({ repoPath: partial, projectId: "p", attemptId: "z1", commit })).toThrow(/partial clone/);
+    expect(existsSync(marker)).toBe(false);
+    execFileSync("git", ["-C", partial, "config", "--unset", "core.partialClone"]);
     expect(() => ws.snapshot({ repoPath: partial, projectId: "p", attemptId: "z2", commit })).toThrow(/could not read the files/);
     expect(existsSync(marker)).toBe(false);
     expect(existsSync(ws.pathFor(partial, "z2", "p"))).toBe(false);

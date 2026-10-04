@@ -147,11 +147,11 @@ export const gitSafeFlags = (noHooks: string): string[] => ["-c", `core.hooksPat
 export const PARTIAL_CLONE_REFUSED = "This repository is a partial clone: git would fetch its missing files from its remote, and that can run a command on this computer. Import a full clone.";
 
 /**
- * Whether the repository's config, in any file git reads, names a promisor remote: extensions.partialClone, or any
- * remote.<name>.promisor. Such a repository is refused for the import, even though gitEnv stops each lazy fetch.
+ * Whether the repository's config, in any file git reads, names a promisor remote: extensions.partialClone,
+ * core.partialClone (git 2.17 to 2.26 set it in place of the extension), or any remote.<name>.promisor. Such a repository is refused for the import, even though gitEnv stops each lazy fetch.
  */
 export function isPartialClone(repo: string, flags: string[], gitBin = "git"): boolean {
-  const r = spawnSync(gitBin, [...flags, "-C", repo, "config", "--get-regexp", "^(extensions\\.partialclone|remote\\..*\\.promisor)$"], { encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "ignore"], timeout: 10_000 });
+  const r = spawnSync(gitBin, [...flags, "-C", repo, "config", "--get-regexp", "^(extensions\\.partialclone|core\\.partialclone|remote\\..*\\.promisor)$"], { encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "ignore"], timeout: 10_000 });
   return r.status === 0 && r.stdout.trim() !== "";
 }
 
