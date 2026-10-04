@@ -36,12 +36,12 @@ import type { EnvironmentAssignment } from "../checks";
 import { lastJsonObject } from "../envelope";
 import type { Store } from "../store";
 import { clearReport, keepCases, readTestReport } from "../testReport";
-import type { WorkspaceManager } from "../workspaces";
+import { PARTIAL_CLONE_REFUSED, type WorkspaceManager } from "../workspaces";
 import type { StagedArtifact } from "./artifacts";
 import { captureEvidence, evidenceDir, type EnvironmentLender } from "./evidence";
 import { sharedEnvironments } from "../environment/prepared";
 import { readDevcontainer, type ReadAtBase } from "../environment/devcontainer";
-import { repoAt, repoFiles } from "./existing";
+import { partialClone, repoAt, repoFiles } from "./existing";
 import { PROPOSAL_MARKERS, proposeImage } from "../../src/domain/environment";
 import { suggestChecks } from "../../src/domain/checks";
 import type { ImportStartInfo } from "../../src/api";
@@ -605,6 +605,7 @@ const CHECK_FILES = ["package.json", "package-lock.json", "pnpm-lock.yaml", "yar
  */
 export function importStartInfo(path: string, read?: ReadAtBase): ImportStartInfo {
   if (!path.trim()) return { ok: false, reason: "Give the repository's path." };
+  if (partialClone(path)) return { ok: false, reason: PARTIAL_CLONE_REFUSED };
   const at = repoAt(path);
   if (!at) return { ok: false, reason: `${path} is not a git repository with a commit.` };
   const files = repoFiles(path) ?? [];

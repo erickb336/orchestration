@@ -9,6 +9,7 @@
 // a large repository can never fail an import after its designer run was paid for.
 
 import { execFileSync } from "node:child_process";
+import { gitEnv, gitSafeFlags, isPartialClone } from "../workspaces";
 
 /** Files that describe a repository rather than make up its product: documents, licences, git and editor settings, images. */
 const NOT_CODE = /(^|\/)(readme|license|licence|copying|notice|changelog|contributing|authors|code_of_conduct)(\.[^/]*)?$|(^|\/)\.(gitignore|gitattributes|gitmodules|editorconfig)$|\.(md|markdown|txt|rst|adoc|png|jpe?g|gif|webp|ico|svg|pdf)$/i;
@@ -16,8 +17,15 @@ const NOT_CODE = /(^|\/)(readme|license|licence|copying|notice|changelog|contrib
 /** Whether a tracked file is code: anything but documents, licences, git and editor settings, and images. */
 export const isCode = (path: string) => !NOT_CODE.test(path);
 
+/** The service's git flags; /dev/null holds no hooks. */
+const FLAGS = gitSafeFlags("/dev/null");
+
+/** Git with the service's environment and flags (SR-3): no hook, no fsmonitor, and no lazy fetch of a missing object. */
 const git = (repoPath: string, args: string[], maxBuffer = 1024 * 1024) =>
-  execFileSync("git", ["-C", repoPath, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000, maxBuffer });
+  execFileSync("git", [...FLAGS, "-C", repoPath, ...args], { encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "ignore"], timeout: 10_000, maxBuffer });
+
+/** Whether the repository is a partial clone, which the import refuses (SR-3). */
+export const partialClone = (repoPath: string) => isPartialClone(repoPath, FLAGS);
 
 /** The commit at HEAD, or undefined when the repository cannot be read (no repository, no commit). */
 function head(repoPath: string): string | undefined {
@@ -114,11 +122,13 @@ export function repoAt(repoPath: string): RepoAt | undefined {
       const tab = row.indexOf("\t");
       if (tab < 0) continue;
       const path = row.slice(tab + 1);
+      const [, type, , size] = row.slice(0, tab).trim().split(/\s+/);
+      // ls-tree gives "-" for the size of a blob that is not in the object store: fail closed (SR-3).
+      if (type === "blob" && !/^\d+$/.test(size ?? "")) return undefined;
       if (!isCode(path)) continue;
       if (TEST_FILE.test(path)) testFiles++;
       else sourceFiles++;
-      const size = Number(row.slice(0, tab).trim().split(/\s+/)[3]);
-      if (Number.isFinite(size)) bytes += size;
+      if (type === "blob") bytes += Number(size);
     }
     return { commit, ...(branch ? { branch } : {}), size: { sourceFiles, testFiles, kb: Math.round((bytes / 1024) * 10) / 10 } };
   } catch {

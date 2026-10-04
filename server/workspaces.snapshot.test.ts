@@ -8,7 +8,8 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { WorkspaceManager } from "./workspaces";
+import { hostilePartialClone } from "./testing/partialClone";
+import { SNAPSHOT_CAPS, WorkspaceManager } from "./workspaces";
 
 let dir: string;
 let repo: string;
@@ -100,5 +101,48 @@ describe("a snapshot of a commit (SR-2, INT-F3)", () => {
     expect(() => ws.snapshot({ repoPath: repo, projectId: "p", attemptId: "y", commit })).toThrow(/names "a" twice, or a file and a folder alike/);
     expect(existsSync(join(outside, "x"))).toBe(false);
     expect(existsSync(ws.pathFor(repo, "y", "p"))).toBe(false);
+  });
+
+  it("counts submodules and links in its caps, refuses a path too deep, and reads the files a batch at a time (SR-4)", () => {
+    const blob = (text: string) => execFileSync("git", ["-C", repo, "hash-object", "-w", "--stdin"], { input: text, encoding: "utf8" }).trim();
+    const tree = (rows: string[]) => execFileSync("git", ["-C", repo, "mktree", "--missing"], { input: rows.join("\n") + "\n", encoding: "utf8" }).trim();
+    const commitOf = (root: string) => execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit-tree", root, "-m", "c"], { encoding: "utf8" }).trim();
+    git("commit", "-q", "--allow-empty", "-m", "first");
+    const ws = new WorkspaceManager(join(dir, "worktrees"));
+    const caps = { ...SNAPSHOT_CAPS };
+    try {
+      // One file and three submodules: four paths.
+      const gitlinks = commitOf(tree([`100644 blob ${blob("a\n")}\ta.txt`, ...["s1", "s2", "s3"].map((s) => `160000 commit ${"1".repeat(40)}\t${s}`)]));
+      SNAPSHOT_CAPS.files = 3;
+      expect(() => ws.snapshot({ repoPath: repo, projectId: "p", attemptId: "g", commit: gitlinks })).toThrow(/more than 3 files/);
+      SNAPSHOT_CAPS.files = 4;
+      expect(existsSync(join(ws.snapshot({ repoPath: repo, projectId: "p", attemptId: "g2", commit: gitlinks }).path, "s3"))).toBe(true);
+      // A path 65 folders deep.
+      let deep = tree([`100644 blob ${blob("x\n")}\tx`]);
+      for (let i = 0; i < 64; i++) deep = tree([`040000 tree ${deep}\td`]);
+      expect(() => ws.snapshot({ repoPath: repo, projectId: "p", attemptId: "d", commit: commitOf(deep) })).toThrow(/more than 64 folders deep/);
+      expect(existsSync(ws.pathFor(repo, "d", "p"))).toBe(false);
+      // Batches of at most 4 bytes (or one larger file): every file still has its own bytes.
+      SNAPSHOT_CAPS.batch = 4;
+      const many = commitOf(tree([`100644 blob ${blob("one\n")}\t1.txt`, `100644 blob ${blob("two\n")}\t2.txt`, `100644 blob ${blob("a longer file\n")}\t3.txt`, `120000 blob ${blob("1.txt")}\tl`]));
+      const snap = ws.snapshot({ repoPath: repo, projectId: "p", attemptId: "b", commit: many });
+      expect(["1.txt", "2.txt", "3.txt", "l"].map((f) => readFileSync(join(snap.path, f), "utf8"))).toEqual(["one\n", "two\n", "a longer file\n", "one\n"]);
+      expect(readlinkSync(join(snap.path, "l"))).toBe("1.txt");
+    } finally {
+      Object.assign(SNAPSHOT_CAPS, caps);
+    }
+  });
+
+  it("refuses a partial clone, and runs none of its remote's commands; a missing file fails closed (SR-3)", () => {
+    const { repo: partial, marker, commit } = hostilePartialClone(dir);
+    const ws = new WorkspaceManager(join(dir, "worktrees"));
+    expect(() => ws.snapshot({ repoPath: partial, projectId: "p", attemptId: "z", commit })).toThrow(/partial clone/);
+    expect(existsSync(marker)).toBe(false);
+    // Without the promisor config, the missing file is still never fetched: the snapshot stops.
+    execFileSync("git", ["-C", partial, "config", "--unset", "extensions.partialClone"]);
+    execFileSync("git", ["-C", partial, "config", "--unset", "remote.origin.promisor"]);
+    expect(() => ws.snapshot({ repoPath: partial, projectId: "p", attemptId: "z2", commit })).toThrow(/could not read the files/);
+    expect(existsSync(marker)).toBe(false);
+    expect(existsSync(ws.pathFor(partial, "z2", "p"))).toBe(false);
   });
 });

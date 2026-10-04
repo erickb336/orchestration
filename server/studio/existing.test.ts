@@ -1,11 +1,13 @@
 // ORC-029 pass 4: an existing repository, read only from git at HEAD: whether it has code, and which files it tracks.
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { hostilePartialClone } from "../testing/partialClone";
 import { isCode, repoAt, repoFiles, repoGlance, trackedAmong } from "./existing";
+import { importStartInfo } from "./import";
 
 let dir: string;
 beforeEach(() => {
@@ -28,6 +30,15 @@ function repo(files: Record<string, string>, commit = true): string {
 }
 
 describe("an existing repository", () => {
+  it("a partial clone: Start refuses it with a plain reason, and no read runs its remote's command (SR-3)", () => {
+    const { repo: partial, marker } = hostilePartialClone(dir);
+    expect(importStartInfo(partial)).toEqual({ ok: false, reason: "This repository is a partial clone: git would fetch its missing files from its remote, and that can run a command on this computer. Import a full clone." });
+    // Each read fails closed on the missing file: git fetches nothing.
+    expect(repoAt(partial)).toBeUndefined();
+    expect(repoFiles(partial)).toEqual(["README.md", "src/app.js"]);
+    expect(existsSync(marker)).toBe(false);
+  });
+
   it("code is anything but documents, licences, git and editor settings, and images", () => {
     for (const p of ["src/App.tsx", "index.html", "styles/site.css", "main.go", "infra/main.tf", "k8s/deploy.yaml", "Makefile", "Dockerfile", "docs/api.json"]) expect([p, isCode(p)]).toEqual([p, true]);
     for (const p of ["README.md", "docs/guide.md", "LICENSE", "licence.txt", "CHANGELOG", ".gitignore", "sub/.editorconfig", "logo.png", "notes.txt"]) expect([p, isCode(p)]).toEqual([p, false]);
