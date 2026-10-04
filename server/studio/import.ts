@@ -390,7 +390,8 @@ const BRIEF: Record<Exclude<ImportStep, "fix">, string> = {
 /**
  * Ask for the import's next runs, in order (C2): the words at once; the rules reader once the checks are recorded; the
  * parts once the rules are; a fix for each "the reader misread it" answer before the baseline. A step whose run is
- * under way, or done, asks for nothing; one whose runs failed MAX_STEP_RUNS times stops the import, with the reason.
+ * under way, or done, asks for nothing; one whose runs failed MAX_STEP_RUNS times stops the import, with the reason. A
+ * lost run (the service stopped under it) is asked for again, as a pause does: the import's budget limits the spend.
  * Pure: the scheduler applies it under the lease.
  */
 export function askForImportRuns(state: State, now: string): State {
@@ -408,14 +409,14 @@ export function askForImportRuns(state: State, now: string): State {
       if (!due[step]) continue;
       const runs = I.importRuns(s, step);
       if (runs.some((r) => isUnderWay(r) || r.status === "completed")) continue;
-      const failed = runs.filter((r) => r.status === "failed" || r.status === "lost");
+      const failed = runs.filter((r) => r.status === "failed");
       if (failed.length >= MAX_STEP_RUNS) return I.stopImport(s, { importId: imp.id, reason: `the ${STEP_WORDS[step]} failed ${failed.length} times: ${failed.at(-1)!.note ?? "no reason was given"}` }, now);
       s = R.requestStudioRun(s, { kind: step === "rules" ? "reader" : "designer", round: 0, brief: BRIEF[step], importStep: step }, now).state;
     }
     // The fixes the domain says are due (importFixesDue): a part the owner says the reader misread, before the baseline.
     for (const fix of I.importFixesDue(s)) {
       const part = latestVersion(s, fix.artifactId)!;
-      const failed = I.importRuns(s, "fix").filter((r) => r.artifactId === part.id && r.askedAt >= fix.at && (r.status === "failed" || r.status === "lost"));
+      const failed = I.importRuns(s, "fix").filter((r) => r.artifactId === part.id && r.askedAt >= fix.at && r.status === "failed");
       if (failed.length >= MAX_STEP_RUNS) return I.stopImport(s, { importId: imp.id, reason: `the fix of ${part.title} failed ${failed.length} times: ${failed.at(-1)!.note ?? "no reason was given"}` }, now);
       const brief = `The owner says the reader misread ${part.title}, in their words:\n${fix.text}\nRevise ${part.title} so it shows what the code does at commit ${short(imp.commit)}. Keep every other rule as it is.`;
       s = R.requestStudioRun(s, { kind: "designer", round: 0, artifactId: part.id, brief, importStep: "fix" }, now).state;

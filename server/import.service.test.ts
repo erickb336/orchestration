@@ -289,6 +289,23 @@ describe("the import's controls", () => {
     expect(state().studio.import!.stopped!.reason).toBe("the words run failed 2 times: the designer gave up");
   });
 
+  it("a run lost to a restart is asked for again, however often: only failed runs stop the import (R55-2)", async () => {
+    service();
+    startImport();
+    for (let n = 0; n < 3; n++) {
+      await until((s) => s.studio.runs.filter((r) => r.importStep === "words" && r.status === "running").length === 1, "a words run running");
+      const run = state().studio.runs.find((r) => r.importStep === "words" && r.status === "running")!;
+      store.update((s) => {
+        const next = structuredClone(s);
+        Object.assign(next.studio.runs.find((r) => r.id === run.id)!, { status: "lost", endedAt: iso(), note: "the service stopped" });
+        return next;
+      }, iso());
+    }
+    await until((s) => s.studio.runs.filter((r) => r.importStep === "words").length === 4, "a fourth words run");
+    expect(state().studio.import!.stopped).toBeUndefined();
+    expect(state().studio.runs.filter((r) => r.importStep === "words").map((r) => r.status).slice(0, 3)).toEqual(["lost", "lost", "lost"]);
+  });
+
   it("holds new runs at the import's stop (the domain's dispatch)", async () => {
     service();
     startImport({ budgetUsd: 0.000001 });
