@@ -259,7 +259,7 @@ export function StartForm({ info, onCancel }: { info: FoundRepository; onCancel?
 }
 
 /**
- * In the demo, a start that waits for the sample's agents to stop (QA-F2): pausing them, with how many still stop, or
+ * In the demo, a start that waits for the sample's agents to stop (QA-F2): pausing them, with how many are stopping, or
  * why it did not start. Nothing otherwise.
  */
 export function StartWaits() {
@@ -276,7 +276,7 @@ export function StartWaits() {
   }
   return (
     <Banner tone="info" title="Pausing the sample's agents…">
-      {st.runs ? `${st.runs} ${st.runs === 1 ? "run still stops" : "runs still stop"}.` : "They have stopped."} The import of "{name}" starts when they have stopped. To keep the sample instead, resume it from the project menu.
+      {st.runs ? `${st.runs} ${st.runs === 1 ? "run is stopping" : "runs are stopping"}.` : "They have stopped."} The import of "{name}" starts when they have stopped. To keep the sample instead, resume it from the project menu.
     </Banner>
   );
 }

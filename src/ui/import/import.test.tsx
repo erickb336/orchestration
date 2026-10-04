@@ -12,7 +12,7 @@ import { buildSeed } from "../../domain/seed";
 import * as R from "../../domain/studio/runs";
 import { run } from "../../domain/testing/studio";
 import type { State } from "../../domain/types";
-import { ImportHome } from "../Overview";
+import { ImportHome, Overview } from "../Overview";
 import { importPlaces } from "../placesView";
 import { ShapingBanner } from "../Shaping";
 import { ItemDetail, Reality } from "../studio/Reality";
@@ -130,7 +130,7 @@ describe("1 · Start (C1, C7)", () => {
   it("in the demo, while the sample's agents run, says it pauses them first, then why a start did not happen (QA-F2)", () => {
     const busy = buildSeed(T0, { inFlightRuns: true });
     const waiting = run(busy, "startImport", startArgs(TALLY_START_INFO, startDraft(TALLY_START_INFO)), at(1)).state;
-    expect(text(<StartWaits />, waiting)).toBe('Pausing the sample\'s agents… 2 runs still stop. The import of "tally" starts when they have stopped. To keep the sample instead, resume it from the project menu.');
+    expect(text(<StartWaits />, waiting)).toBe('Pausing the sample\'s agents… 2 runs are stopping. The import of "tally" starts when they have stopped. To keep the sample instead, resume it from the project menu.');
     const html = renderScreen(<StartForm info={TALLY_START_INFO} />, waiting, svc);
     expect(visible(html)).toContain("Start the import The import is starting: it waits for the sample's agents to stop.");
     const refused = structuredClone(waiting);
@@ -536,5 +536,26 @@ describe("the header while importing", () => {
     expect(words(stage("answered"))).toEqual({ home: "1 needs you", vision: "round 0 · 1 needs you" });
     expect(words(stage("baseline"))).toEqual({ home: "nothing to build", vision: "1 change to design" });
     expect(words(stage("baseline", { answers: KEEP_ALL }))).toEqual({ home: "nothing to build", vision: undefined });
+  });
+
+  it("after the baseline, Home's state has the same words on a phone (UX-R2-5)", () => {
+    const home = importPlaces(stage("baseline"))!.home!;
+    expect([home.text, home.short ?? home.text]).toEqual(["nothing to build", "nothing to build"]);
+  });
+
+  it("Home's header and its Needs you card count the same: the import's review, and its stop at the budget (UX-R2-1)", () => {
+    const overBudget = (st: Parameters<typeof tallyImport>[0]) => {
+      const s = structuredClone(stage(st));
+      s.studio.runs.find((r) => r.importStep === "rules")!.usage = { costUsd: 3.2 };
+      return s;
+    };
+    expect(words(stage("review")).home).toBe("1 needs you");
+    expect(text(<Overview />, stage("review"))).toContain("Needs you 1 The import's review Needs you: Round 0, As it is today, asks you 5 questions. Answer them, then lock in the baseline. Answer in Vision");
+    expect(words(overBudget("review")).home).toBe("1 needs you");
+    expect(text(<Overview />, overBudget("review"))).toContain("Needs you 1 The import's review Needs you: Round 0, As it is today, asks you 5 questions. Answer them, then lock in the baseline. The import budget is reached: $3.20 of $3.00. Raise it in Vision to go on. Answer in Vision");
+    expect(text(<Overview />, overBudget("read"))).toContain("Needs you 1 The import waits at its budget Needs you: The import budget is reached: $3.20 of $3.00. Raise it in Vision to go on. Open Vision");
+    // Before the review and after the baseline, the import asks nothing of you.
+    expect(text(<Overview />, stage("read"))).toContain("Needs you 0 Nothing needs you.");
+    expect(text(<Overview />, stage("baseline"))).toContain("Needs you 0 Nothing needs you.");
   });
 });

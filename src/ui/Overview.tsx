@@ -18,7 +18,7 @@ import { foldSummary, messageStatusText } from "./notes";
 import { landedVerdict, latestLeadReply, liveText, needsYouItems, optionsLine, progressByArea, replyExcerpt, type AreaProgress, type NeedsYouEntry } from "./progress";
 import { VisionLine } from "./studio/VisionCard";
 import { Button, ButtonLink, Card, Chip, EmptyState, Field, Input, NeedsYouItem, Row, Rows, SimulatedChip, StatePill, useConfirm } from "./kit";
-import { importQuestions, importStatus, itemAnswerEffect } from "../domain/studio/import";
+import { importStatus, unansweredQuestions } from "../domain/studio/import";
 import { AskForRound } from "./import/AfterBaseline";
 import { budgetStopLine, importPill, nothingToBuild, readingSteps } from "./import/importView";
 import type { FindingDecision, PrDelivery, SpecOption, State, Task, VisionRevision } from "../domain/types";
@@ -117,7 +117,7 @@ export function ImportHome() {
   }
   if (status === "review") {
     const imp = state.studio.import!;
-    const open = importQuestions(imp).asked.filter((q) => itemAnswerEffect(imp, { rule: q.ruleId }) === "open").length;
+    const open = unansweredQuestions(imp).length;
     return (
       <Card title="The import" actions={<StatePill tone="you">needs you</StatePill>}>
         <p className="no-margin">{[open ? `Round 0, As it is today, asks you ${open} question${open === 1 ? "" : "s"}. Answer in Vision, then lock in the baseline.` : "Every question is answered. Lock in the baseline in Vision.", stopLine].filter(Boolean).join(" ")}</p>

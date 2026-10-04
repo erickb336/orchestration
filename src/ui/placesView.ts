@@ -3,7 +3,8 @@
 // desktop; "running" and "draft 5" under the item's name on a phone. The facts come from src/domain/places.ts.
 
 import type { FactoryPlace, VisionPlace } from "../domain/places";
-import { importQuestions, importStatus, itemAnswerEffect } from "../domain/studio/import";
+import { needsYouItems } from "../domain/needsYou";
+import { importStatus, unansweredQuestions } from "../domain/studio/import";
 import type { State } from "../domain/types";
 import type { Tone } from "./kit";
 import { relTime } from "./common";
@@ -60,7 +61,7 @@ export function factoryPlaceState(p: FactoryPlace, live: string): PlaceState {
 }
 
 /**
- * The two places while a project imports a repository (ORC-032): "importing"; then "needs you" and "round 0 · 5 need
+ * The two places while a project imports a repository (ORC-032): "importing"; then "1 needs you" (the count of Home's Needs you) and "round 0 · 5 need
  * you" while the review waits for your answers; after the baseline, "nothing to build" and, when you asked for
  * changes, "2 changes to design" (C5). Undefined for a place the import does not change: its usual state shows. A
  * paused project keeps Home's paused state.
@@ -85,15 +86,17 @@ export function importPlaces(s: State): { home?: PlaceState; vision?: PlaceState
   }
   if (status === "review") {
     const imp = s.studio.import!;
-    const open = importQuestions(imp).asked.filter((q) => itemAnswerEffect(imp, { rule: q.ruleId }) === "open").length;
+    const open = unansweredQuestions(imp).length;
+    // The count of Home's Needs you card: one source (UX-R2-1).
+    const needing = needsYouItems(s).length;
     return {
-      home: home({ text: "1 needs you", short: "needs you", tone: "you", title: "The import's review waits for you in Vision." }),
+      home: home({ text: `${needing} ${needing === 1 ? "needs" : "need"} you`, short: "needs you", tone: "you", title: "The import's review waits for you in Vision." }),
       vision: { text: open ? `round 0 · ${open} ${open === 1 ? "needs" : "need"} you` : "round 0 · Lock in the baseline", short: "round 0", tone: "you", title: open ? `${count(open, "question")} of the import's review ${open === 1 ? "waits" : "wait"} for your answer.` : "Every question is answered. Lock in the baseline." },
     };
   }
   const changes = openChanges(s).length;
   return {
-    home: home({ text: "nothing to build", short: "idle", tone: "neutral", title: "The baseline is in force and built. The factory starts when you change the design." }),
+    home: home({ text: "nothing to build", tone: "neutral", title: "The baseline is in force and built. The factory starts when you change the design." }),
     ...(changes ? { vision: { text: `${count(changes, "change")} to design`, short: `${count(changes, "change")}`, tone: "you" as const, title: `You asked for ${count(changes, "change")} in the import's review. Ask the lead for a round to design ${changes === 1 ? "it" : "them"}.` } } : {}),
   };
 }

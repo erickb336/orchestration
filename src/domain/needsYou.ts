@@ -8,7 +8,8 @@ import * as F from "./findings";
 import * as M from "./model";
 import { changeOrderNeeds } from "./model/changeOrderUpdates";
 import { lastObjection, PE_OBJECTS_HOLD, PE_REVIEW_HOLD, taskReviewHold } from "./peReview";
-import { budgetStop, type UnknownCost } from "./spend";
+import { budgetStop, importStop, type UnknownCost } from "./spend";
+import { importStatus, unansweredQuestions } from "./studio/import";
 import { blueprintItems, openChangeOrders } from "./studio/blueprint";
 import { slippedThrough } from "./subagents";
 import type { ChangeOrder } from "./studio/types";
@@ -118,6 +119,16 @@ export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[]
   // The costs with no full record count at an estimate (spend.ts), which the budgets show: only the stop waits for you.
   const stop = budgetStop(state);
   if (stop) items.push({ kind: "open", key: "budget", what: stop.why, detail: budgetDetail(state, stop.spend.unknown), action: "Settings", href: "#/settings/budgets" });
+  // The import (ORC-032): its review waits for your answers and the Lock in; its stop at its budget waits for a raise.
+  const imp = state.studio.import;
+  const status = importStatus(state);
+  const impStop = importStop(state);
+  if (imp && (status === "review" || (status === "reading" && impStop))) {
+    const open = unansweredQuestions(imp).length;
+    const review = status === "review" ? (open ? `Round 0, As it is today, asks you ${open} question${open === 1 ? "" : "s"}. Answer them, then lock in the baseline.` : "Every question is answered. Lock in the baseline.") : "";
+    const detail = [review, impStop ? `${impStop.why}. Raise it in Vision to go on.` : ""].filter(Boolean).join(" ");
+    items.push({ kind: "open", key: "import", what: status === "review" ? "The import's review" : "The import waits at its budget", detail, action: status === "review" ? "Answer in Vision" : "Open Vision", href: "#/vision" });
+  }
   // A run's agent started the provider's own subagents where none is allowed (ORC-031): the owner knows, until they mark it as seen.
   for (const x of slippedThrough(state)) {
     const task = x.taskId ? state.tasks.find((t) => t.id === x.taskId) : undefined;

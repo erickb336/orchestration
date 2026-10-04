@@ -18,6 +18,7 @@ import {
   itemAnswerEffect,
   ruleConfidence,
   testId,
+  unansweredQuestions,
   type AnswerEffect,
   type ChangeRequest,
   type Confidence,
@@ -603,8 +604,7 @@ export function keptRules(s: State): { rule: ImportRule; chip: string; was: stri
 /** The questions not answered: they go in as the code has them, and stay open in Vision. */
 export function openQuestions(s: State): ImportRule[] {
   const imp = s.studio.import!;
-  return importQuestions(imp)
-    .asked.filter((q) => itemAnswerEffect(imp, { rule: q.ruleId }) === "open")
+  return unansweredQuestions(imp)
     .map((q) => ruleOf(s, q.ruleId)!)
     .filter(Boolean);
 }

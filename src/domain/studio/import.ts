@@ -623,6 +623,9 @@ export function itemAnswerEffect(imp: ProjectImport, on: ImportTarget): AnswerEf
   return a ? answerEffect(imp, a) : "open";
 }
 
+/** The asked questions with no answer yet: they stay open in Vision. */
+export const unansweredQuestions = (imp: ProjectImport): ImportQuestion[] => importQuestions(imp).asked.filter((q) => itemAnswerEffect(imp, { rule: q.ruleId }) === "open");
+
 /** The part an answer is about: the part itself, or the part whose rules place the rule. */
 function partOf(s: State, on: ImportTarget): StudioArtifact | undefined {
   return "part" in on ? latestVersion(s, on.part) : partOfRule(s, on.rule);
