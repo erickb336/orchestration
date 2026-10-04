@@ -570,6 +570,11 @@ describe("the header while importing", () => {
     expect(words(overBudget("review")).home).toBe("1 needs you");
     expect(text(<Overview />, overBudget("review"))).toContain("Needs you 1 The import's review Needs you: Round 0, As it is today, asks you 5 questions. Answer them, then lock in the baseline. The import budget is reached: $3.20 of $3.00. Raise it in Vision to go on. Answer in Vision");
     expect(text(<Overview />, overBudget("read"))).toContain("Needs you 1 The import waits at its budget Needs you: The import budget is reached: $3.20 of $3.00. Raise it in Vision to go on. Open Vision");
+    // The import's review and the building budget's stop: 2 items, and the header says 2 too (L2).
+    const both = structuredClone(stage("review"));
+    both.project.budgets.buildingUsd = 0;
+    expect(words(both).home).toBe("2 need you");
+    expect(text(<Overview />, both)).toMatch(/^.*Needs you 2 .*The building budget is reached.*The import's review Needs you: Round 0/);
     // Before the review and after the baseline, the import asks nothing of you.
     expect(text(<Overview />, stage("read"))).toContain("Needs you 0 Nothing needs you.");
     expect(text(<Overview />, stage("baseline"))).toContain("Needs you 0 Nothing needs you.");
