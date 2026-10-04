@@ -33,9 +33,9 @@ function investigation(s: State): { state: State; runId: string } {
 const run = (s: State, id: string) => s.attempts.find((a) => a.id === id)!;
 
 describe("the setting: Let research steps start helpers", () => {
-  it("names each research step: Investigation's evidence step and the studio's probes", () => {
+  it("names each research step: Investigation's evidence step and the studio's probes; the import's reader is research too, with its own cap on the import", () => {
     expect(researchSteps(project()).map((r) => r.key)).toEqual(["investigation/S1", PROBE_KEY]);
-    expect(RESEARCH_RUN_KINDS).toEqual(["probe"]);
+    expect(RESEARCH_RUN_KINDS).toEqual(["probe", "reader"]);
   });
 
   it("is off for every step in a new project, and a run then may start none", () => {

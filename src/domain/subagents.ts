@@ -143,7 +143,7 @@ function findRun(s: State, id: string): AnyRun | undefined {
 /** "S1's run run-12", "the lead's run lead-3", "Probe run studio-4". */
 function runName(r: AnyRun): string {
   if ("snapshot" in r) return `${r.taskId} ${r.stepId}'s run ${r.id}`;
-  if ("kind" in r) return `${r.kind === "pe" ? "The PE's" : r.kind === "probe" ? "A probe's" : "The designer's"} run ${r.id}`;
+  if ("kind" in r) return `${r.kind === "pe" ? "The PE's" : r.kind === "probe" ? "A probe's" : r.kind === "reader" ? "The import reader's" : "The designer's"} run ${r.id}`;
   return `The lead's run ${r.id}`;
 }
 

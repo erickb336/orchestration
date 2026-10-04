@@ -422,12 +422,16 @@ describe("in the code, only the owner's command starts the factory", () => {
     const push = blueprint.indexOf("blueprint.revisions.push(");
     expect(blueprint.lastIndexOf("export function ", push)).toBe(blueprint.indexOf("export function putDraftInForce("));
     const calls = /(?<!function )\bputDraftInForce\(/;
-    expect(where(calls)).toEqual([join("src", "domain", "model", "shaping.ts"), join("src", "domain", "studio", "blueprint.ts")]);
+    expect(where(calls)).toEqual([join("src", "domain", "model", "shaping.ts"), join("src", "domain", "studio", "blueprint.ts"), join("src", "domain", "studio", "import.ts")]);
     expect(blueprint.match(new RegExp(calls.source, "g"))).toHaveLength(1);
     expect(blueprint.lastIndexOf("export function ", blueprint.search(calls))).toBe(blueprint.indexOf("export function lockIn("));
     const shaping = readFileSync(join(ROOT, "src", "domain", "model", "shaping.ts"), "utf8");
     expect(shaping.match(new RegExp(calls.source, "g"))).toHaveLength(1);
     expect(shaping.lastIndexOf("export function ", shaping.search(calls))).toBe(shaping.indexOf("export function startFactory("));
+    // The baseline Lock in of an import (ORC-032, C4) is the owner's third way: once, in lockInBaseline.
+    const imported = readFileSync(join(ROOT, "src", "domain", "studio", "import.ts"), "utf8");
+    expect(imported.match(new RegExp(calls.source, "g"))).toHaveLength(1);
+    expect(imported.lastIndexOf("export function ", imported.search(calls))).toBe(imported.indexOf("export function lockInBaseline("));
     // Only the owner's Lock in screen sends the lockIn command (src/ui/studio/lockInView.ts builds it for the owner's
     // click); the store names it only to check a write. The demo's story (src/domain/demo.ts) sends it as the owner did,
     // through the command table, when it builds the sample.

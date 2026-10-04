@@ -189,11 +189,14 @@ export interface ArtifactInput {
   devices: Device[];
   madeBy: StudioMaker;
   supersedes?: string;
-  /** An "as is" artifact's provenance: the repository files the designer reproduced it from (round 0 only). */
-  provenance?: { files: string[] };
+  /**
+   * An "as is" artifact's provenance: the repository files the designer reproduced it from (round 0 only), and the
+   * commit they are at. In a project with an import, the commit is the import's (C11), and it is filled in when absent.
+   */
+  provenance?: { files: string[]; commit?: string };
   /** A dictionary's terms, checked at the boundary (words.ts `parseDictionary`). A dictionary has them; nothing else does. */
   dictionary?: DictionaryEntry[];
-  /** A flow's rules, by variant, checked at the boundary (words.ts `parseRules`). Only a flow has them. */
+  /** A part's rules, by variant, checked at the boundary (words.ts `parseRules`). Any designer's kind but the dictionary (ORC-032 D1). */
   rules?: VariantRules[];
 }
 
@@ -243,7 +246,9 @@ export function addArtifact(state: State, input: ArtifactInput, now: string): { 
     throw new ControlError("Round 0 holds what already exists: what the owner brought (material), and the designer's reproductions of the existing code, labelled as is with the repository files they came from.");
   }
   if (asIs && (round.n !== 0 || input.kind === "material" || input.madeBy.role !== "designer")) throw new ControlError("Only the designer's reproductions of the existing code in round 0 (as it is today) are labelled as is.");
-  const provenance = asIs ? { asIs: true as const, files: provenanceFiles(input.provenance!.files) } : undefined;
+  const commit = asIs ? (input.provenance!.commit ?? state.studio.import?.commit) : undefined;
+  if (asIs && state.studio.import && commit !== state.studio.import.commit) throw new ControlError(`The import reads commit ${state.studio.import.commit.slice(0, 7)}; a reproduction shows that commit, not ${agentLine(commit ?? "").slice(0, 12)}.`);
+  const provenance = asIs ? { asIs: true as const, files: provenanceFiles(input.provenance!.files), ...(commit ? { commit } : {}) } : undefined;
   const title = required(agentLine(input.title), 200, "The title");
   if (input.variants.length > MAX_VARIANTS) throw new ControlError(`At most ${MAX_VARIANTS} variants side by side.`);
   if (!input.files.length || input.files.length > MAX_FILES) throw new ControlError(`An artifact has between 1 and ${MAX_FILES} files.`);
@@ -266,7 +271,7 @@ export function addArtifact(state: State, input: ArtifactInput, now: string): { 
   // The project's words and a flow's rules (pass 4d): their shapes were checked at the boundary; here, who has them.
   if ((input.kind === "dictionary") !== !!input.dictionary?.length) throw new ControlError(input.kind === "dictionary" ? "A dictionary lists its terms." : "Only a dictionary lists terms.");
   if (input.rules?.length) {
-    if (input.kind !== "flow") throw new ControlError("Only a flow carries rules.");
+    if (KIND_RULES[input.kind].maker !== "designer" || input.kind === "dictionary") throw new ControlError("A dictionary, the owner's material and a probe's evidence carry no rules.");
     for (const r of input.rules) if (!variants.some((v) => v.id === r.variant)) throw new ControlError(`The rules in "${agentLine(r.path).slice(0, 80)}" are for variant ${agentLine(r.variant).slice(0, 30)}, which ${title} does not have.`);
     if (new Set(input.rules.map((r) => r.variant)).size !== input.rules.length) throw new ControlError("Each variant has at most one set of rules.");
   }
@@ -644,7 +649,7 @@ export function openObjections(s: State, a: StudioArtifact, variant?: string): P
  */
 export function roundBusy(s: State, n: number): string | undefined {
   const run = s.studio.runs.find((r) => r.round === n && isUnderWay(r));
-  if (run) return `${run.kind === "pe" ? "the PE's" : run.kind === "probe" ? "a probe's" : "the designer's"} run ${run.id} is ${run.status}`;
+  if (run) return `${run.kind === "pe" ? "the PE's" : run.kind === "probe" ? "a probe's" : run.kind === "reader" ? "the reader's" : "the designer's"} run ${run.id} is ${run.status}`;
   for (const a of latestArtifacts(s)) {
     if (a.round !== n) continue;
     const r = peReview(s, a);
@@ -878,7 +883,7 @@ export function markableRows(a: StudioArtifact, variant?: string): string[] {
  */
 function rowMarks(a: StudioArtifact, given: RowMark[]): RowMark[] {
   if (!given.length) return [];
-  if (!a.dictionary && !a.rules) throw new ControlError(`${artifactName(a)} has no rows to mark: only a dictionary's terms and a flow's rules have marks of their own.`);
+  if (!a.dictionary && !a.rules) throw new ControlError(`${artifactName(a)} has no rows to mark: only a dictionary's terms and a part's rules have marks of their own.`);
   const seen = new Set<string>();
   return given.map((r) => {
     const variant = a.variants.length > 1 && !a.dictionary ? r.variant : undefined;

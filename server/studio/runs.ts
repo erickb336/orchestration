@@ -220,6 +220,7 @@ export function importDesignerRun(state: State, runId: string, given: HandedIn, 
   if (!run) throw new Error(`Unknown studio run ${runId}.`);
   const round = run.round;
   if (round === undefined) throw new Error(`Studio run ${runId} is not a designer's run in a round.`);
+  if (run.kind === "reader") throw new Error(`Studio run ${runId} is the import's reader: it hands in rules, not artifacts.`);
   const staged = given.artifacts;
   const revising = run.artifactId === undefined ? undefined : S.latestVersion(state, run.artifactId);
   if (revising && staged.length !== 1) throw new ManifestError(`a revision hands in exactly one artifact, the new version of ${revising.title}; it listed ${staged.length}.`);

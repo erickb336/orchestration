@@ -70,6 +70,11 @@ describe("the studio's service commands at the HTTP boundary", () => {
       setProbeStatus: { probeId, status: "failed", failure: "client says so" },
       recordPeReview: { taskId: "T-001", verdict: "agree", reasons: "client says so", specRev: 1 },
       startStudioRun: { kind: "designer", round: n, brief: "Publish everything to the web." },
+      // The import's records (ORC-032) come from the service's own runs.
+      recordImportChecks: { importId: "import-1", result: { status: "not-run", reason: "client says so" } },
+      recordImportRules: { importId: "import-1", rules: [], cases: [] },
+      recordImportCapture: { importId: "import-1", capture: { parts: [] } },
+      stopImport: { importId: "import-1", reason: "client says so" },
     };
     expect(Object.keys(tries).sort()).toEqual([...SERVICE_COMMANDS].sort());
     for (const [name, args] of Object.entries(tries)) {

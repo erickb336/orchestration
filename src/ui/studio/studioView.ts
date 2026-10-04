@@ -800,6 +800,7 @@ const RUN_WORK: Record<StudioRun["kind"], string> = {
   designer: "The designer is making this round's artifacts.",
   pe: "The PE is reviewing this round's artifacts.",
   probe: "The probe is gathering the evidence the PE asked for.",
+  reader: "The reader is turning the repository's tests and code into rules.",
 };
 
 export function runLine(s: State, r: StudioRun, providerLabel: (p: "claude" | "codex") => string): RunLine {

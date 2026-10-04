@@ -8,7 +8,8 @@
 // (rounds, artifacts, feedback, PE review, probes) and blueprint.ts (approval, the draft, Lock in and its summary,
 // open items, change orders, task specs' references). The containers exist from state format 19.
 
-import type { Device, GivenPrinciple, PeReviewState, ProseCheck, ProviderId, RunSubagents, RunUsage, SubagentAllowance } from "../types";
+import type { Device, GivenPrinciple, PeReviewState, ProseCheck, ProviderId, RunSubagents, RunUsage, SubagentAllowance, TestCaseResult } from "../types";
+import type { EvidenceFile, EvidencePath, NoEvidence } from "./evidence";
 
 /**
  * What a round is about. Round 0 is what already exists (material): what the owner brought, and for an existing
@@ -201,11 +202,17 @@ export interface DictionaryEntry {
 export type RulePattern = "always" | "event" | "state" | "unwanted" | "optional";
 export const RULE_PATTERNS: RulePattern[] = ["always", "event", "state", "unwanted", "optional"];
 
-/** A flow's rule (pass 4d, decision 7): its id, its text in one of EARS's patterns, and the pattern it fits. */
+/**
+ * A rule of a part (pass 4d, decision 7; ORC-032 D1): its id, its text in one of EARS's patterns, and the pattern it
+ * fits. A test proves it when the test carries its tag ("[bi-12 R3]", ruleResults.ts), or when the rule names the test
+ * in `tests`: an existing test of an imported repository, by its id ("suite::name"), which the import may not rename.
+ */
 export interface FlowRule {
   id: string;
   text: string;
   pattern: RulePattern;
+  /** The existing tests that prove it, by id (ORC-032). Absent: it names none. */
+  tests?: string[];
 }
 
 /** An acceptance example of a flow: "Given <context>, when <action>, then <result>." */
@@ -227,6 +234,8 @@ export interface VariantRules {
 export interface Provenance {
   asIs: true;
   files: string[];
+  /** The commit it shows: the import's (ORC-032, C11). Absent on reproductions from before the import. */
+  commit?: string;
 }
 
 /** One screenshot: a variant on a device, relative to the version's folder (`shots/<variant>-<device>.png`). */
@@ -463,6 +472,8 @@ export interface DraftVision {
 export interface LockInRecord {
   by: "user";
   summary: LockInSummary;
+  /** The baseline Lock in of an import (ORC-032, C4): revision 1, what the repository does at the import's commit. */
+  baseline?: { importId: string; commit: string };
 }
 
 /** A task's state as the Lock in summary says it: not started, started, or finished. */
@@ -637,14 +648,15 @@ export interface NewWorkReviewRef {
   version?: number;
 }
 
-export type StudioRunKind = "designer" | "pe" | "probe";
-export const STUDIO_RUN_KINDS: StudioRunKind[] = ["designer", "pe", "probe"];
+export type StudioRunKind = "designer" | "pe" | "probe" | "reader";
+export const STUDIO_RUN_KINDS: StudioRunKind[] = ["designer", "pe", "probe", "reader"];
 
 /**
- * The studio's read-only research (ORC-031): a probe gathers evidence for the PE and writes no file; its findings come
- * back as text, and the service records them as evidence. Only these studio runs may start subagents.
+ * The studio's read-only research (ORC-031): a probe gathers evidence for the PE, and the import's reader turns a
+ * repository's tests and code into rules (ORC-032). Neither writes a file: what they find comes back as text, which
+ * the service checks and records. Only these studio runs may start subagents.
  */
-export const RESEARCH_RUN_KINDS: readonly StudioRunKind[] = ["probe"];
+export const RESEARCH_RUN_KINDS: readonly StudioRunKind[] = ["probe", "reader"];
 export const isResearchRun = (kind: StudioRunKind) => RESEARCH_RUN_KINDS.includes(kind);
 /** The workspace a studio run gets: a designer writes in its staging folder; the PE and a probe read only. */
 export const studioRunAccess = (kind: StudioRunKind): "write" | "read" => (kind === "designer" ? "write" : "read");
@@ -716,6 +728,8 @@ export interface StudioRun {
   allowSubagents?: SubagentAllowance;
   /** The subagents its agent started, as the runtime reported them (ORC-031). */
   subagents?: RunSubagents;
+  /** The import's step it does (ORC-032); absent on every other run. A run that pausing stopped is asked for again with it. */
+  importStep?: ImportStep;
 }
 
 export interface Studio {
@@ -725,6 +739,8 @@ export interface Studio {
   verdicts: PeVerdict[];
   probes: Probe[];
   runs: StudioRun[];
+  /** The import of an existing repository (ORC-032), one per project; absent in a project that started from an idea. */
+  import?: ProjectImport;
 }
 
 export interface Blueprint {
@@ -733,6 +749,144 @@ export interface Blueprint {
   /** The owner's working copy, which the factory never reads. */
   draft: BlueprintDraft;
   changeOrders: ChangeOrder[];
+}
+
+// ---------- the import of an existing repository (ORC-032, docs/design/ORC-032-design.md) ----------
+
+/**
+ * What a studio run does for the import: the words (a designer's dictionary, as is), the rules (the reader, research),
+ * the parts (a designer's reproductions, as is, with their rules), or a fix (a designer's next version of one part,
+ * after the owner said the reader misread it).
+ */
+export type ImportStep = "words" | "rules" | "parts" | "fix";
+export const IMPORT_STEPS: ImportStep[] = ["words", "rules", "parts", "fix"];
+
+/** How big the repository is at the import's commit, as the service counted it: the estimate's basis (C7: files, not tests). */
+export interface RepoSize {
+  sourceFiles: number;
+  testFiles: number;
+  /** The size of the source and test files, in kilobytes. */
+  kb: number;
+}
+
+/** The import's cost before it starts: a dollar range, low to high, and what it is based on. */
+export interface ImportEstimate {
+  usd: UsdRange;
+  basis: string;
+}
+
+/**
+ * The baseline test run: the project's test command, run once by the service in the project's environment on a copy
+ * of the import's commit, and its JUnit report.
+ * - pending: not recorded yet;
+ * - read: the report's counts, and where the full report is kept (a file of the import's, relative to its folder);
+ * - not-run: nothing ran, and why (no Docker, no environment, no report path, a report missing or refused: Q3).
+ */
+export type ImportChecks =
+  | { status: "pending" }
+  | { status: "read"; at: string; counts: Record<TestCaseResult["status"], number>; reportFile: string; simulated?: true }
+  | { status: "not-run"; at: string; reason: string };
+
+/** Where a rule was read from: a test, the code or the docs. */
+export type ImportSourceKind = "test" | "code" | "docs";
+export const IMPORT_SOURCE_KINDS: ImportSourceKind[] = ["test", "code", "docs"];
+
+/**
+ * One source of a rule, in the reader's words: where (`ref`: a file, a test id, a README section) and what it says.
+ * `differs`: it says something other than the rule, which is what the code does. A source that differs makes the rule
+ * a conflict.
+ */
+export interface ImportSource {
+  from: ImportSourceKind;
+  ref: string;
+  says: string;
+  differs?: true;
+}
+
+/**
+ * One rule the reader found, as the service checked it: its id ("R1", one per import), what it is about (`area`), its
+ * text in one of EARS's patterns, the tests of the baseline report that it names, its sources, and, for a guess that
+ * matters, why (`important`: it changes what users see or what the data means). Its confidence is never the reader's
+ * claim: `ruleConfidence` (import.ts) derives it from the baseline run and the sources.
+ */
+export interface ImportRule {
+  id: string;
+  area: string;
+  text: string;
+  pattern: RulePattern;
+  tests: string[];
+  sources: ImportSource[];
+  important?: string;
+}
+
+/** The rules reader's output, as the service checked and recorded it, with the test cases its rules name (C14). */
+export interface ImportReading {
+  at: string;
+  /** The reader's run. */
+  runId?: string;
+  rules: ImportRule[];
+  /** The cases of the baseline report that the rules name, each once: the full report stays a file. */
+  cases: TestCaseResult[];
+}
+
+/** What the import's capture made of one part (a screen, a terminal demo or a TUI of round 0), keyed by its artifact. */
+export type ImportPartCapture = { artifactId: string; version: number } & (
+  | { status: "captured"; files: EvidenceFile[]; warnings?: string[] }
+  | { status: "none"; reason: NoEvidence; detail: string; log?: string }
+);
+
+/** The import's capture: the service ran the code at the import's commit in the project's environment (E2), once. */
+export interface ImportCapture {
+  at: string;
+  parts: ImportPartCapture[];
+  path?: EvidencePath;
+  simulated?: true;
+}
+
+/**
+ * The owner's answer on one rule or one part of the import. `option` is one of the options `importOptions` gives for
+ * it; "correct" comes with `correction`: tally should do something else (a change), or the reader misread the code.
+ * `text` holds the owner's words: for "neither" and for a correction. The newest answer on a rule or a part counts.
+ */
+export interface ImportAnswer {
+  on: { rule: string } | { part: string };
+  option: string;
+  correction?: "change" | "misread";
+  text?: string;
+  at: string;
+}
+
+/**
+ * The import of an existing repository (ORC-032): one per project, pinned to the commit it started at (C11). Its
+ * status is derived (`importStatus`, import.ts): reading, then review, then locked in by the baseline Lock in; or
+ * stopped. The service records the checks, the reading and the capture; the owner starts it, answers, and locks it in.
+ */
+export interface ProjectImport {
+  id: string;
+  /** HEAD when the owner started it: every read, check and capture uses it. */
+  commit: string;
+  branch?: string;
+  startedAt: string;
+  /** The import budget (the owner's; $3 by default): at it, the import's runs wait. Apart from the building budget. */
+  budgetUsd: number;
+  estimate: ImportEstimate;
+  /** The rules reader's helper cap (ORC-031), or null: off. */
+  helpers: number | null;
+  /**
+   * The provider every run of the import reads the repository on (Q5): Claude by default, whose reads the service
+   * confines to the checkout; Codex only when the owner picks it, with a warning (its reads are not confined).
+   */
+  readsOn: ProviderId;
+  checks: ImportChecks;
+  /** The rules, once the reader's output is recorded. */
+  reading?: ImportReading;
+  /** The capture of the parts, once recorded. */
+  capture?: ImportCapture;
+  answers: ImportAnswer[];
+  /** The service stopped it, and why. */
+  stopped?: { at: string; reason: string };
+  /** The owner's baseline Lock in (blueprint revision 1). */
+  lockedInAt?: string;
 }
 
 export const emptyStudio = (): Studio => ({ rounds: [], artifacts: [], feedback: [], verdicts: [], probes: [], runs: [] });

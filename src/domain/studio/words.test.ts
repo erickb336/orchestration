@@ -276,12 +276,29 @@ describe("a flow's rules in the studio", () => {
     expect(B.draftItems(run(s, "approveArtifact", { artifactId: id, version: 1, variant: "a" }, at(50)).state)[0]).toMatchObject({ variant: "a", status: "approved" });
   });
 
-  it("refuses rules on another kind, and marks on an artifact with no rows", () => {
+  it("a part of any designer's kind carries rules (ORC-032 D1), a dictionary does not; an artifact with no rows takes no row marks", () => {
     const r = openRound(fresh(), "experience", at(1));
     const screen = { round: r.n, kind: "screen", title: "Trip plan", variants: [{ id: "a", label: "A", entry: "a/index.html" }], files: [{ path: "a/index.html", sha256: sha("a") }], devices: ["desktop"], madeBy: DESIGNER };
-    expect(() => run(r.state, "addStudioArtifact", { ...screen, rules: [{ variant: "a", path: "a/rules.json", rules: [{ id: "R1", text: "The app shall work." }] }] }, at(2))).toThrow("Only a flow carries rules.");
+    const rules = [{ variant: "a", path: "a/rules.json", rules: [{ id: "R1", text: "The app shall work." }] }];
+    const ruled = run<{ artifactId: string }>(r.state, "addStudioArtifact", { ...screen, rules }, at(2));
+    expect(S.getArtifact(ruled.state, ruled.result.artifactId, 1).rules).toEqual([{ variant: "a", path: "a/rules.json", rules: [{ id: "R1", text: "The app shall work.", pattern: "always" }], examples: [] }]);
+    const words = { round: r.n, kind: "dictionary", title: "Words", variants: [{ id: "a", label: "A", entry: "dictionary.json" }], files: [{ path: "dictionary.json", sha256: sha("d") }], devices: [], madeBy: DESIGNER, dictionary: [{ term: "trip", meaning: "A weekend away." }] };
+    expect(() => run(r.state, "addStudioArtifact", { ...words, rules }, at(2))).toThrow("A dictionary, the owner's material and a probe's evidence carry no rules.");
     const a = run<{ artifactId: string }>(r.state, "addStudioArtifact", screen, at(2));
     const s = peAgrees(a.state, a.result.artifactId, 1, ["a"], at(3));
-    expect(() => marks(s, a.result.artifactId, 1, [{ row: "R1", mark: "keep" }])).toThrow("Trip plan v1 has no rows to mark: only a dictionary's terms and a flow's rules have marks of their own.");
+    expect(() => marks(s, a.result.artifactId, 1, [{ row: "R1", mark: "keep" }])).toThrow("Trip plan v1 has no rows to mark: only a dictionary's terms and a part's rules have marks of their own.");
+  });
+
+  it("a rule may name the existing tests that prove it (ORC-032): each once, at most 20", () => {
+    const r = openRound(fresh(), "experience", at(1));
+    const named = parseRules({ rules: [{ id: "R1", text: "The app shall work.", tests: ["test_app.py::test_works", "test_app.py::test_starts"] }] });
+    expect(named).toEqual({ ok: true, value: { rules: [{ id: "R1", text: "The app shall work.", pattern: "always", tests: ["test_app.py::test_works", "test_app.py::test_starts"] }], examples: [] } });
+    expect(parseRules({ rules: [{ id: "R1", text: "The app shall work.", tests: ["a::b", "a::b"] }] })).toEqual({ ok: false, errors: ['rule R1: "tests" is a list of at most 20 different test ids'] });
+    expect(parseRules({ rules: [{ id: "R1", text: "The app shall work.", tests: Array.from({ length: 21 }, (_, i) => `a::t${i}`) }] })).toEqual({ ok: false, errors: ['rule R1: "tests" is a list of at most 20 different test ids'] });
+    expect(parseRules({ rules: [{ id: "R1", text: "The app shall work.", tests: "a::b" }] })).toEqual({ ok: false, errors: ['rule R1: "tests" is a list of at most 20 different test ids'] });
+    // Through the command, as the designer's rules.json gives them.
+    const flow = { round: r.n, kind: "flow", title: "Join", variants: [{ id: "a", label: "A", entry: "a/flow.md" }], files: [{ path: "a/flow.md", sha256: sha("f") }], devices: [], madeBy: DESIGNER };
+    const added = run<{ artifactId: string }>(r.state, "addStudioArtifact", { ...flow, rules: [{ variant: "a", path: "a/rules.json", rules: [{ id: "R1", text: "The app shall work.", tests: ["test_app.py::test_works"] }] }] }, at(2));
+    expect(S.getArtifact(added.state, added.result.artifactId, 1).rules![0].rules[0].tests).toEqual(["test_app.py::test_works"]);
   });
 });

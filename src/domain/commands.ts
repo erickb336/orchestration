@@ -14,9 +14,10 @@ import * as B from "./studio/blueprint";
 import { setDomains } from "./studio/domains";
 import { setPreview } from "./studio/evidence";
 import { markSubagentsSeen, setResearchHelpers } from "./subagents";
+import * as I from "./studio/import";
 import * as R from "./studio/runs";
 import * as S from "./studio/studio";
-import { type Mark, type StudioMaker, type VariantRules, ROUND_FOCUSES, STUDIO_AGENT_ROLES, STUDIO_ARTIFACT_KINDS, STUDIO_RUN_KINDS, VERDICTS } from "./studio/types";
+import { type Mark, type StudioMaker, type VariantRules, IMPORT_STEPS, ROUND_FOCUSES, STUDIO_AGENT_ROLES, STUDIO_ARTIFACT_KINDS, STUDIO_RUN_KINDS, VERDICTS } from "./studio/types";
 import { parseDictionary, parseRules } from "./studio/words";
 import {
   ControlError,
@@ -203,7 +204,29 @@ function peReviewTarget(a: Args): PeReviewTarget {
  * them like any command, but a client never sends them: the HTTP endpoint refuses them, as it refuses
  * `stageVisionDoc`.
  */
-export const SERVICE_COMMANDS: ReadonlySet<string> = new Set(["openRound", "closeRound", "addStudioArtifact", "addPeVerdicts", "addProbe", "setProbeStatus", "recordPeReview", "startStudioRun"]);
+export const SERVICE_COMMANDS: ReadonlySet<string> = new Set([
+  "openRound",
+  "closeRound",
+  "addStudioArtifact",
+  "addPeVerdicts",
+  "addProbe",
+  "setProbeStatus",
+  "recordPeReview",
+  "startStudioRun",
+  // the import (ORC-032): what the service's own runs found, and its stop
+  "recordImportChecks",
+  "recordImportRules",
+  "recordImportCapture",
+  "stopImport",
+]);
+
+/** An answer on the import, as the review sends it: a rule or a part, an option, and for "correct" its kind and the owner's words. */
+function importAnswer(v: unknown): I.ImportAnswerInput {
+  const o = obj(v, "answer");
+  const on = obj(o.on, "answer.on");
+  const target = on.rule !== undefined ? { rule: str(on, "rule") } : { part: str(on, "part") };
+  return { on: target, option: str(o, "option"), ...(o.correction === undefined ? {} : { correction: oneOf(o, "correction", ["change", "misread"] as const) }), ...(o.text === undefined ? {} : { text: str(o, "text") }) };
+}
 
 // ---- registry ----
 
@@ -295,6 +318,37 @@ export const COMMANDS = {
    */
   closeChangeOrder: same((s, now, a) => M.closeChangeOrder(s, int(a, "rev"), now)),
 
+  // the import of an existing repository (ORC-032): the owner's
+  /**
+   * Start the import of the project's repository, after initProject and the kind of product: `commit` is the HEAD the
+   * Start screen showed, `size` the files it counted (the estimate's basis), `helpers` the rules reader's cap or null,
+   * `readsOn` who reads the repository (absent: Claude). Opens round 0, As it is today.
+   */
+  startImport: same((s, now, a) => {
+    const size = obj(a.size, "size");
+    return I.startImport(
+      s,
+      {
+        commit: str(a, "commit"),
+        ...(a.branch === undefined ? {} : { branch: str(a, "branch") }),
+        budgetUsd: num(a, "budgetUsd"),
+        helpers: numOrNull(a, "helpers"),
+        size: { sourceFiles: num(size, "sourceFiles"), testFiles: num(size, "testFiles"), kb: num(size, "kb") },
+        ...(a.readsOn === undefined ? {} : { readsOn: provider(a.readsOn) }),
+      },
+      now,
+    );
+  }),
+  /** Change the import budget, for example at its stop. */
+  setImportBudget: same((s, now, a) => I.setImportBudget(s, num(a, "budgetUsd"), now)),
+  /** Your answers on the import's rules and parts, sent together. */
+  answerImport: same((s, now, a) => I.answerImport(s, array<unknown>(a.answers, "answers").map(importAnswer), now)),
+  /**
+   * The baseline Lock in: every part of the import goes into force as blueprint revision 1, in Vision. `draftRev` and
+   * `summaryDigest` name the summary you saw (compare-and-set). Never the lead's, a setting's or Autopilot's.
+   */
+  lockInBaseline: same((s, now, a) => I.lockInBaseline(s, { draftRev: int(a, "draftRev"), summaryDigest: str(a, "summaryDigest") }, now)),
+
   // the studio: the service's (SERVICE_COMMANDS), from the lead's, the designer's, the PE's and the probes' runs
   /** Returns { n }. */
   openRound: (s, now, a) => {
@@ -325,7 +379,12 @@ export const COMMANDS = {
         }),
         madeBy: studioMaker(a.madeBy),
         ...(a.supersedes === undefined ? {} : { supersedes: str(a, "supersedes") }),
-        ...(a.provenance === undefined ? {} : { provenance: { files: strings(obj(a.provenance, "provenance").files, "provenance.files") } }),
+        ...(a.provenance === undefined
+          ? {}
+          : (() => {
+              const p = obj(a.provenance, "provenance");
+              return { provenance: { files: strings(p.files, "provenance.files"), ...(p.commit === undefined ? {} : { commit: str(p, "commit") }) } };
+            })()),
         ...(a.dictionary === undefined ? {} : { dictionary: checked(parseDictionary(a.dictionary), "dictionary") }),
         ...(a.rules === undefined ? {} : { rules: array<unknown>(a.rules, "rules").map(variantRules) }),
       },
@@ -356,11 +415,32 @@ export const COMMANDS = {
         ...(a.artifactId === undefined ? {} : { artifactId: str(a, "artifactId") }),
         ...(a.selection === undefined ? {} : { selection: selection(a.selection) }),
         brief: str(a, "brief"),
+        ...(a.importStep === undefined ? {} : { importStep: oneOf(a, "importStep", IMPORT_STEPS) }),
       },
       now,
     );
     return { state: r.state, result: { runId: r.runId } };
   },
+
+  // the import (ORC-032): the service's (SERVICE_COMMANDS), from its own runs
+  /** The baseline test run: { status: "read", counts, reportFile, simulated? } or { status: "not-run", reason }. */
+  recordImportChecks: same((s, now, a) => {
+    const r = obj(a.result, "result");
+    const status = oneOf(r, "status", ["read", "not-run"] as const);
+    if (status === "not-run") return I.recordImportChecks(s, { importId: str(a, "importId"), result: { status, reason: str(r, "reason") } }, now);
+    const c = obj(r.counts, "result.counts");
+    const counts = { passed: num(c, "passed"), failed: num(c, "failed"), skipped: num(c, "skipped"), error: num(c, "error") };
+    return I.recordImportChecks(s, { importId: str(a, "importId"), result: { status, counts, reportFile: str(r, "reportFile"), ...(r.simulated === true ? { simulated: true as const } : {}) } }, now);
+  }),
+  /** The rules reader's output, `{ rules, cases }`, checked as at the boundary (`parseImportReading`). */
+  recordImportRules: same((s, now, a) => {
+    const reading = checked(I.parseImportReading({ rules: a.rules, cases: a.cases }), "the reading");
+    return I.recordImportRules(s, { importId: str(a, "importId"), ...(a.runId === undefined ? {} : { runId: str(a, "runId") }), ...reading }, now);
+  }),
+  /** The capture of the import's screens, terminal demos and TUIs: what each recorded, or why nothing. */
+  recordImportCapture: same((s, now, a) => I.recordImportCapture(s, { importId: str(a, "importId"), capture: I.parseImportCapture(a.capture) }, now)),
+  /** The service stops the import, with the reason. */
+  stopImport: same((s, now, a) => I.stopImport(s, { importId: str(a, "importId"), reason: str(a, "reason") }, now)),
 
   // PE review of new work in the factory (ORC-029 2e, pass 5)
   /**
