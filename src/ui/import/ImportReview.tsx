@@ -10,7 +10,8 @@ import type { ImportRule, StudioArtifact } from "../../domain/studio/types";
 import { Banner, Button, ButtonLink, Card, Chip, Disclosure, Field, Meter, SimulatedChip, Textarea } from "../kit";
 import { cx } from "../kit/cx";
 import { useStore } from "../store";
-import { kindWord, roundLead } from "../studio/studioView";
+import { TerminalWindow, useServiceText } from "../studio/Frames";
+import { documentFiles, documentType, kindWord, roundLead, serviceFileUrl, showKind, variantDemo } from "../studio/studioView";
 import { VisionCard } from "../studio/VisionCard";
 import { ImportBudgetStop } from "./ImportPanel";
 import {
@@ -24,6 +25,7 @@ import {
   optionWords,
   partKey,
   partLine,
+  previewLines,
   productName,
   reviewCounts,
   ruleKey,
@@ -312,10 +314,45 @@ function PartTile({ part: a, answer, onAnswer }: { part: StudioArtifact; answer:
         <h4 className="no-margin">{a.title}</h4>
         <span className="micro muted">{kindWord(a.kind)}</span>
       </div>
+      <PartPreview part={a} />
       <p className="small no-margin">{partLine(state, a)}</p>
       <CorrectToggle id={partKey(a.id)} answer={answer} onAnswer={onAnswer} />
     </div>
   );
+}
+
+/** What a part's tile shows of it (UX-8): its recording's first lines, its pseudo-code or data, or its words. */
+function PartPreview({ part: a }: { part: StudioArtifact }) {
+  if (a.kind === "dictionary") {
+    return (
+      <ul className="imp-words" aria-label={`The words of ${a.title}`}>
+        {(a.dictionary ?? []).map((w) => (
+          <li key={w.term}>{w.term}</li>
+        ))}
+      </ul>
+    );
+  }
+  const v = a.variants[0]?.id;
+  if (showKind(a) === "terminal") {
+    const demo = variantDemo(a, v);
+    return demo.status === "recorded" && demo.transcript ? <MiniFile artifact={a} path={demo.transcript} kind="transcript" /> : null;
+  }
+  if (showKind(a) === "document") {
+    const path = documentFiles(a, v).find((p) => documentType(p) !== "mermaid");
+    return path ? <MiniFile artifact={a} path={path} kind="document" /> : null;
+  }
+  return null;
+}
+
+/** A few lines of one of the part's files (previewLines), read through the app's own service. */
+function MiniFile({ artifact: a, path, kind }: { artifact: StudioArtifact; path: string; kind: "transcript" | "document" }) {
+  const loaded = useServiceText(serviceFileUrl(a, path));
+  const body = (
+    <pre className="imp-mini" aria-label={kind === "transcript" ? `The first lines of the recording of ${a.title}` : `The start of ${a.title}`}>
+      {loaded.status === "ok" ? previewLines(kind, loaded.text).join("\n") : loaded.status === "loading" ? "…" : `It cannot be read: ${loaded.message}.`}
+    </pre>
+  );
+  return kind === "transcript" ? <TerminalWindow title={`${a.title} — recording`}>{body}</TerminalWindow> : body;
 }
 
 function ConfirmedRule({ rule, answer, onAnswer }: { rule: ImportRule; answer: DraftAnswer | undefined; onAnswer: (a: DraftAnswer | undefined) => void }) {

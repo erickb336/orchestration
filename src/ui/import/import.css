@@ -80,6 +80,9 @@
 .imp-parts { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .imp-tile { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; display: grid; gap: 6px; align-content: start; min-width: 0; height: 100%; }
 .imp-tile h4 { font-size: var(--fs-meta); }
+.imp-tile .st-term { justify-self: stretch; }
+.imp-mini { margin: 0; padding: 8px 10px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: var(--fs-micro); line-height: 1.45; white-space: pre; overflow: hidden; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-control); }
+.st-term .imp-mini { border: 0; border-radius: 0; }
 .imp-rules-d { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; }
 .imp-rules { list-style: none; padding: 0; margin: 6px 0 0; display: grid; }
 .imp-rule { display: grid; grid-template-columns: 2.6rem minmax(0, 1fr) auto; gap: 2px 10px; padding: 8px 0; border-top: 1px solid var(--border); font-size: var(--fs-meta); align-items: start; }

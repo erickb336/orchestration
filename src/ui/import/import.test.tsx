@@ -21,7 +21,7 @@ import { BaselineLockIn } from "./BaselineLockIn";
 import { ImportPanel } from "./ImportPanel";
 import { ImportReview } from "./ImportReview";
 import { TALLY_START_INFO } from "./importScene";
-import { UNANSWERED_TEXT, previewSetting, startBlocker, startDraft, summaryChanged, type FoundRepository } from "./importView";
+import { UNANSWERED_TEXT, previewLines, previewSetting, startBlocker, startDraft, summaryChanged, type FoundRepository } from "./importView";
 import { StartForm } from "./StartImport";
 
 const svc = testService({ prototypePort: 5320 });
@@ -184,9 +184,25 @@ describe("3 · Review (C5, C8, C9, C15)", () => {
   it("parts are listed as recorded from the running CLI or read from the code, with their rules' tests (C8)", () => {
     const t = text(<ImportReview />, stage("review"));
     expect(t).toContain("tally add terminal demo Recorded from the running CLI (simulated). Its rules: 5 of 5 have a passing test.");
-    expect(t).toContain("Splitting algorithm Read from the code: tally/settle.py, tally/money.py. Its rules: 1 of 2 have a passing test.");
+    expect(t).toContain("Splitting algorithm … Read from the code: tally/settle.py, tally/money.py. Its rules: 1 of 2 have a passing test.");
     const noDocker = text(<ImportReview />, stage("review", { checks: "not-run" }));
     expect(noDocker).toContain("tally add terminal demo Read from the code: not recorded, because docker is not available on this computer, so nothing was recorded.");
+  });
+
+  it("each part's tile shows the part: its recording, its pseudo-code or data, or its words (UX-8)", () => {
+    const sc = tallyImport("review");
+    const s = structuredClone(sc.s);
+    const add = s.studio.artifacts.find((a) => a.id === sc.parts.add)!;
+    add.demo = { status: "done", at: at(61), variants: [{ variant: add.variants[0].id, status: "recorded", tape: "add/demo.tape", txt: "recording/a/demo.txt" }] };
+    const html = renderScreen(<ImportReview />, s, svc);
+    expect(visible(html)).toContain("Words dictionary expense payer group balance settle up ledger 6 words");
+    expect(html).toContain('aria-label="The first lines of the recording of tally add"');
+    expect(html).toContain('aria-label="The start of Splitting"');
+    // What a tile shows of a file: a document's first code block; a recording's first lines.
+    const md = "# Splitting\n\nHow tally splits.\n\n```\nbase, extra = divmod(cents, n)\neach pays base\n```\n";
+    expect(previewLines("document", md)).toEqual(["base, extra = divmod(cents, n)", "each pays base"]);
+    expect(previewLines("document", "# The ledger\n\n| Field | Holds |\n| --- | --- |\n| currency | EUR |")).toEqual(["| Field | Holds |", "| currency | EUR |"]);
+    expect(previewLines("transcript", "\n$ tally add 42 Dinner --by ana\nAdded Dinner: 42.00\n")).toEqual(["$ tally add 42 Dinner --by ana", "Added Dinner: 42.00"]);
   });
 
   it("the counts and the effects follow the answers: kept, a change to design, a fix of the reading, and open", () => {

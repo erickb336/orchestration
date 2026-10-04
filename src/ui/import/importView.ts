@@ -452,6 +452,23 @@ export function partLine(s: State, a: StudioArtifact): string {
   return `Read from the code: ${a.provenance?.files.join(", ")}.${tests}`;
 }
 
+const PREVIEW_LINES = 6;
+
+/**
+ * The few lines a part's tile shows of it (UX-8, as the prototype): a recording's first lines of output, or a
+ * document's first code block (its pseudo-code or data), else its first lines of text. Empty lines and headings are
+ * left out.
+ */
+export function previewLines(kind: "transcript" | "document", text: string): string[] {
+  const lines = text.replace(/\r/g, "").split("\n");
+  if (kind === "document") {
+    const open = lines.findIndex((l) => l.trimStart().startsWith("```"));
+    const close = open < 0 ? -1 : lines.findIndex((l, i) => i > open && l.trimStart().startsWith("```"));
+    if (open >= 0 && close > open + 1) return lines.slice(open + 1, close).slice(0, PREVIEW_LINES);
+  }
+  return lines.filter((l) => l.trim() && !(kind === "document" && /^#|^\|?\s*-{3}/.test(l.trim()))).slice(0, PREVIEW_LINES);
+}
+
 /** A rule's tests in a line: "test_add.py::test_records_expense +1 more · all pass". */
 export function testsTag(s: State, rule: ImportRule): string | undefined {
   const cases = ruleCases(s, rule);
