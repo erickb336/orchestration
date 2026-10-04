@@ -135,6 +135,17 @@ const SCENES = {
     await hideTryLine(page);
     return { clipTo: ".home .k-grid-2" };
   },
+  // Vision, round 1 (the experience): the designer's Trail map with the PE's review beside it, as the README's How it
+  // works starts. The sample's studio opens on its latest round, so the still picks round 1 and its first part.
+  vision: async ({ page, api }) => {
+    // The rounds list has no box of its own (only its items do), so the still waits for round 1's button.
+    await open(page, api, "#/vision", { text: "The experience" });
+    await page.getByRole("list", { name: "Rounds" }).getByRole("button").filter({ hasText: "The experience" }).click();
+    await page.getByRole("list", { name: "Artifacts of round 1" }).getByRole("button").filter({ hasText: "Trail map" }).click();
+    await page.waitForSelector("iframe");
+    await page.waitForTimeout(1500); // the prototype's frame loads its own page
+    await page.evaluate(() => window.scrollTo(0, 0));
+  },
   // The board shows every column in one window (the stills' browser prefers the board view).
   tasks: async ({ page, api }) => open(page, api, "#/tasks", { selector: ".board" }),
   // A task that needs you: WT-007's finding to decide, and its steps in plain words.

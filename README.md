@@ -29,9 +29,9 @@ It opens a sample project (Weekend Trips, a hiking app) on a simulated runtime, 
 
 You can message the lead, send a note to a running agent, pause a task, edit a step's output or rerun it. The [user guide](docs/user-guide.md) tells how.
 
-![Home in the demo](docs/screenshots/home.png)
+![Vision in the demo](docs/screenshots/vision.png)
 
-*Home: decisions answered in place, progress by area, and new results.*
+*Vision: the designer's part, your marks under it, and the PE's review beside it.*
 
 ## Why I built it
 
