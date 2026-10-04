@@ -1,0 +1,499 @@
+// The import of an existing repository (ORC-032) in words: what the five screens (Start, Reading, Review, Baseline
+// and After) say, as pure functions of the state, so they can be tested without a browser. The facts come from
+// src/domain/studio/import.ts (the review, the answers, the baseline), spend.ts (the import's spend and stop) and
+// itemStatus.ts (a baseline item's status).
+
+import type { EnvironmentFound } from "../../api";
+import { PRICES, estimateUsd, fmtUsd, importSpend, importStop } from "../../domain/spend";
+import {
+  answerEffect,
+  changeRequests,
+  importParts,
+  importQuestions,
+  importRuns,
+  importStatus,
+  itemAnswerEffect,
+  ruleConfidence,
+  testId,
+  type AnswerEffect,
+  type ChangeRequest,
+  type Confidence,
+  type ImportOption,
+  type ImportTarget,
+} from "../../domain/studio/import";
+import type { ImportEstimate, ImportRule, ImportSource, ImportStep, RepoSize, StudioArtifact } from "../../domain/studio/types";
+import { DEVICES, PROJECT_DOMAINS, type CheckCommand, type Device, type ProjectDomain, type State, type TestCaseResult } from "../../domain/types";
+import type { StepItem, StepMark } from "../kit";
+
+const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const shortCommit = (sha: string) => sha.slice(0, 7);
+
+/** The product's name in sentences: the project's name, without the sample's mark (a chip says that). */
+export const productName = (s: State) => s.project.name.replace(/\s*\(sample\)$/, "");
+
+/** Which import screen Vision shows: none (the studio), the reading (also once stopped), or the review. */
+export function importScreen(s: State): "none" | "reading" | "review" {
+  const st = importStatus(s);
+  return st === "reading" || st === "stopped" ? "reading" : st === "review" ? "review" : "none";
+}
+
+/** The import's address in Vision: the baseline Lock in. */
+export const BASELINE_HASH = "#/vision/baseline";
+
+// ---------- 1 · Start ----------
+
+/**
+ * What the Start screen reads of a repository before anything runs (GET /api/import/start?path=…, or POST
+ * /api/import/demo for the bundled sample with the simulated runtime). Read only; nothing is saved. Unit 2 builds the
+ * routes, and src/api.ts holds this type on its branch (orc-032-u2): at integration, import it from there and delete
+ * this copy.
+ */
+export type ImportStartInfo =
+  | { ok: false; reason: string }
+  | {
+      ok: true;
+      /** The bundled sample, tally, made in the service's data folder: the simulated runtime imports only it. */
+      demo?: true;
+      path: string;
+      /** HEAD, which the import is pinned to (C11), and its branch (absent when HEAD is detached). */
+      commit: string;
+      branch?: string;
+      size: RepoSize;
+      estimate: ImportEstimate;
+      /** The kinds of product the repository shows, each with the file that shows it. */
+      domains: { domain: ProjectDomain; device?: Device; because: string }[];
+      /** How it runs (C1): the proposed image, the dev container, and the check commands the repository's files suggest. */
+      proposal?: EnvironmentFound["proposal"];
+      devcontainer?: EnvironmentFound["devcontainer"];
+      checks: CheckCommand[];
+      /** A test command that writes a JUnit report, and the report's path, when the repository shows one. */
+      testReport?: { command: CheckCommand; path: string; because: string };
+    };
+export type FoundRepository = Extract<ImportStartInfo, { ok: true }>;
+
+/** Where the Start screen reads a repository: the demo's sample, or the path the owner gave. */
+export const startInfoRequest = (q: { path: string } | "demo"): { url: string; method: "GET" | "POST" } => (q === "demo" ? { url: "/api/import/demo", method: "POST" } : { url: `/api/import/start?path=${encodeURIComponent(q.path)}`, method: "GET" });
+
+/** "✓ Found" line: what the repository is, at which commit, and what the import leaves out (C7). */
+export function foundLine(info: FoundRepository): string {
+  return `a git repository${info.branch ? ` on ${info.branch}` : ""}: ${count(info.size.sourceFiles, "source file")} and ${count(info.size.testFiles, "test file")}. The import reads the last commit, ${shortCommit(info.commit)}${info.branch ? ` on ${info.branch}` : ""}. Changes you have not committed are left out.`;
+}
+
+/** Why the repository shows a kind of product or a device: the files that show it; undefined when none does. */
+export const foundBecause = (info: FoundRepository, match: (d: FoundRepository["domains"][number]) => boolean) => info.domains.filter(match).map((d) => d.because).join("; ") || undefined;
+
+/** The form on Start: the kinds, the devices, how it runs, the budget and the helpers. */
+export interface StartDraft {
+  name: string;
+  domains: ProjectDomain[];
+  devices: Device[];
+  /** The environment: the dev container (confirmed with its digest), an image, or none. */
+  environment: { devcontainer: { file: string; sha256: string } } | { image: string; prepare: string[][] } | null;
+  /** The test command, as one line; "" for none. */
+  testCommand: string;
+  testReport: string;
+  budget: string;
+  helpers: boolean;
+  helperCap: number;
+}
+
+/** The form as Start fills it from what the repository shows: each kind, device and how-it-runs value that was found. */
+export function startDraft(info: FoundRepository): StartDraft {
+  const dc = info.devcontainer;
+  const p = info.proposal;
+  const test = info.testReport?.command ?? info.checks.find((c) => c.kind === "check");
+  return {
+    name: info.path.replace(/\/+$/, "").split("/").at(-1) ?? "",
+    domains: PROJECT_DOMAINS.filter((d) => info.domains.some((x) => x.domain === d)),
+    devices: DEVICES.filter((d) => info.domains.some((x) => x.device === d)),
+    environment: dc?.sha256 && !dc.refused ? { devcontainer: { file: dc.file, sha256: dc.sha256 } } : p ? { image: p.image, prepare: p.prepare } : null,
+    testCommand: test ? argvLine(test.argv) : "",
+    testReport: info.testReport?.path ?? "",
+    budget: "3",
+    helpers: false,
+    helperCap: 2,
+  };
+}
+
+/** An argument list as one line; an argument with a space keeps its quotes. */
+export const argvLine = (argv: readonly string[]) => argv.map((a) => (/[\s"']/.test(a) ? JSON.stringify(a) : a)).join(" ");
+/** One line back to arguments: spaces split, quotes keep an argument whole. */
+const splitLine = (line: string) => [...line.matchAll(/"((?:[^"\\]|\\.)*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]);
+
+/** How it runs, each part complete or missing, and what a missing part means (C1, Q3 A). */
+export function howItRuns(d: StartDraft): { complete: boolean; missing: string[]; effect?: string } {
+  const missing = [!d.environment ? "the environment" : "", !d.testCommand.trim() ? "the test command" : "", !d.testReport.trim() ? "the test report's path" : ""].filter(Boolean);
+  if (!missing.length) return { complete: true, missing };
+  const noEnv = !d.environment;
+  return {
+    complete: false,
+    missing,
+    effect: noEnv
+      ? "Without an environment, the import never runs your code: the tests do not run, nothing is recorded, and every rule is read from the code (inferred)."
+      : "Without a test command and its report, the tests do not run: every rule is read from the code (inferred). The CLI and the screens are still recorded in the environment.",
+  };
+}
+
+/** Why Start cannot start yet, or undefined. */
+export function startBlocker(d: StartDraft): string | undefined {
+  if (!d.name.trim()) return "Give the project a name.";
+  if (!d.domains.length) return "Choose at least one kind of product.";
+  if (!d.devices.length) return "Choose at least one device.";
+  const usd = Number(d.budget);
+  if (!d.budget.trim() || !Number.isFinite(usd) || usd <= 0) return "The import budget is a positive number of dollars.";
+  return undefined;
+}
+
+/** The check command the test command makes: one "check", as Settings › Quality › Checks keeps it. */
+export const testCheck = (line: string): CheckCommand => ({ id: "tests", label: "Tests", kind: "check", argv: splitLine(line) });
+
+// ---------- 2 · Reading ----------
+
+/** The import's budget line: "$0.74 spent of the $3.00 import budget. The estimate: $0.43–$2.07." */
+export function spendWords(s: State): { spent: number; budget: number; estimate: [number, number]; line: string; unknown?: string; stop?: string } {
+  const imp = s.studio.import!;
+  const sp = importSpend(s);
+  const [lo, hi] = imp.estimate.usd;
+  const stop = importStop(s);
+  return {
+    spent: sp.usd,
+    budget: imp.budgetUsd,
+    estimate: [lo, hi],
+    line: `${fmtUsd(sp.usd)} spent of the ${fmtUsd(imp.budgetUsd)} import budget. The estimate: ${fmtUsd(lo)}–${fmtUsd(hi)}.`,
+    ...(sp.unknown.length ? { unknown: `${count(sp.unknown.length, "run")} recorded no cost, so the spend can be higher.` } : {}),
+    ...(stop ? { stop: stop.why } : {}),
+  };
+}
+
+/** What each step of the import cost so far, from its runs' costs (a simulated run is a known $0); the lead's replies apart. */
+export function spendByStep(s: State): { step: ImportStep | "lead"; usd: number }[] {
+  const imp = s.studio.import!;
+  const end = imp.lockedInAt ?? "￿";
+  const runs = [...importRuns(s).map((r) => ({ step: r.importStep!, r })), ...s.leadRuns.filter((r) => r.startedAt >= imp.startedAt && r.startedAt < end).map((r) => ({ step: "lead" as const, r }))];
+  const out = new Map<ImportStep | "lead", number>();
+  for (const { step, r } of runs) {
+    const c = estimateUsd(r, PRICES);
+    out.set(step, (out.get(step) ?? 0) + (c.usd ?? c.recordedUsd ?? 0));
+  }
+  return [...out].map(([step, usd]) => ({ step, usd }));
+}
+
+const RUN_MARK = (r: { status: string } | undefined): StepMark => (!r ? "waiting" : r.status === "completed" ? "done" : r.status === "failed" ? "fail" : r.status === "queued" ? "waiting" : "running");
+const RUN_STATE: Record<string, string> = { queued: "queued", running: "running", stopping: "stopping", failed: "failed", stopped: "stopped" };
+
+/**
+ * The reading, in order (C2): the tests, then the rules, then the parts, then the recording; the words at the same
+ * time. Each step's state in words, from the import's records and its runs.
+ */
+export function readingSteps(s: State): StepItem[] {
+  const imp = s.studio.import!;
+  const latest = (step: ImportStep) => importRuns(s, step).at(-1);
+  const who = (step: ImportStep) => {
+    const r = latest(step);
+    if (!r) return undefined;
+    const by = `${r.kind === "reader" ? "Reader" : "Designer"} · ${r.provider === "claude" ? "Claude" : "Codex"}`;
+    return step === "rules" && imp.helpers ? `${by} · up to ${count(imp.helpers, "helper")}, read-only` : by;
+  };
+  const runState = (step: ImportStep, done: string | undefined) => {
+    const r = latest(step);
+    if (done) return { mark: "done" as const, state: done };
+    if (!r) return { mark: "waiting" as const, state: "not started" };
+    return { mark: RUN_MARK(r), state: r.status === "completed" ? "done" : (RUN_STATE[r.status] ?? r.status) };
+  };
+  const c = imp.checks;
+  const reading = imp.reading;
+  const withTest = reading ? reading.rules.filter((r) => r.tests.length).length : 0;
+  const parts = importParts(s).filter((a) => a.kind !== "dictionary");
+  const words = importParts(s).find((a) => a.kind === "dictionary");
+  const cap = imp.capture;
+  const recorded = cap?.parts.filter((p) => p.status === "captured").length ?? 0;
+  return [
+    {
+      id: "checks",
+      name: "The tests",
+      who: "the service",
+      ...(c.status === "pending" ? { mark: "running" as const, state: "running your test command in the environment" } : c.status === "not-run" ? { mark: "skipped" as const, state: `not run: ${c.reason}` } : { mark: "done" as const, state: testsLine(c.counts) }),
+    },
+    { id: "rules", name: "The rules", who: who("rules"), ...runState("rules", reading ? `${count(reading.rules.length, "rule")}: ${withTest} from the tests, ${reading.rules.length - withTest} from the code and the docs` : undefined) },
+    { id: "parts", name: "The parts", who: who("parts"), ...runState("parts", parts.length && latest("parts")?.status === "completed" ? `${count(parts.length, "part")}: ${parts.map((p) => p.title).join(", ")}` : undefined) },
+    {
+      id: "capture",
+      name: "The recording",
+      who: "the service",
+      ...(cap
+        ? { mark: recorded ? ("done" as const) : ("skipped" as const), state: cap.parts.length ? `${recorded} of ${cap.parts.length} recorded${cap.simulated ? " (simulated)" : ""}${recorded < cap.parts.length ? `: ${cap.parts.find((p) => p.status === "none")?.detail ?? ""}` : ""}` : "nothing to record" }
+        : { mark: "waiting" as const, state: latest("parts")?.status === "completed" ? "recording the parts in the environment" : "after the parts" }),
+    },
+    { id: "words", name: "The words (at the same time)", who: who("words"), ...runState("words", words ? count(words.dictionary?.length ?? 0, "word") : undefined) },
+  ];
+}
+
+/** "22 read, all pass", "22 read: 21 pass, 1 fails". */
+function testsLine(c: Record<"passed" | "failed" | "skipped" | "error", number>): string {
+  const total = c.passed + c.failed + c.skipped + c.error;
+  if (total === c.passed) return `${total} read, all pass`;
+  return `${total} read: ${[c.passed ? `${c.passed} pass` : "", c.failed ? `${c.failed} ${c.failed === 1 ? "fails" : "fail"}` : "", c.error ? `${c.error} ended with an error` : "", c.skipped ? `${c.skipped} skipped` : ""].filter(Boolean).join(", ")}`;
+}
+
+// ---------- 3 · Review ----------
+
+/** A rule's confidence in words, for its chip and the legend. */
+export const CONFIDENCE_WORDS: Record<Confidence["level"], { word: string; tone: "fail" | "you" | "done"; means: string }> = {
+  conflict: { word: "conflict", tone: "fail", means: "Two sources disagree, or a test fails." },
+  inferred: { word: "inferred", tone: "you", means: "Read from the code. Nothing proves it." },
+  confirmed: { word: "confirmed", tone: "done", means: "Every test it names passes." },
+};
+
+/** The import's rule by its id. */
+export const ruleOf = (s: State, id: string): ImportRule | undefined => s.studio.import?.reading?.rules.find((r) => r.id === id);
+
+/** The baseline report's cases a rule names, in its order. */
+function ruleCases(s: State, rule: ImportRule): TestCaseResult[] {
+  const cases = s.studio.import?.reading?.cases ?? [];
+  return rule.tests.map((id) => cases.find((c) => testId(c) === id)).filter((c): c is TestCaseResult => !!c);
+}
+
+const FROM_WORD: Record<ImportSource["from"], string> = { test: "The test", code: "The code", docs: "The docs" };
+
+/** A source as the question's table shows it: where, and what it says (with a test's result). */
+export function sourceRow(s: State, rule: ImportRule, x: ImportSource): { where: string; says: string } {
+  const c = x.from === "test" ? ruleCases(s, rule).find((k) => testId(k) === x.ref) : undefined;
+  const result = c ? ` · ${c.status === "passed" ? "passes" : c.status === "skipped" ? "skipped" : "fails"}` : "";
+  return { where: x.from === "docs" ? x.ref : `${FROM_WORD[x.from]}, ${x.ref}`, says: `${x.says}${result}` };
+}
+
+/** An option with its label (the domain's) and what it does. */
+interface OptionWords {
+  id: string;
+  label: string;
+  detail: string;
+  needsText: boolean;
+}
+
+export function optionWords(s: State, options: readonly ImportOption[]): OptionWords[] {
+  const name = productName(s);
+  return options.map((o) => ({
+    id: o.id,
+    label: o.label,
+    needsText: !!o.needsText,
+    detail:
+      o.id === "confirm"
+        ? "It goes into the baseline as it is."
+        : o.id === "correct"
+          ? "Say what is wrong."
+          : o.id === "neither"
+            ? "Write what is right. It becomes a change to design."
+            : o.keeps
+              ? `${name} stays as it is, and this goes into the baseline.`
+              : `${name} must change. The baseline keeps what ${name} does today, and this becomes a change to design.`,
+  }));
+}
+
+/** The two choices of "Correct" (C15), on a guess or on a confirmed rule or part. */
+export const CORRECTIONS = (name: string) =>
+  [
+    { value: "change", label: `${name} should do something else`, hint: "A change to design. The baseline keeps what it does today." },
+    { value: "misread", label: `${name} does something else today`, hint: "The reader misread the code. A designer fixes the part before the baseline." },
+  ] as const;
+
+/** One answer before it is sent: the option, and for "correct" and "neither" the owner's words. */
+export interface DraftAnswer {
+  option?: string;
+  correction?: "change" | "misread";
+  text?: string;
+}
+export type ReviewDraft = Record<string, DraftAnswer>;
+export const ruleKey = (id: string) => `rule:${id}`;
+export const partKey = (id: string) => `part:${id}`;
+export const targetOf = (key: string): ImportTarget => (key.startsWith("rule:") ? { rule: key.slice(5) } : { part: key.slice(5) });
+
+/** The answer shown for a rule or a part: the one not sent yet, else the one that counts. */
+export function shownAnswer(s: State, draft: ReviewDraft, key: string): DraftAnswer | undefined {
+  if (key in draft) return draft[key];
+  const on = JSON.stringify(targetOf(key));
+  const a = s.studio.import?.answers.filter((x) => JSON.stringify(x.on) === on).at(-1);
+  return a ? { option: a.option, ...(a.correction ? { correction: a.correction } : {}), ...(a.text ? { text: a.text } : {}) } : undefined;
+}
+
+/** What the shown answer does: open while none, else its effect (a correction with no kind yet is a change). */
+export function shownEffect(s: State, a: DraftAnswer | undefined): AnswerEffect | "open" {
+  if (!a?.option || !s.studio.import) return "open";
+  return answerEffect(s.studio.import, { on: { rule: "" }, option: a.option, ...(a.option === "correct" ? { correction: a.correction ?? "change" } : {}), at: "" });
+}
+
+/** What an answer does, in a sentence under the question. Empty while it is open. */
+export function effectSentence(s: State, options: readonly ImportOption[], a: DraftAnswer | undefined): string {
+  const name = productName(s);
+  const effect = shownEffect(s, a);
+  const label = a?.option === "correct" ? CORRECTIONS(name)[0].label : (options.find((o) => o.id === a?.option)?.label ?? "");
+  switch (effect) {
+    case "open":
+      return "";
+    case "kept":
+      return a?.option === "confirm" ? "Confirmed. It goes into the baseline as it is." : `Your answer: ${label}. ${name} stays as it is, and this goes into the baseline.`;
+    case "fixed":
+      return `Your answer: ${name} does something else today. A designer fixes the part from your words, and it goes into the baseline as you wrote.`;
+    case "change":
+      return `Your answer: ${label}. The baseline keeps what ${name} does today. Your change becomes a change to design.`;
+  }
+}
+
+/** The review's counts: what needs you, what is confirmed, what is not asked, and how many you answered. */
+export function reviewCounts(s: State, draft: ReviewDraft) {
+  const imp = s.studio.import!;
+  const rules = imp.reading?.rules ?? [];
+  const { asked, notAsked } = importQuestions(imp);
+  const conflicts = asked.filter((q) => q.kind === "conflict").length;
+  const confirmed = rules.filter((r) => ruleConfidence(imp, r).level === "confirmed").length;
+  const answered = asked.filter((q) => shownEffect(s, shownAnswer(s, draft, ruleKey(q.ruleId))) !== "open").length;
+  return { questions: asked.length, conflicts, guesses: asked.length - conflicts, confirmed, notAsked: notAsked.length, answered };
+}
+
+/** "2 conflicts and 3 guesses need you;" and " 12 rules are confirmed." */
+export function needLine(c: ReturnType<typeof reviewCounts>): { need: string; rest: string } {
+  const need = c.questions ? `${[c.conflicts ? count(c.conflicts, "conflict") : "", c.guesses ? count(c.guesses, "guess", "guesses") : ""].filter(Boolean).join(" and ")} ${c.questions === 1 ? "needs" : "need"} you;` : "Nothing needs you;";
+  return { need, rest: ` ${count(c.confirmed, "rule")} ${c.confirmed === 1 ? "is" : "are"} confirmed.` };
+}
+
+/** The line in the send bar: how many are answered, and what happens to the rest if you send now. */
+export function answeredLine(c: ReturnType<typeof reviewCounts>): { bold: string; rest?: string } {
+  const left = c.questions - c.answered;
+  if (!c.questions) return { bold: "There is nothing to answer." };
+  if (!left) return { bold: `All ${c.questions} answered.` };
+  return { bold: `${c.answered} of ${c.questions} answered.`, rest: `${left} ${left === 1 ? "stays" : "stay"} open if you send now.` };
+}
+
+export const UNANSWERED_TEXT = 'An unanswered question goes into the baseline as the code has it, marked "not confirmed", and stays open in Vision.';
+
+/** The rules a part places, as the reading holds them. */
+function partRules(s: State, a: StudioArtifact): ImportRule[] {
+  const ids = new Set((a.rules ?? []).flatMap((v) => v.rules.map((r) => r.id)));
+  return (s.studio.import?.reading?.rules ?? []).filter((r) => ids.has(r.id));
+}
+
+/** Every test a rule names passes (at least one). */
+const verified = (s: State, r: ImportRule) => {
+  const cs = ruleCases(s, r);
+  return cs.length > 0 && cs.every((c) => c.status === "passed");
+};
+
+/** How a part is listed in the review (C8): recorded from the running code, or read from the code, with its rules' tests. */
+export function partLine(s: State, a: StudioArtifact): string {
+  if (a.kind === "dictionary") return `${count(a.dictionary?.length ?? 0, "word")}, from the README, the docs and the names in the code.`;
+  const cap = s.studio.import?.capture?.parts.find((p) => p.artifactId === a.id);
+  const rules = partRules(s, a);
+  const tests = rules.length ? ` Its rules: ${rules.filter((r) => verified(s, r)).length} of ${rules.length} have a passing test.` : "";
+  if (cap?.status === "captured") return `Recorded from the running ${a.kind === "screen" ? "app" : "CLI"}${s.studio.import?.capture?.simulated ? " (simulated)" : ""}.${tests}`;
+  if (cap?.status === "none") return `Read from the code: not recorded, because ${cap.detail.replace(/\.$/, "").replace(/^[A-Z]/, (c) => c.toLowerCase())}.${tests}`;
+  return `Read from the code: ${a.provenance?.files.join(", ")}.${tests}`;
+}
+
+/** A rule's tests in a line: "test_add.py::test_records_expense +1 more · all pass". */
+export function testsTag(s: State, rule: ImportRule): string | undefined {
+  const cases = ruleCases(s, rule);
+  if (!cases.length) return undefined;
+  const bad = cases.find((c) => c.status !== "passed");
+  return `${testId(cases[0])}${cases.length > 1 ? ` +${cases.length - 1} more` : ""} · ${bad ? (bad.status === "skipped" ? "skipped" : "fails") : cases.length > 1 ? "all pass" : "passes"}`;
+}
+
+// ---------- 4 · Baseline ----------
+
+/** "5 of 5 pass", "2 of 3 pass · 1 no test", "4 of 5 pass · 1 fails": a part's rules and the tests they name. */
+function partTests(s: State, a: StudioArtifact): string | undefined {
+  const rules = partRules(s, a);
+  if (!rules.length) return undefined;
+  const cases = rules.map((r) => ruleCases(s, r));
+  const fails = cases.filter((cs) => cs.some((c) => c.status === "failed" || c.status === "error")).length;
+  const none = cases.filter((cs) => !cs.length).length;
+  return [`${cases.filter((cs) => cs.length && cs.every((c) => c.status === "passed")).length} of ${rules.length} pass`, fails ? `${fails} ${fails === 1 ? "fails" : "fail"}` : "", none ? `${none} no test` : ""].filter(Boolean).join(" · ");
+}
+
+/** The baseline's parts: name, version and kind, its rules' tests, and whether the import recorded it. */
+export function baselineRows(s: State): { id: string; title: string; version: number; facts: string }[] {
+  return importParts(s).map((a) => {
+    const cap = s.studio.import?.capture?.parts.find((p) => p.artifactId === a.id);
+    const tests = partTests(s, a);
+    return { id: a.id, title: a.title, version: a.version, facts: [a.kind.replace("-", " "), tests ? `tests ${tests}` : "", cap ? (cap.status === "captured" ? "recorded" : "not recorded") : ""].filter(Boolean).join("; ") };
+  });
+}
+
+/** The facts the baseline Lock in records, following the answers you sent: a bold lead and the rest of each. */
+export function baselineFacts(s: State): { bold: string; rest: string }[] {
+  const imp = s.studio.import!;
+  const name = productName(s);
+  const rules = imp.reading?.rules ?? [];
+  const parts = importParts(s);
+  const verifiedN = rules.filter((r) => verified(s, r)).length;
+  const failing = rules.filter((r) => ruleCases(s, r).some((c) => c.status === "failed" || c.status === "error")).length;
+  const noTest = rules.filter((r) => !ruleCases(s, r).length);
+  const by = (e: AnswerEffect | "open") => noTest.filter((r) => itemAnswerEffect(imp, { rule: r.id }) === e).length;
+  const kept = by("kept") + by("fixed");
+  const facts = [{ bold: `${count(parts.length, "part")} and their ${count(rules.length, "rule")}`, rest: ` go into force as ${name} is today. They count as built.` }];
+  if (imp.checks.status === "not-run") facts.push({ bold: "The tests did not run:", rest: ` ${imp.checks.reason}. Every rule is read from the code, and no part is recorded.` });
+  else facts.push({ bold: `${count(verifiedN, "rule")} ${verifiedN === 1 ? "is" : "are"} verified:`, rest: ` ${verifiedN === 1 ? "its tests pass" : "their tests pass"}.` });
+  if (failing) facts.push({ bold: `${count(failing, "rule")} ${failing === 1 ? "fails its test" : "fail their tests"}:`, rest: ` the part reads "fails a check".` });
+  if (noTest.length) {
+    const split = [kept ? `${kept} you confirmed` : "", by("change") ? `${by("change")} you want changed` : "", by("open") ? `${by("open")} not answered` : ""].filter(Boolean);
+    facts.push({ bold: `${count(noTest.length, "rule")} ${noTest.length === 1 ? "has" : "have"} no test:`, rest: ` ${split.join(", ")}. They go in as ${name} does them today.` });
+  }
+  const changes = openChanges(s).length;
+  facts.push(
+    changes
+      ? { bold: "The factory has nothing to build now.", rest: ` Your ${count(changes, "change")} to design ${changes === 1 ? "waits" : "wait"} for the lead's next round.` }
+      : { bold: "The factory has nothing to build.", rest: " It starts when you change the design." },
+  );
+  return facts;
+}
+
+/** The changes to design that wait (C5): open while no newer version of their part exists. */
+export const openChanges = (s: State) => changeRequests(s).filter((c) => c.open);
+
+/** A change request in a line: "tally add: The docs: a currency on each expense", or the owner's words. */
+export function changeLine(s: State, c: ChangeRequest): string {
+  const part = s.studio.artifacts.find((a) => a.id === c.artifactId);
+  return `${part?.title ?? "A part"}: ${c.text}`;
+}
+
+/** The rules the owner kept or corrected that no test proves, or that two sources disagreed on. */
+export function keptRules(s: State): { rule: ImportRule; chip: string; was: string }[] {
+  const imp = s.studio.import!;
+  return (imp.reading?.rules ?? [])
+    .map((r) => ({ r, c: ruleConfidence(imp, r), e: itemAnswerEffect(imp, { rule: r.id }) }))
+    .filter(({ r, c, e }) => (!ruleCases(s, r).length || c.level === "conflict") && (e === "kept" || e === "fixed"))
+    .map(({ r, c, e }) => ({ rule: r, chip: e === "fixed" ? "you corrected" : "you confirmed", was: `${r.id} · was ${c.level === "conflict" ? "a conflict" : "inferred"}${ruleCases(s, r).length ? "" : " · no test"}` }));
+}
+
+/** The questions not answered: they go in as the code has them, and stay open in Vision. */
+export function openQuestions(s: State): ImportRule[] {
+  const imp = s.studio.import!;
+  return importQuestions(imp)
+    .asked.filter((q) => itemAnswerEffect(imp, { rule: q.ruleId }) === "open")
+    .map((q) => ruleOf(s, q.ruleId)!)
+    .filter(Boolean);
+}
+
+// ---------- 5 · After ----------
+
+/** The chip an import answer puts beside a rule in Design and reality; undefined when it was neither asked nor answered. */
+export function answerChip(s: State, ruleId: string): { word: string; tone: "neutral" | "you" } | undefined {
+  const imp = s.studio.import;
+  if (!imp) return undefined;
+  const e = itemAnswerEffect(imp, { rule: ruleId });
+  if (e === "open") return importQuestions(imp).asked.some((q) => q.ruleId === ruleId) ? { word: "not confirmed", tone: "you" } : undefined;
+  return { word: e === "kept" ? "you confirmed it" : e === "fixed" ? "as you corrected it" : "a change to design", tone: e === "change" ? "you" : "neutral" };
+}
+
+/** Home after the baseline: nothing to build, or the changes to design that wait. */
+export function nothingToBuild(s: State): { bold: string; rest: string; changes: number } {
+  const changes = openChanges(s).length;
+  return changes
+    ? { bold: "Nothing to build yet:", rest: ` ${count(changes, "change")} to design ${changes === 1 ? "waits" : "wait"}. Ask the lead for a round in Vision, then start the factory.`, changes }
+    : { bold: "Nothing to build:", rest: " change the design in Vision to start work.", changes };
+}
+
+/** The message "Ask the lead for a round" sends: the changes to design, in the owner's words. */
+export function roundRequest(s: State): string {
+  return `Please open a round to design the changes I asked for in the import's review:\n${openChanges(s)
+    .map((c) => `- ${changeLine(s, c)}`)
+    .join("\n")}`;
+}

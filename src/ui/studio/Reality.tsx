@@ -10,12 +10,13 @@ import * as B from "../../domain/studio/blueprint";
 import { isCapturedKind, type CaptureDevice, type ItemEvidence } from "../../domain/studio/evidence";
 import { blueprintFactoryStatus, screenDevices, type ItemFactoryView, type UxReviewOfItem } from "../../domain/studio/itemStatus";
 import type { StudioArtifact } from "../../domain/studio/types";
-import { Card, Chip, EmptyState, StatePill, Tabs } from "../kit";
+import { Card, Chip, EmptyState, SimulatedChip, StatePill, Tabs } from "../kit";
 import { designFirst } from "../resultsView";
 import { useStore } from "../store";
 import { ScaledBox, TerminalRecording, TerminalText, TerminalWindow, useServiceText } from "./Frames";
 import { ArtifactPreview, TermsTable } from "./Preview";
 import { readCast, renderAnsi } from "./ansi";
+import { answerChip, ruleOf } from "../import/importView";
 import { NO_EVIDENCE_CLAUSE, STATUS_TONE, STATUS_WORDS, differenceState, evidenceCaption, evidenceFileUrl, recordingOf, ruleCell, rulesLine, shortSha, shotOf, statusWhy, taskState, taskWords } from "./realityView";
 import { DEVICE_LABEL, DEVICE_SIZE, serviceFileUrl, showKind, variantDemo } from "./studioView";
 import "./studio.css";
@@ -58,7 +59,8 @@ export function Reality() {
       ) : (
         <>
           <p className="small muted no-margin">
-            Lock in {B.blueprintRev(state)} · {views.length} part{views.length === 1 ? "" : "s"}. Each part of the design, where the factory stands on it, and the evidence beside the design. The checks decide "built and verified".
+            Lock in {B.blueprintRev(state)}
+            {state.blueprint.revisions.at(-1)?.lockIn?.baseline ? ", the baseline" : ""} · {views.length} part{views.length === 1 ? "" : "s"}. Each part of the design, where the factory stands on it, and the evidence beside the design. The checks decide "built and verified".
           </p>
           <div className="st-reality">
             <div className="k-stack k-stack--tight">
@@ -84,16 +86,17 @@ export function Reality() {
 /** One part of the design: its name, version and kind, its status, its tasks, its rule results, and its evidence thumbnails. */
 function ItemRow({ view: v, current, onClick }: { view: ItemFactoryView; current: boolean; onClick: () => void }) {
   const rules = rulesLine(v);
+  const status = v.status;
   return (
     <button type="button" className="st-bprow" aria-current={current ? "true" : undefined} onClick={onClick}>
       <span className="st-bprow__name">
         <b>{v.item.title}</b> <span className="muted">v{v.item.version}</span>
         <span className="st-bprow__kind">{v.item.kind}</span>
       </span>
-      <StatePill tone={STATUS_TONE[v.status]} pulse={v.status === "being-built" && v.tasks.some((t) => t.state === "running")}>
-        {STATUS_WORDS[v.status]}
+      <StatePill tone={STATUS_TONE[status]} pulse={status === "being-built" && v.tasks.some((t) => t.state === "running")}>
+        {STATUS_WORDS[status]}
       </StatePill>
-      <span className="st-bprow__tasks">{v.tasks.length ? v.tasks.map((t) => taskWords(t, v.item.version)).join(" · ") : "no task yet"}</span>
+      <span className="st-bprow__tasks">{v.baseline ? "from the import" : v.tasks.length ? v.tasks.map((t) => taskWords(t, v.item.version)).join(" · ") : "no task yet"}</span>
       {rules && <span className="st-bprow__rules">Tests: {rules}</span>}
       <Thumbs view={v} />
     </button>
@@ -155,11 +158,15 @@ export function ItemDetail({ view: v }: { view: ItemFactoryView }) {
       actions={<StatePill tone={STATUS_TONE[v.status]}>{STATUS_WORDS[v.status]}</StatePill>}
       className="st-reality__card"
     >
-      <p className="small muted no-margin">{v.item.kind}</p>
+      <p className="small muted no-margin">
+        {v.item.kind}
+        {v.baseline ? " · from the import, Lock in 1" : ""}
+      </p>
       <p className="small">{statusWhy(v)}</p>
+      {v.baseline && <BaselinePane view={v} artifact={artifact} />}
       {v.rules ? (
         <RuleTable view={v} />
-      ) : kind === "dictionary" && artifact ? (
+      ) : v.baseline ? null : kind === "dictionary" && artifact ? (
         <TermsTable artifact={artifact} />
       ) : v.item.kind === "screen" ? (
         <ScreenBeside view={v} artifact={artifact} />
@@ -187,6 +194,28 @@ export function ItemDetail({ view: v }: { view: ItemFactoryView }) {
         </section>
       )}
     </Card>
+  );
+}
+
+/**
+ * What the import made of a part of its baseline (ORC-032): a dictionary's terms, or the part as the repository is at
+ * the import's commit; for a screen, a terminal demo or a TUI, the import's recording of it, or why there is none.
+ */
+function BaselinePane({ view: v, artifact }: { view: ItemFactoryView; artifact: StudioArtifact | undefined }) {
+  const { state } = useStore();
+  const b = v.baseline!;
+  if (artifact?.kind === "dictionary") return <TermsTable artifact={artifact} />;
+  const cap = b.capture;
+  const simulated = cap?.status === "captured" && !!state.studio.import?.capture?.simulated;
+  const caption = !isCapturedKind(v.item.kind) ? `The design · as it is today, at commit ${shortSha(b.commit)}` : cap?.status === "captured" ? `Recorded at commit ${shortSha(b.commit)}` : `Not recorded${cap?.status === "none" ? `: ${cap.detail}` : ""}`;
+  return (
+    <section className="st-beside__pane" aria-label={isCapturedKind(v.item.kind) ? "The recording" : "The design"}>
+      <p className="st-beside__cap">
+        <span>{caption}</span>
+        {simulated && <SimulatedChip title="Simulated: the recording was not made; no code ran." />}
+      </p>
+      <DesignStage view={v} artifact={artifact} device="desktop" />
+    </section>
   );
 }
 
@@ -433,6 +462,7 @@ function RuleTable({ view: v }: { view: ItemFactoryView }) {
                 </th>
                 <td data-label="Test">
                   <Chip tone={cell.tone}>{cell.word}</Chip>
+                  {v.baseline && <BaselineEvidence ruleId={r.id} />}
                   {cell.detail && <p className="micro muted no-margin">{cell.detail}</p>}
                 </td>
               </tr>
@@ -441,5 +471,32 @@ function RuleTable({ view: v }: { view: ItemFactoryView }) {
         </tbody>
       </table>
     </div>
+  );
+}
+
+/**
+ * Beside a baseline rule's result (ORC-032): the test the rule names, and what your answer in the import's review did
+ * ("you confirmed it", "as you corrected it", "a change to design", or "not confirmed" for a question left open).
+ */
+function BaselineEvidence({ ruleId }: { ruleId: string }) {
+  const { state } = useStore();
+  const tests = ruleOf(state, ruleId)?.tests ?? [];
+  const chip = answerChip(state, ruleId);
+  return (
+    <>
+      {tests.length > 0 && (
+        <span className="micro muted s-mono imp-wrap">
+          {" "}
+          {tests[0]}
+          {tests.length > 1 ? ` +${tests.length - 1}` : ""}
+        </span>
+      )}
+      {chip && (
+        <>
+          {" "}
+          <Chip tone={chip.tone}>{chip.word}</Chip>
+        </>
+      )}
+    </>
   );
 }

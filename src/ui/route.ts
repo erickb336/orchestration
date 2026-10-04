@@ -4,12 +4,12 @@
 // query after the page name (`#/vision?history=1`, `#/tasks?area=Maps`) never changes which page opens; the page
 // reads it.
 
-export type Route = { page: "overview" | "tasks" | "review" | "activity" | "settings" | "kit" | "vision" | "lock-in" | "preflight" | "reality" } | { page: "task"; id: string } | { page: "change-order"; rev: number };
+export type Route = { page: "overview" | "tasks" | "review" | "activity" | "settings" | "kit" | "vision" | "lock-in" | "preflight" | "reality" | "baseline" } | { page: "task"; id: string } | { page: "change-order"; rev: number };
 
-/** The page under the tab it belongs to: a task page and a change order to Tasks, the Lock in summary and the pre-flight to Vision, Design and reality to Results. */
+/** The page under the tab it belongs to: a task page and a change order to Tasks, the Lock in summary, the baseline and the pre-flight to Vision, Design and reality to Results. */
 export function tabOf(route: Route): string {
   if (route.page === "task" || route.page === "change-order") return "tasks";
-  if (route.page === "lock-in" || route.page === "preflight") return "vision";
+  if (route.page === "lock-in" || route.page === "preflight" || route.page === "baseline") return "vision";
   if (route.page === "reality") return "review";
   return route.page;
 }
@@ -29,6 +29,8 @@ export function parseRoute(hash: string): Route {
   if (page === "kit") return { page: "kit" };
   // The Lock in summary (ORC-029 pass 5), from the studio's draft bar.
   if (page === "vision" && sub === "lock-in") return { page: "lock-in" };
+  // The baseline Lock in of an import (ORC-032, C4), from the import's review.
+  if (page === "vision" && sub === "baseline") return { page: "baseline" };
   // The pre-flight (ORC-029 pass 6): Start the factory, from Home, Vision and Settings while in Vision.
   if (page === "vision" && sub === "pre-flight") return { page: "preflight" };
   // Vision, the studio (ORC-029): a main navigation item, in Vision and in Factory.

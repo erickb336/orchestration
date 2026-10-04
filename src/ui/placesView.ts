@@ -3,8 +3,11 @@
 // desktop; "running" and "draft 5" under the item's name on a phone. The facts come from src/domain/places.ts.
 
 import type { FactoryPlace, VisionPlace } from "../domain/places";
+import { importQuestions, importStatus, itemAnswerEffect } from "../domain/studio/import";
+import type { State } from "../domain/types";
 import type { Tone } from "./kit";
 import { relTime } from "./common";
+import { openChanges } from "./import/importView";
 
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -54,4 +57,37 @@ export function factoryPlaceState(p: FactoryPlace, live: string): PlaceState {
   if (p.state === "paused") return { text: "project paused by you", short: "paused", tone: "neutral", paused: true, title: `You paused the project. Nothing starts until you resume it (the Project menu). ${live}.` };
   if (p.state === "budget-stop") return { text: "factory stopped at the budget", short: "stopped", tone: "you", title: `${p.why}. Nothing new starts until you raise the budget or continue past it.` };
   return { text: `factory running · ${p.agents ? count(p.agents, "agent") : "idle"}`, short: "running", tone: p.agents ? "work" : "neutral", pulse: p.agents > 0, title: `The factory runs. ${live}.` };
+}
+
+/**
+ * The two places while a project imports a repository (ORC-032): "importing"; then "needs you" and "round 0 · 5 need
+ * you" while the review waits for your answers; after the baseline, "nothing to build" and, when you asked for
+ * changes, "2 changes to design" (C5). Undefined for a place the import does not change: its usual state shows. A
+ * paused project keeps Home's paused state.
+ */
+export function importPlaces(s: State): { home?: PlaceState; vision?: PlaceState } | undefined {
+  const status = importStatus(s);
+  if (!status || s.project.stage !== "shaping") return undefined;
+  const home = (p: PlaceState) => (s.project.hold ? undefined : p);
+  if (status === "stopped") {
+    const st: PlaceState = { text: "import stopped", short: "stopped", tone: "fail", title: `The import stopped: ${s.studio.import!.stopped!.reason}` };
+    return { home: home(st), vision: st };
+  }
+  if (status === "reading") {
+    const st: PlaceState = { text: "importing", tone: "work", pulse: true, title: "The import reads your repository. Vision shows each step." };
+    return { home: home(st), vision: st };
+  }
+  if (status === "review") {
+    const imp = s.studio.import!;
+    const open = importQuestions(imp).asked.filter((q) => itemAnswerEffect(imp, { rule: q.ruleId }) === "open").length;
+    return {
+      home: home({ text: "1 needs you", short: "needs you", tone: "you", title: "The import's review waits for you in Vision." }),
+      vision: { text: open ? `round 0 · ${open} ${open === 1 ? "needs" : "need"} you` : "round 0 · Lock in the baseline", short: "round 0", tone: "you", title: open ? `${count(open, "question")} of the import's review ${open === 1 ? "waits" : "wait"} for your answer.` : "Every question is answered. Lock in the baseline." },
+    };
+  }
+  const changes = openChanges(s).length;
+  return {
+    home: home({ text: "nothing to build", short: "idle", tone: "neutral", title: "The baseline is in force and built. The factory starts when you change the design." }),
+    ...(changes ? { vision: { text: `${count(changes, "change")} to design`, short: `${count(changes, "change")}`, tone: "you" as const, title: `You asked for ${count(changes, "change")} in the import's review. Ask the lead for a round to design ${changes === 1 ? "it" : "them"}.` } } : {}),
+  };
 }
