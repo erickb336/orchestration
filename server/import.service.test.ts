@@ -306,6 +306,32 @@ describe("the import's controls", () => {
     expect(state().studio.runs.filter((r) => r.importStep === "words").map((r) => r.status).slice(0, 3)).toEqual(["lost", "lost", "lost"]);
   });
 
+  it("a result of the import before a reset or a new import is dropped; the new import records its own (R55-1)", async () => {
+    // The first baseline test run ends only after the project has another import.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let calls = 0;
+    const runner = new SimulatedImport();
+    const checks = runner.checks.bind(runner);
+    runner.checks = async (job) => {
+      if (++calls === 1) await gate;
+      return checks(job);
+    };
+    service(runner);
+    startImport();
+    now += 1000;
+    scheduler.tick(now);
+    for (let i = 0; i < 200 && calls === 0; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(calls).toBe(1);
+    store.update((s) => ({ ...s, studio: { ...s.studio, import: { ...s.studio.import!, id: "import-next" } } }), iso());
+    release();
+    await scheduler.importIdle();
+    await until((s) => s.studio.import!.checks.status !== "pending", "the new import's checks recorded");
+    expect(calls).toBe(2);
+    expect(state().studio.import!.stopped).toBeUndefined();
+    expect(state().studio.import!.id).toBe("import-next");
+  });
+
   it("holds new runs at the import's stop (the domain's dispatch)", async () => {
     service();
     startImport({ budgetUsd: 0.000001 });

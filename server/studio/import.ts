@@ -504,6 +504,8 @@ export class ImportDriver {
   }
 
   private record(d: Done, now: string, lease: Lease) {
+    // A result of an import that is no longer the project's (a demo reset, a new import) is dropped: it has nothing to record.
+    if (this.store.read().state.studio.import?.id !== d.importId) return this.o.log?.(`import: the ${d.kind} of ${d.importId} is dropped: it is not the project's import`);
     try {
       this.store.update((s) => (d.kind === "checks" ? I.recordImportChecks(s, { importId: d.importId, result: d.result }, now) : I.recordImportCapture(s, { importId: d.importId, capture: d.result }, now)), now, lease);
     } catch (e) {
