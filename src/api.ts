@@ -148,7 +148,7 @@ export type AttachVisionDocsResult = AttachResult;
 /**
  * What the import's Start screen shows (ORC-032; GET /api/import/start?path=…, or POST /api/import/demo for the bundled
  * sample with the simulated runtime). Read from the repository without changing it; nothing is saved. With it, the
- * screen sends initProject, setDomains, setDevices, the environment and checks setters, and startImport.
+ * screen sends one startImport command with everything it set (ImportProjectStart, src/domain/studio/types.ts).
  */
 export type ImportStartInfo =
   | { ok: false; reason: string }

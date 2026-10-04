@@ -195,9 +195,7 @@ describe("a designer run at the service", () => {
     execFileSync("git", ["-C", repo, "add", "-A"]);
     execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "the trip list"]);
     const commit = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-    cmd("initProject", { name: "Trips", repoPath: repo, vision: "", focus: "" });
-    cmd("setDomains", { domains: ["screen"] });
-    cmd("startImport", { commit, budgetUsd: 3, helpers: null, size: { sourceFiles: 1, testFiles: 0, kb: 1 }, ...o });
+    cmd("startImport", { name: "Trips", repoPath: repo, commit, domains: ["screen"], devices: ["desktop", "mobile"], budgetUsd: 3, helpers: null, size: { sourceFiles: 1, testFiles: 0, kb: 1 }, ...o });
     return { repo, commit };
   }
 

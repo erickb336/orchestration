@@ -344,9 +344,8 @@ describe("importing a designer run", () => {
       execFileSync("git", ["init", "-q", "-b", "main", repo]);
       execFileSync("git", ["-C", repo, "add", "-A"]);
       execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"]);
-      const project = runCommand(M.initProject(buildSeed(T0, { inFlightRuns: false }), { name: "Trips", repoPath: repo, vision: "Weekend trips.", focus: "" }, at(0)), "setDomains", { domains: ["screen"] }, at(0)).state;
       commit = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-      const base = runCommand(project, "startImport", { commit, budgetUsd: 3, helpers: null, size: { sourceFiles: 2, testFiles: 0, kb: 1 } }, at(1)).state;
+      const base = runCommand(buildSeed(T0, { inFlightRuns: false }), "startImport", { name: "Trips", repoPath: repo, commit, domains: ["screen"], devices: ["desktop", "mobile"], budgetUsd: 3, helpers: null, size: { sourceFiles: 2, testFiles: 0, kb: 1 } }, at(1)).state;
       const asked = runCommand(base, "startStudioRun", { kind: "designer", round: 0, brief: "Reproduce the trip list as it is today.", importStep: "parts" }, at(2));
       const runId = (asked.result as { runId: string }).runId;
       return { s: R.dispatchStudioRuns(asked.state, at(3)).state, runId };

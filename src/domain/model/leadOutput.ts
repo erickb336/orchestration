@@ -9,7 +9,7 @@ import { blueprintAcceptance, leadRefsProblem } from "../studio/blueprint";
 import { instantiate, toDef } from "../pipeline";
 import { type SpecOption, type SteeringChangeSet, type LeadQuestion, type LeadRun, type SpecContent, type State, type VisionDraft } from "../types";
 import { currentSpec, draft, event, getTask, nextId } from "./core";
-import { deferredLeadRoots, getLeadRun, openLeadProposals } from "./lead";
+import { deferredLeadRoots, getLeadRun, isImportReviewRun, openLeadProposals } from "./lead";
 import { type RunReport } from "./runs";
 import { applyStudioBlock, setRoundLead, type StudioBlockResult } from "../studio/lead";
 import { answerChangeOrderInto, recordPeRevisionInto } from "./changeOrderUpdates";
@@ -300,6 +300,8 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
                     : "No reply.");
   // The round the block addressed shows this reply and its questions beside its artifacts.
   if (studio?.round !== undefined) setRoundLead(s, studio.round, text, studio.questions);
+  // The import's review reply (ORC-032) is round 0's message: what the import found, beside its questions (UX-4).
+  else if (isImportReviewRun(s, r)) setRoundLead(s, 0, text, []);
   s.conversation.push({
     id: nextId(s, "msg"),
     at: now,

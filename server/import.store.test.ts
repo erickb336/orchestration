@@ -6,7 +6,9 @@ import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { baselineArgs, tallyImport } from "../src/domain/testing/import";
+import { buildDemo } from "../src/domain/demo";
+import { startImportProject, startPendingImport } from "../src/domain/studio/importStart";
+import { T0, TALLY_START, at, baselineArgs, tallyImport } from "../src/domain/testing/import";
 import { STATE_FORMAT, Store } from "./store";
 
 let dir: string;
@@ -52,6 +54,35 @@ describe("the import's state upgrade", () => {
     // A second baseline is refused by the domain; nothing else may add a revision either (the existing guard).
     expect(() => store.command("lockInBaseline", baselineArgs(store.read().state), "b2", new Date().toISOString())).toThrow("The baseline is the first Lock in, and the blueprint has one already.");
     expect(store.read().state.blueprint.revisions).toHaveLength(1);
+  });
+
+  it("one startImport replaces the sample, revisions in force included; a refused one writes nothing (CR-5, QA-F3)", () => {
+    const store = new Store(join(dir, "start.db"), () => buildDemo(T0));
+    opened.push(store);
+    const before = store.read();
+    expect(before.state.blueprint.revisions.length).toBeGreaterThan(0);
+    const noCodex = structuredClone(before.state);
+    noCodex.project.enabledProviders = ["claude"];
+    store.update(() => noCodex, at(1));
+    const old = store.read();
+    expect(() => store.command("startImport", { ...TALLY_START, readsOn: "codex" }, "s1", at(2))).toThrow("Codex reads the repository, and it is not enabled. Enable it in Settings.");
+    expect(store.read()).toEqual(old);
+    store.command("startImport", TALLY_START, "s2", at(3));
+    const after = store.read().state;
+    expect([after.project.sample, after.project.name, after.blueprint.revisions.length, after.studio.import?.commit]).toEqual([false, "tally (sample)", 0, TALLY_START.commit]);
+  });
+
+  it("only the service's start of an import that waited may replace the project in an internal update", () => {
+    const store = new Store(join(dir, "pending.db"), () => buildDemo(T0));
+    opened.push(store);
+    const sample = store.read().state;
+    const replaced = startImportProject(sample, TALLY_START, at(1));
+    expect(() => store.update(() => replaced, at(1))).toThrow("Refused: only the owner's Lock in puts the blueprint into force; an internal update changed or removed a revision in force. Nothing was written.");
+    const waiting = structuredClone(sample);
+    waiting.project.importPending = { at: at(1), input: TALLY_START };
+    store.update(() => waiting, at(1));
+    store.update((s) => startPendingImport(s, at(2)), at(2));
+    expect(store.read().state.studio.import?.startedAt).toBe(at(2));
   });
 
   it("only the command table calls lockInBaseline", () => {

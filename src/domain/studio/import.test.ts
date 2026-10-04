@@ -9,7 +9,7 @@ import { buildSeed } from "../seed";
 import { budgetStop, buildingSpend, importSpend, importStop } from "../spend";
 import { PROBE_KEY, setResearchHelpers, setSubagentProviders } from "../subagents";
 import { startFactoryAsOwner } from "../testing/factory";
-import { TALLY_COMMIT, TALLY_SIZE, at, T0, tallyCases, tallyImport, tallyReading } from "../testing/import";
+import { TALLY_COMMIT, TALLY_SIZE, TALLY_START, at, T0, tallyCases, tallyImport, tallyReading } from "../testing/import";
 import { peAgrees, run } from "../testing/studio";
 import { ControlError, type State } from "../types";
 import * as B from "./blueprint";
@@ -27,17 +27,24 @@ const failure = (fn: () => unknown): Error => {
   }
   throw new Error("expected a refusal");
 };
-/** A new project with the kind of product chosen, ready to start an import. */
-const ready = (): State => {
-  let s = M.initProject(buildSeed(T0, { inFlightRuns: false }), { name: "tally (sample)", repoPath: "/tmp/tally", vision: "", focus: "" }, at(0));
-  s = run(s, "setDomains", { domains: ["code"] }, at(0)).state;
-  return s;
+/** What the Start screen sends for tally, with how it runs: an image, a test command and its report. */
+const START = {
+  ...TALLY_START,
+  domains: ["code"],
+  environment: { image: `python:3.13-slim@sha256:${"a".repeat(64)}`, prepare: [["python3", "-m", "pip", "install", "-r", "requirements.txt"]], hosts: [] },
+  tests: { argv: ["python3", "tests/run.py"], report: "reports/junit.xml" },
 };
-const START = { commit: TALLY_COMMIT, branch: "main", budgetUsd: 3, helpers: null, size: TALLY_SIZE };
+/** The sample project, with no run active. */
+const sample = () => buildSeed(T0, { inFlightRuns: false });
 
 describe("the import's commands (phase A)", () => {
-  it("the owner starts it: pinned to the commit, with its budget and the estimate, and round 0 As it is today opened", () => {
-    const s = run(ready(), "startImport", START, at(1)).state;
+  it("the owner starts it in one command: a new project with its kind, devices and how it runs; pinned to the commit; round 0 opened", () => {
+    const before = sample();
+    const s = run(before, "startImport", START, at(1)).state;
+    expect(s.project).toMatchObject({ sample: false, name: "tally (sample)", repoPath: "/tmp/tally", stage: "shaping", domains: ["code"], devices: ["terminal"], environment: { image: START.environment.image } });
+    expect(s.project.id).not.toBe(before.project.id);
+    expect(s.project.checks).toMatchObject({ enabled: true, commands: [{ id: "tests", label: "Tests", kind: "check", argv: ["python3", "tests/run.py"] }], testReport: "reports/junit.xml" });
+    expect(s.tasks).toEqual([]);
     expect(s.studio.import).toEqual({
       id: s.studio.import!.id,
       commit: TALLY_COMMIT,
@@ -53,6 +60,10 @@ describe("the import's commands (phase A)", () => {
     expect(s.studio.rounds).toEqual([{ n: 0, focus: "material", openedAt: at(1), summary: "As it is today: what the repository does at commit c0ffee0 on main." }]);
     expect(I.importStatus(s)).toBe("reading");
     expect(s.events.at(-1)!.message).toBe("Import started: commit c0ffee0 on main, with a budget of $3.00 (the estimate: $0.43–$2.07); round 0, As it is today, opened");
+    // Without an environment or a test command, nothing of them is set: the import runs anyway (Q3).
+    const bare = run(sample(), "startImport", TALLY_START, at(1)).state;
+    expect(bare.project.environment).toBeUndefined();
+    expect(bare.project.checks.commands).toEqual([]);
   });
 
   it("the estimate is a formula of the files read, with its basis; it grows with the size", () => {
@@ -63,19 +74,29 @@ describe("the import's commands (phase A)", () => {
     );
   });
 
-  it("refuses a start outside a new project in Vision, before the kind of product, with a short commit, twice, or with helpers no provider tracks", () => {
-    const sample = buildSeed(T0, { inFlightRuns: false });
-    expect(failure(() => run(sample, "startImport", START, at(1))).message).toBe("The import starts a new project, in Vision.");
-    const noKind = M.initProject(sample, { name: "x", repoPath: "/tmp/x", vision: "", focus: "" }, at(0));
-    expect(failure(() => run(noKind, "startImport", START, at(1))).message).toBe("Choose the kind of product first: screen, code or infrastructure.");
-    expect(failure(() => run(ready(), "startImport", { ...START, commit: "c0ffee0" }, at(1))).message).toBe("The commit is a full commit id: 40 or 64 lowercase hex characters.");
-    expect(failure(() => run(ready(), "startImport", { ...START, budgetUsd: 0 }, at(1))).message).toBe("The import budget is a positive number of dollars.");
-    const started = run(ready(), "startImport", START, at(1)).state;
-    expect(failure(() => run(started, "startImport", START, at(2))).message).toBe("This project has an import already. To import again, start a new project.");
-    const withRound = run(ready(), "openRound", { focus: "experience" }, at(1)).state;
-    expect(failure(() => run(withRound, "startImport", START, at(2))).message).toBe("The import starts a new project, and this one has Vision rounds already. Start a new project in Settings.");
-    expect(failure(() => run(ready(), "startImport", { ...START, helpers: 2 }, at(1))).message).toBe("No provider tracks helper agents yet, so the rules reader cannot start them.");
-    expect(failure(() => run(ready(), "startImport", { ...START, readsOn: "gemini" }, at(1)))).toBeInstanceOf(InvalidCommandError);
+  it("checks every part before any change: each refusal names its reason, and the old project stays (CR-5, QA-F3)", () => {
+    const old = sample();
+    const refused = (args: object) => failure(() => run(old, "startImport", args, at(1)));
+    expect(refused({ ...START, domains: [] }).message).toBe("Choose at least one domain: screen, code or infrastructure.");
+    expect(refused({ ...START, devices: [] }).message).toBe("Choose at least one device: desktop, mobile or terminal.");
+    expect(refused({ ...START, commit: "c0ffee0" }).message).toBe("The commit is a full commit id: 40 or 64 lowercase hex characters.");
+    expect(refused({ ...START, budgetUsd: 0 }).message).toBe("The import budget is a positive number of dollars.");
+    expect(refused({ ...START, helpers: 2 }).message).toBe("No provider tracks helper agents yet, so the rules reader cannot start them.");
+    expect(refused({ ...START, name: " " }).message).toBe("Name and repository path are required.");
+    expect(refused({ ...START, readsOn: "gemini" })).toBeInstanceOf(InvalidCommandError);
+    // A provider that is not enabled is refused here, before the project is replaced.
+    const claudeOnly = structuredClone(old);
+    claudeOnly.project.enabledProviders = ["claude"];
+    expect(failure(() => run(claudeOnly, "startImport", { ...START, readsOn: "codex" }, at(1))).message).toBe("Codex reads the repository, and it is not enabled. Enable it in Settings.");
+    const codexOnly = structuredClone(old);
+    codexOnly.project.enabledProviders = ["codex"];
+    expect(failure(() => run(codexOnly, "startImport", START, at(1))).message).toBe("Claude reads the repository, and it is not enabled. Enable it in Settings, or pick Codex to read it.");
+    expect(run(codexOnly, "startImport", { ...START, readsOn: "codex" }, at(1)).state.studio.import!.readsOn).toBe("codex");
+    // A second start replaces the project with a new import: there is never a second import in one project.
+    const first = run(old, "startImport", START, at(1)).state;
+    const second = run(first, "startImport", START, at(2)).state;
+    expect(second.project.id).not.toBe(first.project.id);
+    expect(second.studio.rounds.map((r) => r.openedAt)).toEqual([at(2)]);
   });
 
   it("the service's records are service commands: a client cannot send them; the owner's are ordinary commands", () => {
