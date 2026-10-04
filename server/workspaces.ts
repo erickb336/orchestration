@@ -374,9 +374,9 @@ export class WorkspaceManager {
     if (blobs.length > SNAPSHOT_CAPS.files) throw new Error(`the commit has more than ${SNAPSHOT_CAPS.files} files`);
     if (bytes > SNAPSHOT_CAPS.bytes) throw new Error(`the commit holds more than ${SNAPSHOT_CAPS.bytes / 1024 / 1024} MB`);
     // Every blob's bytes in one call: "<object> blob <size>\n<bytes>\n" each, in the order asked.
-    const cat = spawnSync(this.gitBin, [...this.safeFlags(), "-C", repo, "cat-file", "--batch"], { input: blobs.map((e) => e.oid).join("\n") + "\n", env: gitEnv(), stdio: ["pipe", "pipe", "pipe"], maxBuffer: bytes + blobs.length * 128 + 4096 });
-    if (cat.error || cat.status !== 0) throw new Error(`could not read the files of commit ${base.slice(0, 12)}`);
-    const out = cat.stdout as Buffer;
+    const cat = blobs.length ? spawnSync(this.gitBin, [...this.safeFlags(), "-C", repo, "cat-file", "--batch"], { input: blobs.map((e) => e.oid).join("\n") + "\n", env: gitEnv(), stdio: ["pipe", "pipe", "pipe"], maxBuffer: bytes + blobs.length * 128 + 4096 }) : undefined;
+    if (cat && (cat.error || cat.status !== 0)) throw new Error(`could not read the files of commit ${base.slice(0, 12)}`);
+    const out = (cat?.stdout as Buffer | undefined) ?? Buffer.alloc(0);
     let at = 0;
     const content = new Map<string, Buffer>();
     for (const e of blobs) {
