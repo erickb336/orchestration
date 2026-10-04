@@ -13,8 +13,6 @@ import * as M from "../../src/domain/model";
 import { buildSeed } from "../../src/domain/seed";
 import * as S from "../../src/domain/studio/studio";
 import * as I from "../../src/domain/studio/import";
-import { validateVisionDraft } from "../../src/domain/model/shaping";
-import { at as importAt, tallyImport } from "../../src/domain/testing/import";
 import { startFactoryAsOwner } from "../../src/domain/testing/factory";
 import type { State } from "../../src/domain/types";
 import { buildLeadEnvelope } from "../envelope";
@@ -128,13 +126,6 @@ describe("the simulated lead in Vision", () => {
     expect(S.latestArtifacts(state()).every((a) => !a.provenance)).toBe(true);
   });
 
-  // A reply that answers no message may not draft the vision yet (src/domain/model/shaping.ts); the review reply needs to.
-  const reviewMayDraft = (() => {
-    const { s } = tallyImport("review");
-    const r = M.startLeadRun(s, { provider: "claude", model: "claude-sample-large", trigger: "message" }, importAt(300));
-    return validateVisionDraft(r.state, r.state.leadRuns.at(-1)!, { text: "tally today." }).ok;
-  })();
-
   it("once the import is in review, the lead replies by itself: what it found, with a vision draft of the product today (ORC-032)", async () => {
     const r = tallyRepo(join(dir, "tally"));
     service(r);
@@ -155,11 +146,10 @@ describe("the simulated lead in Vision", () => {
     expect(reply.text).toBe(
       `I read the repository at commit ${commit.slice(0, 7)} as it is today: the tests ran: 22, 22 pass; 17 rules, 13 named by tests; 6 parts; the screens and commands 3 of 3 recorded. The questions wait in Vision, round 0: answer the conflicts and the guesses that matter, then lock the baseline in (simulated).`,
     );
-    // Its vision draft (C10) is recorded once the domain lets a review reply draft (validateVisionDraft, src/domain/model/shaping.ts).
-    if (reviewMayDraft) {
-      expect(state().visionDrafts).toHaveLength(drafts + 1);
-      expect(state().visionDrafts.at(-1)!.text).toMatch(/^\(Simulated draft\) What the product is today, from the import at commit /);
-    }
+    // Its vision draft (C10): the owner accepts it on the Baseline screen.
+    expect(state().visionDrafts).toHaveLength(drafts + 1);
+    expect(state().visionDrafts.at(-1)!).toMatchObject({ status: "open", messageIds: [], reason: "A first draft from the import, for you to accept on the Baseline screen." });
+    expect(state().visionDrafts.at(-1)!.text).toMatch(/^\(Simulated draft\) What the product is today, from the import at commit /);
     // The lead opened no round: round 0 is the import's. It replied once.
     expect(state().studio.rounds.map((x) => x.n)).toEqual([0]);
     for (let i = 0; i < 10; i++) tick();

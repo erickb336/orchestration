@@ -31,7 +31,7 @@ import {
   StaleWriteError,
 } from "../types";
 import { currentVision, draft, event, touch } from "./core";
-import { autonomyMode, autopilotAutonomy, setAutonomy } from "./lead";
+import { autonomyMode, autopilotAutonomy, isImportReviewRun, setAutonomy } from "./lead";
 import { CONTROL_RE, oneLine, stripInvisible, visibleOrEmpty } from "./textSafety";
 import { draftVisionText, pushVision, setDraftVisionInto } from "./vision";
 
@@ -273,12 +273,13 @@ const userLine = (x: string) => x.replace(/\s+/g, " ").trim();
 type ValidatedVisionDraft = { ok: true; draft: { text: string; focus: string; reason: string } } | { ok: false; why: string };
 
 /**
- * Strict validation of the lead's vision draft (untrusted data). Only runs that answer the user's
- * messages may draft. The text keeps its newlines; the focus is one line; both are capped and cleaned.
+ * Strict validation of the lead's vision draft (untrusted data). Only runs that answer the user's messages may draft,
+ * and the import's review reply (C10: what the product is today, which the owner accepts on the Baseline screen).
+ * The text keeps its newlines; the focus is one line; both are capped and cleaned.
  * A draft identical to the current vision is refused as nothing to decide.
  */
 export function validateVisionDraft(s: State, r: LeadRun, vision: unknown): ValidatedVisionDraft {
-  if (r.messageIds.length === 0) return { ok: false, why: "planning runs cannot draft the vision" };
+  if (r.messageIds.length === 0 && !isImportReviewRun(s, r)) return { ok: false, why: "planning runs cannot draft the vision" };
   if (!vision || typeof vision !== "object" || Array.isArray(vision)) return { ok: false, why: "the draft was not an object" };
   const v = vision as Record<string, unknown>;
   if (typeof v.text !== "string") return { ok: false, why: "the draft needs a text" };
@@ -316,7 +317,7 @@ export function draftFromRun(s: State, r: LeadRun, d: { text: string; focus: str
   const draft: VisionDraft = { id: `vd-${r.id}`, at: now, leadRunId: r.id, messageIds: [...r.messageIds], text: d.text, focus: d.focus, reason: d.reason, basedOnVisionRev: r.visionRev ?? currentVision(s).rev, status: "open", ...(simulated ? { simulated: true as const } : {}) };
   s.visionDrafts.push(draft);
   if (s.visionDrafts.length > MAX_VISION_DRAFTS) s.visionDrafts.splice(0, s.visionDrafts.length - MAX_VISION_DRAFTS);
-  event(s, now, "lead", "vision", `Lead run ${r.id} drafted the vision (${draft.id}) from your message ${r.messageIds.join(", ")}: ${d.reason}. It waits for you to accept, edit or dismiss it.`);
+  event(s, now, "lead", "vision", `Lead run ${r.id} drafted the vision (${draft.id}) from ${r.messageIds.length ? `your message ${r.messageIds.join(", ")}` : "the import"}: ${d.reason}. It waits for you to accept, edit or dismiss it.`);
   return draft;
 }
 
