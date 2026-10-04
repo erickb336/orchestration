@@ -18,7 +18,7 @@ import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
 import type { Assignment } from "./runtimes/types";
 import { Scheduler } from "./scheduler";
 import { Store } from "./store";
-import { EnvironmentImport, SimulatedImport, importDir, tallyRepo, type ImportRunner } from "./studio/import";
+import { EnvironmentImport, SimulatedImport, captureDir, importDir, tallyRepo, type ImportRunner } from "./studio/import";
 import { WorkspaceManager } from "./workspaces";
 
 let dir: string;
@@ -146,7 +146,7 @@ describe("the import of tally, end to end with the fake runtime", () => {
     // The capture: each terminal demo recorded (simulated), its cast kept in the import's folder.
     expect(imp.capture!.simulated).toBe(true);
     expect(imp.capture!.parts.map((p) => p.status)).toEqual(["captured", "captured", "captured"]);
-    for (const p of imp.capture!.parts) if (p.status === "captured") expect(existsSync(join(importDir(dataDir, s.project.id, imp.id), "capture", p.files[0].path))).toBe(true);
+    for (const p of imp.capture!.parts) if (p.status === "captured") expect(existsSync(join(captureDir(dataDir, s.project.id, imp.id), p.files[0].path))).toBe(true);
 
     // The review wakes the lead once; its reply says what the import found (src/domain/model/lead.ts).
     await until((x) => x.leadRuns.length === 1 && !M.activeLeadRun(x), "the lead's review reply");

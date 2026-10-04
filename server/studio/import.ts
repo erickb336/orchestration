@@ -31,15 +31,20 @@ import { isCapturedKind, type CaptureItem, type CapturedKind, type PreviewSettin
 import * as R from "../../src/domain/studio/runs";
 import { latestVersion, isInsidePath } from "../../src/domain/studio/studio";
 import { isUnderWay, type ImportStep, type ImportPartCapture, type ImportRule, type StudioRun } from "../../src/domain/studio/types";
-import { ControlError, type State, type TestCaseResult, type TestReport } from "../../src/domain/types";
+import { ControlError, type Device, type ProjectDomain, type State, type TestCaseResult, type TestReport } from "../../src/domain/types";
 import type { EnvironmentAssignment } from "../checks";
 import { lastJsonObject } from "../envelope";
 import type { Store } from "../store";
 import { clearReport, readTestReport } from "../testReport";
 import type { WorkspaceManager } from "../workspaces";
 import type { StagedArtifact } from "./artifacts";
-import { captureEvidence, copyChange, type EnvironmentLender } from "./evidence";
+import { captureEvidence, copyChange, evidenceDir, type EnvironmentLender } from "./evidence";
 import { sharedEnvironments } from "../environment/prepared";
+import { readDevcontainer, type ReadAtBase } from "../environment/devcontainer";
+import { localFilterDrivers, repoAt, repoFiles } from "./existing";
+import { PROPOSAL_MARKERS, proposeImage } from "../../src/domain/environment";
+import { suggestChecks } from "../../src/domain/checks";
+import type { ImportStartInfo } from "../../src/api";
 
 /** The bundled tally fixture: the invented repository, its canned report and casts, the parts the fake runtime hands in. */
 export const TALLY_FIXTURE = fileURLToPath(new URL("./fixtures/tally/", import.meta.url));
@@ -69,8 +74,17 @@ export function importDir(dataDir: string, projectId: string, importId: string):
 
 /** Where the baseline report is kept, relative to the import's folder: the report's counts and every case it kept. */
 export const REPORT_FILE = "checks/report.json";
-/** Where the capture's files are kept, relative to the import's folder: `<artifactId>/<file>`. */
-export const CAPTURE_FOLDER = "capture";
+/**
+ * Where the capture's files are kept: the evidence folder of the import (`<dataDir>/evidence/<project>/<import>`), as
+ * `<artifactId>/<file>`, so the app's file route serves them as it serves a capture of evidence (`importFileKnown`).
+ */
+export const captureDir = (dataDir: string, projectId: string, importId: string): string => evidenceDir(dataDir, projectId, importId) ?? join(importDir(dataDir, projectId, importId), "capture");
+
+/** Whether `path` is a file the import's capture recorded: the app's file route serves only those. */
+export function importFileKnown(s: State, importId: string, path: string): boolean {
+  const imp = s.studio.import;
+  return imp?.id === importId && !!imp.capture?.parts.some((p) => p.status === "captured" && p.files.some((f) => f.path === path));
+}
 
 const short = (sha: string) => sha.slice(0, 7);
 
@@ -117,6 +131,7 @@ export interface ImportCaptureJob {
   preview?: PreviewSetting;
   environment?: EnvironmentAssignment;
   noEnvironment?: string;
+  /** Where the capture's files go (`captureDir`): `<artifactId>/<file>`. Made empty; nothing else is written there. */
   outDir: string;
   signal: AbortSignal;
   log?: (msg: string) => void;
@@ -194,9 +209,9 @@ export class EnvironmentImport implements ImportRunner {
     const none = (detail: string, reason: "not-set-up" | "unavailable" = "unavailable"): I.ImportCaptureInput => ({ parts: job.parts.map((p) => ({ artifactId: p.artifactId, version: p.version, status: "none", reason, detail })) });
     if (!job.environment) return none(job.noEnvironment ?? NO_ENVIRONMENT, "not-set-up");
     if (!job.source) return none("No copy of the commit could be made.");
-    const outDir = join(job.outDir, CAPTURE_FOLDER);
+    const outDir = job.outDir;
     // A copy of the commit with the import's capture plan and tapes: the repository and its checkout are never written.
-    const src = join(job.outDir, `capture-src-${randomBytes(4).toString("hex")}`);
+    const src = `${outDir}.src-${randomBytes(4).toString("hex")}`;
     try {
       const copied = copyChange(job.source, src);
       if (copied) return none(`The commit could not be copied for the capture: ${copied}.`);
@@ -263,8 +278,8 @@ export class SimulatedImport implements ImportRunner {
       if (!p.tape || !/^[a-z]+$/.test(key) || !existsSync(cast)) return { artifactId: p.artifactId, version: p.version, status: "none", reason: "unavailable", detail: "Simulated: the fake runtime records only tally's terminal demos." };
       const data = readFileSync(cast);
       const rel = `${p.artifactId}/demo.cast`;
-      mkdirSync(join(job.outDir, CAPTURE_FOLDER, p.artifactId), { recursive: true, mode: 0o700 });
-      writeFileSync(join(job.outDir, CAPTURE_FOLDER, rel), data, { mode: 0o600 });
+      mkdirSync(join(job.outDir, p.artifactId), { recursive: true, mode: 0o700 });
+      writeFileSync(join(job.outDir, rel), data, { mode: 0o600 });
       return { artifactId: p.artifactId, version: p.version, status: "captured", files: [{ path: rel, type: "cast", bytes: data.length, sha256: sha256(data) }] };
     });
     return { parts, simulated: true };
@@ -489,7 +504,7 @@ export class ImportDriver {
         const done: Done =
           kind === "checks"
             ? { importId: imp.id, kind, result: await this.runner.checks({ ...common, commands: cfg.commands.filter((c) => c.kind === "check").map((c) => ({ id: c.id, label: c.label, argv: [...c.argv], timeoutMs: cfg.commandTimeoutMinutes * 60_000 })), ...(cfg.testReport ? { testReport: cfg.testReport } : {}) }) }
-            : { importId: imp.id, kind, result: await this.runner.capture({ ...common, parts, ...(s.project.preview ? { preview: s.project.preview } : {}) }) };
+            : { importId: imp.id, kind, result: await this.runner.capture({ ...common, outDir: captureDir(this.o.dataDir!, s.project.id, imp.id), parts, ...(s.project.preview ? { preview: s.project.preview } : {}) }) };
         if (!abort.signal.aborted) this.done.push(done);
       } catch (e) {
         const why = e instanceof Error ? e.message : String(e);
@@ -503,6 +518,80 @@ export class ImportDriver {
     };
     this.chain = this.chain.then(run);
   }
+}
+
+// ---------- the Start screen ----------
+
+/**
+ * The kinds of product a repository shows, from its file names: data, read top to bottom; each row names the first
+ * file that matches it. The owner confirms or changes them on the Start screen.
+ */
+export const DOMAIN_TABLE: readonly { domain: ProjectDomain; device?: Device; test: RegExp; what: string }[] = [
+  { domain: "screen", device: "terminal", test: /(^|\/)(__main__\.py|cli\.(py|js|ts|go|rs|rb)|main\.go)$|(^|\/)(bin|cmd)\/[^/]+$/, what: "a command-line entry" },
+  { domain: "screen", device: "desktop", test: /(^|\/)(index\.html?|App\.(tsx|jsx|vue|svelte))$/, what: "a web page" },
+  { domain: "code", test: /^(setup\.py|pyproject\.toml|Cargo\.toml|go\.mod|package\.json)$/, what: "a package other programs can use" },
+  { domain: "infrastructure", test: /(^|\/)(Dockerfile|docker-compose\.ya?ml|compose\.ya?ml|Chart\.yaml|[^/]+\.tf)$|^\.github\/workflows\//, what: "files that deploy or run it" },
+];
+
+/** A test command that writes a JUnit report, from the repository's files: data, first match wins. */
+const TEST_REPORT_TABLE: readonly { marker: RegExp; argv: string[]; path: string }[] = [{ marker: /^(pytest\.ini|conftest\.py)$/, argv: ["python3", "-m", "pytest", "--junitxml=reports/junit.xml"], path: "reports/junit.xml" }];
+
+/** The root files suggestChecks reads (package.json, lockfiles, Cargo.toml, go.mod, pyproject.toml). */
+const CHECK_FILES = ["package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb", "Cargo.toml", "go.mod", "pyproject.toml"];
+
+/**
+ * What the import's Start screen shows for the repository at `path`, read without changing it (git's own records, never
+ * `git status`): its commit and branch, its size, the estimate, the kinds of product it shows, and how it runs (C1).
+ * Refused, with the reason, when it cannot be read or its own config defines filter drivers, which a checkout runs.
+ * `read` reads a file at the commit (the workspace manager's, read-only); without it nothing is read but names.
+ */
+export function importStartInfo(path: string, read?: ReadAtBase): ImportStartInfo {
+  if (!path.trim()) return { ok: false, reason: "Give the repository's path." };
+  const at = repoAt(path);
+  if (!at) return { ok: false, reason: `${path} is not a git repository with a commit.` };
+  const filters = localFilterDrivers(path);
+  if (filters.length) return { ok: false, reason: `The repository's own git config defines filter drivers (${filters.join(", ")}). A checkout would run them on this computer, so the import does not read it. Import a fresh clone, or remove them from its .git/config.` };
+  const files = repoFiles(path) ?? [];
+  const domains = DOMAIN_TABLE.flatMap((row) => {
+    const file = files.find((f) => row.test.test(f));
+    return file ? [{ domain: row.domain, ...(row.device ? { device: row.device } : {}), because: `${file}: ${row.what}` }] : [];
+  });
+  const proposal = proposeImage(PROPOSAL_MARKERS.filter((m) => files.includes(m)));
+  const found = read ? readDevcontainer(read) : undefined;
+  const p = found?.parsed;
+  const devcontainer = found && p ? { file: found.file, ...("refused" in p ? { refused: p.refused } : "image" in p ? { image: p.image } : { dockerfile: p.build.dockerfile, context: p.build.context }), ...(found.sha256 ? { sha256: found.sha256 } : {}) } : undefined;
+  const checks = read ? suggestChecks(CHECK_FILES.flatMap((f) => (files.includes(f) ? [{ path: f, text: read(f, 256 * 1024)?.text ?? "" }] : []))) : [];
+  const report = TEST_REPORT_TABLE.flatMap((row) => {
+    const file = files.find((f) => row.marker.test(f));
+    return file ? [{ command: { id: "test", label: "Tests with a JUnit report", kind: "check" as const, argv: [...row.argv] }, path: row.path, because: file }] : [];
+  })[0];
+  return {
+    ok: true,
+    path,
+    commit: at.commit,
+    ...(at.branch ? { branch: at.branch } : {}),
+    size: at.size,
+    estimate: I.importEstimate(at.size),
+    domains,
+    ...(proposal ? { proposal } : {}),
+    ...(devcontainer ? { devcontainer } : {}),
+    checks,
+    ...(report ? { testReport: report } : {}),
+  };
+}
+
+/** The bundled sample for the demo (the simulated runtime): tally, made once in the service's data folder. */
+export function demoStartInfo(dataDir: string): ImportStartInfo {
+  const path = tallyRepo(join(dataDir, "import-demo", "tally"));
+  const info = importStartInfo(path, (rel, maxBytes) => {
+    try {
+      const text = readFileSync(join(TALLY_FIXTURE, "repo", rel), "utf8");
+      return { text: text.slice(0, maxBytes), truncated: text.length > maxBytes };
+    } catch {
+      return undefined;
+    }
+  });
+  return info.ok ? { ...info, demo: true } : info;
 }
 
 // ---------- what the reader is given ----------

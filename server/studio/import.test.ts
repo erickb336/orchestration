@@ -126,7 +126,7 @@ describe("the runners", () => {
     expect(capture.simulated).toBe(true);
     expect(capture.parts[0]).toMatchObject({ artifactId: "art-1", status: "captured", files: [{ path: "art-1/demo.cast", type: "cast" }] });
     expect(capture.parts[1]).toMatchObject({ status: "none", reason: "unavailable" });
-    expect(readdirSync(join(out, "capture", "art-1"))).toEqual(["demo.cast"]);
+    expect(readdirSync(join(out, "art-1"))).toEqual(["demo.cast"]);
   });
 
   it("the service's runner runs nothing without an environment, and says why", async () => {
