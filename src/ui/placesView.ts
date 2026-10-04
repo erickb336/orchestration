@@ -7,7 +7,7 @@ import { importQuestions, importStatus, itemAnswerEffect } from "../domain/studi
 import type { State } from "../domain/types";
 import type { Tone } from "./kit";
 import { relTime } from "./common";
-import { openChanges } from "./import/importView";
+import { importHalt, openChanges, spendWords } from "./import/importView";
 
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -74,7 +74,13 @@ export function importPlaces(s: State): { home?: PlaceState; vision?: PlaceState
     return { home: home(st), vision: st };
   }
   if (status === "reading") {
-    const st: PlaceState = { text: "importing", tone: "work", pulse: true, title: "The import reads your repository. Vision shows each step." };
+    const halt = importHalt(s);
+    const st: PlaceState =
+      halt?.kind === "paused" || halt?.kind === "pausing"
+        ? { text: `import ${halt.step}`, short: halt.step, tone: "neutral", paused: true, title: "You paused the project. The import goes on when you resume it." }
+        : halt?.kind === "budget"
+          ? { text: "import waits at its budget", short: "at budget", tone: "you", title: `${spendWords(s).stop}. Raise the import budget in Vision.` }
+          : { text: "importing", tone: "work", pulse: true, title: "The import reads your repository. Vision shows each step." };
     return { home: home(st), vision: st };
   }
   if (status === "review") {

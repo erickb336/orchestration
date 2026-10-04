@@ -8,6 +8,7 @@ import * as M from "../../domain/model";
 import * as B from "../../domain/studio/blueprint";
 import { itemFactoryStatus } from "../../domain/studio/itemStatus";
 import { PROTOTYPE_ANSWERS, at, baselineArgs, tallyImport, type ImportOptions } from "../../domain/testing/import";
+import * as R from "../../domain/studio/runs";
 import { run } from "../../domain/testing/studio";
 import type { State } from "../../domain/types";
 import { ImportHome } from "../Overview";
@@ -119,6 +120,31 @@ describe("2 · Reading (C2)", () => {
     expect(text(<ImportPanel />, stage("read", { checks: "not-run" }))).toContain("– skipped: The tests the service · not run: Docker is not available on this computer, so the tests did not run");
   });
 
+  it("in the first state, a step or a card that has not started says waiting, not reading (UX-2)", () => {
+    const t = text(<ImportPanel />, stage("started"));
+    expect(t).toContain("The rules waiting The reader turns each test into a rule");
+    expect(t).toContain("The words waiting The product's own words");
+    expect(t).not.toMatch(/The (rules|words) reading/);
+  });
+
+  it("after Pause, every word says paused: the steps, the cards, the header and the line about round 0 (UX-2)", () => {
+    // The words and the rules run; the owner pauses; the runtime confirms each stop, and each run is asked for again.
+    let s = stage("checked");
+    for (const step of ["words", "rules"] as const) s = R.dispatchStudioRuns(R.requestStudioRun(s, { kind: step === "rules" ? "reader" : "designer", round: 0, brief: step, importStep: step }, at(20)).state, at(20), { simulated: ["claude", "codex"] }).state;
+    expect(text(<ImportPanel />, s)).toContain("The rules reading");
+    s = run(s, "pauseProject", {}, at(21)).state;
+    for (const r of s.studio.runs.filter((x) => x.status === "stopping")) s = R.reportStudioRunStopped(s, r.id, at(22));
+    const t = text(<ImportPanel />, s);
+    expect(t).toContain("paused by you");
+    expect(t).toContain("○ waiting: The rules Reader · Claude · paused");
+    expect(t).toContain("○ waiting: The words (at the same time) Designer · Claude · paused");
+    expect(t).not.toMatch(/running|queued|reading ·|The (rules|parts|words) (reading|designing|recording)|When the reading ends/);
+    expect(t).toContain("The rules paused by you");
+    expect(t).toContain("The reading is paused. When you resume it and it ends, round 0, As it is today, opens here.");
+    expect(importPlaces(s)?.vision?.text).toBe("import paused");
+    expect(text(<ImportHome />, s)).toContain("The import paused by you");
+  });
+
   it("a paused project offers Resume; a stopped import says why and that nothing more runs", () => {
     const paused = run(stage("read"), "pauseProject", {}, at(30)).state;
     expect(text(<ImportPanel />, paused)).toContain("Resume the import");
@@ -127,6 +153,10 @@ describe("2 · Reading (C2)", () => {
     const t = text(<ImportPanel />, stopped);
     expect(t).toContain("The import stopped: the rules reader's output was refused twice Nothing more runs for it.");
     expect(t).not.toContain("Pause the import");
+    // Its words say stopped, and round 0 does not open (UX-2).
+    expect(t).toContain("The parts stopped");
+    expect(t).not.toMatch(/reading ·|designing|opens here/);
+    expect(importPlaces(stopped)?.vision?.text).toBe("import stopped");
   });
 });
 

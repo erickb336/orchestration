@@ -5,6 +5,7 @@
 
 import type { ImportStartInfo } from "../../api";
 import { PRICES, estimateUsd, fmtUsd, importSpend, importStop } from "../../domain/spend";
+import { projectPause } from "../../domain/places";
 import { PREVIEW_PORTS } from "../../domain/studio/evidence";
 import {
   answerEffect,
@@ -168,15 +169,39 @@ export function spendByStep(s: State): { step: ImportStep | "lead"; usd: number 
   return [...out].map(([step, usd]) => ({ step, usd }));
 }
 
+/**
+ * Why the import does not go on now, or undefined while it does: you paused the project (pausing until its runs
+ * confirm the stop), its spend reached the import budget, or it stopped. `pill` is the import's state in a few words;
+ * `step` is what a held step says. The reading, Home and the header read this one source.
+ */
+export interface ImportHalt {
+  kind: "pausing" | "paused" | "budget" | "stopped";
+  pill: string;
+  step: string;
+}
+export function importHalt(s: State): ImportHalt | undefined {
+  const imp = s.studio.import;
+  if (!imp || imp.lockedInAt) return undefined;
+  if (imp.stopped) return { kind: "stopped", pill: "stopped", step: "stopped" };
+  const pause = projectPause(s);
+  if (pause) return pause.state === "paused" ? { kind: "paused", pill: "paused by you", step: "paused" } : { kind: "pausing", pill: "pausing", step: "pausing" };
+  if (importStop(s)) return { kind: "budget", pill: "waits at its budget", step: "waits at the import budget" };
+  return undefined;
+}
+
 const RUN_MARK = (r: { status: string } | undefined): StepMark => (!r ? "waiting" : r.status === "completed" ? "done" : r.status === "failed" ? "fail" : r.status === "queued" ? "waiting" : "running");
 const RUN_STATE: Record<string, string> = { queued: "queued", running: "running", stopping: "stopping", failed: "failed", stopped: "stopped" };
 
 /**
  * The reading, in order (C2): the tests, then the rules, then the parts, then the recording; the words at the same
- * time. Each step's state in words, from the import's records and its runs.
+ * time. Each step's state in words, from the import's records and its runs. While the import is halted, a step under
+ * way or queued says why it waits (paused, stopped, at the budget); at the budget, a run already running goes on.
  */
 export function readingSteps(s: State): StepItem[] {
   const imp = s.studio.import!;
+  const halt = importHalt(s);
+  const held = <T extends { mark: StepMark; state: string }>(st: T, queued = false): T | { mark: "waiting"; state: string } =>
+    halt && st.mark !== "done" && st.mark !== "skipped" && st.mark !== "fail" && (queued || (st.mark === "running" && halt.kind !== "budget")) ? { mark: "waiting", state: halt.step } : st;
   const latest = (step: ImportStep) => importRuns(s, step).at(-1);
   const who = (step: ImportStep) => {
     const r = latest(step);
@@ -188,7 +213,7 @@ export function readingSteps(s: State): StepItem[] {
     const r = latest(step);
     if (done) return { mark: "done" as const, state: done };
     if (!r) return { mark: "waiting" as const, state: "not started" };
-    return { mark: RUN_MARK(r), state: r.status === "completed" ? "done" : (RUN_STATE[r.status] ?? r.status) };
+    return held({ mark: RUN_MARK(r), state: r.status === "completed" ? "done" : (RUN_STATE[r.status] ?? r.status) }, r.status === "queued" || r.status === "stopped");
   };
   const c = imp.checks;
   const reading = imp.reading;
@@ -202,7 +227,7 @@ export function readingSteps(s: State): StepItem[] {
       id: "checks",
       name: "The tests",
       who: "the service",
-      ...(c.status === "pending" ? { mark: "running" as const, state: "running your test command in the environment" } : c.status === "not-run" ? { mark: "skipped" as const, state: `not run: ${c.reason}` } : { mark: "done" as const, state: testsLine(c.counts) }),
+      ...(c.status === "pending" ? held({ mark: "running" as const, state: "running your test command in the environment" }) : c.status === "not-run" ? { mark: "skipped" as const, state: `not run: ${c.reason}` } : { mark: "done" as const, state: testsLine(c.counts) }),
     },
     { id: "rules", name: "The rules", who: who("rules"), ...runState("rules", reading ? `${count(reading.rules.length, "rule")}: ${withTest} from the tests, ${reading.rules.length - withTest} from the code and the docs` : undefined) },
     { id: "parts", name: "The parts", who: who("parts"), ...runState("parts", parts.length && latest("parts")?.status === "completed" ? `${count(parts.length, "part")}: ${parts.map((p) => p.title).join(", ")}` : undefined) },
@@ -212,10 +237,43 @@ export function readingSteps(s: State): StepItem[] {
       who: "the service",
       ...(cap
         ? { mark: recorded ? ("done" as const) : ("skipped" as const), state: cap.parts.length ? `${recorded} of ${cap.parts.length} recorded${cap.simulated ? " (simulated)" : ""}${recorded < cap.parts.length ? `: ${cap.parts.find((p) => p.status === "none")?.detail ?? ""}` : ""}` : "nothing to record" }
-        : { mark: "waiting" as const, state: latest("parts")?.status === "completed" ? "recording the parts in the environment" : "after the parts" }),
+        : latest("parts")?.status === "completed"
+          ? held({ mark: "waiting" as const, state: "recording the parts in the environment" }, halt?.kind !== "budget")
+          : { mark: "waiting" as const, state: "after the parts" }),
     },
     { id: "words", name: "The words (at the same time)", who: who("words"), ...runState("words", words ? count(words.dictionary?.length ?? 0, "word") : undefined) },
   ];
+}
+
+type PillTone = "done" | "work" | "neutral" | "fail" | "you";
+const HALT_TONE: Record<ImportHalt["kind"], PillTone> = { stopped: "fail", budget: "you", paused: "neutral", pausing: "work" };
+
+/**
+ * The state of the three cards under the steps, from the same steps: done; reading, designing or recording while its
+ * step runs; else why it waits (paused, stopped, at the budget), or "waiting" before it starts.
+ */
+export function readingCards(s: State): Record<"rules" | "parts" | "words", { pill: string; tone: PillTone }> {
+  const halt = importHalt(s);
+  const by = new Map(readingSteps(s).map((x) => [x.id, x]));
+  const card = (mark: StepMark | undefined, busy: string) =>
+    mark === "done" || mark === "skipped" ? { pill: "done", tone: "done" as const } : mark === "running" ? { pill: busy, tone: "work" as const } : mark === "fail" ? { pill: "failed", tone: "fail" as const } : halt ? { pill: halt.pill, tone: HALT_TONE[halt.kind] } : { pill: "waiting", tone: "neutral" as const };
+  // The parts' card covers the designer, then the recording, which the service goes on with at the budget.
+  const recording = by.get("capture")!.mark;
+  const capturing = recording === "waiting" && (!halt || halt.kind === "budget");
+  return {
+    rules: card(by.get("rules")?.mark, "reading"),
+    parts: by.get("parts")?.mark !== "done" ? card(by.get("parts")?.mark, "designing") : capturing ? { pill: "recording", tone: "work" } : card(recording, "recording"),
+    words: card(by.get("words")?.mark, "reading"),
+  };
+}
+
+/** The line under the reading about round 0: when it opens, or nothing once the import stopped. */
+export function roundZeroLine(s: State): string | undefined {
+  const halt = importHalt(s);
+  if (halt?.kind === "stopped") return undefined;
+  if (halt?.kind === "paused" || halt?.kind === "pausing") return "The reading is paused. When you resume it and it ends, round 0, As it is today, opens here.";
+  if (halt?.kind === "budget") return "The reading waits at its budget. When you raise the budget and the reading ends, round 0, As it is today, opens here.";
+  return "When the reading ends, round 0, As it is today, opens here. It asks you only what the code cannot answer.";
 }
 
 /** "22 read, all pass", "22 read: 21 pass, 1 fails". */

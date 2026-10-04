@@ -5,10 +5,9 @@
 import { useState } from "react";
 import { fmtUsd } from "../../domain/spend";
 import { importParts } from "../../domain/studio/import";
-import { projectPause } from "../../domain/places";
 import { Banner, Button, Card, Field, Input, SimulatedChip, StatePill, StepList } from "../kit";
 import { useStore } from "../store";
-import { productName, readingSteps, spendWords } from "./importView";
+import { importHalt, productName, readingCards, readingSteps, roundZeroLine, spendWords } from "./importView";
 import "./import.css";
 
 /** The spend as a bar: what is spent, over the estimate's band, against the budget. */
@@ -29,7 +28,9 @@ export function ImportPanel() {
   const sw = spendWords(state);
   const steps = readingSteps(state);
   const done = steps.filter((s) => s.mark === "done" || s.mark === "skipped").length;
-  const pause = projectPause(state);
+  const halt = importHalt(state);
+  const cards = readingCards(state);
+  const zero = roundZeroLine(state);
   const name = productName(state);
   const simulated = state.studio.runs.some((r) => r.importStep && r.simulated) || (imp.checks.status === "read" && imp.checks.simulated);
   const reading = imp.reading;
@@ -51,9 +52,9 @@ export function ImportPanel() {
           Nothing more runs for it. To import again, start a new project in Settings › Project.
         </Banner>
       )}
-      {!imp.stopped && sw.stop && <BudgetStop why={sw.stop} />}
+      <ImportBudgetStop />
 
-      <Card title="The import" actions={<StatePill tone={imp.stopped ? "fail" : pause ? "neutral" : "work"} pulse={!imp.stopped && !pause} paused={!!pause}>{imp.stopped ? "stopped" : pause ? (pause.state === "paused" ? "paused by you" : "pausing") : `reading · ${done} of ${steps.length} steps done`}</StatePill>}>
+      <Card title="The import" actions={<StatePill tone={imp.stopped ? "fail" : halt?.kind === "budget" ? "you" : halt ? "neutral" : "work"} pulse={!halt} paused={halt?.kind === "paused" || halt?.kind === "pausing"}>{halt ? halt.pill : `reading · ${done} of ${steps.length} steps done`}</StatePill>}>
         <p className="no-margin">
           <b className="num">{fmtUsd(sw.spent)}</b> spent of the <b>{fmtUsd(sw.budget)}</b> import budget. The estimate: {fmtUsd(sw.estimate[0])}–{fmtUsd(sw.estimate[1])}.
         </p>
@@ -72,7 +73,7 @@ export function ImportPanel() {
         {sw.unknown && <p className="micro muted no-margin">{sw.unknown}</p>}
         <StepList steps={steps} label="The import's steps" className="imp-steps" />
         <div className="imp-between">
-          <p className="small muted no-margin">You can leave this page. The import goes on, and Home shows it.</p>
+          <p className="small muted no-margin">{halt ? "You can leave this page. Home shows the import." : "You can leave this page. The import goes on, and Home shows it."}</p>
           {!imp.stopped &&
             (state.project.hold ? (
               <Button size="small" disabled={disabled} onClick={() => void send("resumeProject")}>
@@ -87,7 +88,7 @@ export function ImportPanel() {
       </Card>
 
       <div className="imp-cols3">
-        <Card title="The rules" as="h3" actions={<StatePill tone={reading ? "done" : "work"}>{reading ? "done" : "reading"}</StatePill>}>
+        <Card title="The rules" as="h3" actions={<StatePill tone={cards.rules.tone}>{cards.rules.pill}</StatePill>}>
           <p className="small no-margin">The reader turns each test into a rule, with the test that proves it. Then it reads the code and the docs for rules that no test covers.</p>
           {reading ? (
             <>
@@ -114,11 +115,11 @@ export function ImportPanel() {
               )}
             </>
           ) : (
-            <p className="small muted no-margin">{imp.checks.status === "pending" ? "It starts when the tests have run." : "Reading the tests and the code…"}</p>
+            <p className="small muted no-margin">{imp.checks.status === "pending" ? "It starts when the tests have run." : cards.rules.pill === "reading" ? "Reading the tests and the code…" : "It starts after the tests."}</p>
           )}
         </Card>
 
-        <Card title="The parts" as="h3" actions={<StatePill tone={imp.capture ? "done" : parts.length ? "work" : "neutral"}>{imp.capture ? "done" : parts.length ? "recording" : reading ? "designing" : "waiting"}</StatePill>}>
+        <Card title="The parts" as="h3" actions={<StatePill tone={cards.parts.tone}>{cards.parts.pill}</StatePill>}>
           <p className="small no-margin">A designer makes what {name} does today: each command as a terminal demo, each screen, the data and the core algorithms. The service records each in the project's container, with no network.</p>
           {parts.length ? (
             <ul className="imp-ticks small">
@@ -137,7 +138,7 @@ export function ImportPanel() {
           )}
         </Card>
 
-        <Card title="The words" as="h3" actions={<StatePill tone={words ? "done" : "work"}>{words ? "done" : "reading"}</StatePill>}>
+        <Card title="The words" as="h3" actions={<StatePill tone={cards.words.tone}>{cards.words.pill}</StatePill>}>
           <p className="small no-margin">The product's own words, from the README, the docs and the names in the code.</p>
           {words?.dictionary?.length ? (
             <ul className="imp-words">
@@ -146,26 +147,32 @@ export function ImportPanel() {
               ))}
             </ul>
           ) : (
-            <p className="small muted no-margin">Reading…</p>
+            <p className="small muted no-margin">{cards.words.pill === "reading" ? "Reading…" : "It starts after the tests, beside the rules."}</p>
           )}
         </Card>
       </div>
 
-      <Card>
-        <p className="small no-margin">
-          When the reading ends, round 0, <b>As it is today</b>, opens here. It asks you only what the code cannot answer.
-        </p>
-      </Card>
+      {zero && (
+        <Card>
+          <p className="small no-margin">{zero}</p>
+        </Card>
+      )}
     </div>
   );
 }
 
-/** At the import budget, the import's runs wait: raise the budget to go on. */
-function BudgetStop({ why }: { why: string }) {
+/**
+ * At the import budget, the import's runs wait: raise the budget to go on. Shown on the reading, the review and the
+ * baseline, wherever the import waits at its budget; nothing otherwise.
+ */
+export function ImportBudgetStop() {
   const { state, send, disabled } = useStore();
-  const imp = state.studio.import!;
-  const [usd, setUsd] = useState(String(Math.ceil(imp.budgetUsd * 2)));
+  const imp = state.studio.import;
+  const [usd, setUsd] = useState(() => String(Math.ceil((imp?.budgetUsd ?? 0) * 2)));
+  const why = imp && spendWords(state).stop;
+  if (!imp || !why) return null;
   const n = Number(usd);
+  const blocker = disabled ? "The service is offline." : !(n > imp.budgetUsd) ? `The new budget is a number above ${fmtUsd(imp.budgetUsd)}.` : undefined;
   return (
     <Banner tone="you" title={`The import waits at its budget. ${why}.`}>
       <p className="no-margin">Nothing new starts for it until you raise the import budget. The building budget stays apart.</p>
@@ -173,13 +180,13 @@ function BudgetStop({ why }: { why: string }) {
         className="imp-path"
         onSubmit={(e) => {
           e.preventDefault();
-          if (n > imp.budgetUsd) void send("setImportBudget", { budgetUsd: n });
+          if (!blocker) void send("setImportBudget", { budgetUsd: n });
         }}
       >
         <Field label="New import budget (dollars)" width="short">
           <Input type="text" inputMode="decimal" value={usd} onChange={(e) => setUsd(e.target.value)} />
         </Field>
-        <Button type="submit" size="small" disabled={disabled || !(n > imp.budgetUsd)}>
+        <Button type="submit" size="small" disabled={!!blocker} disabledReason={blocker} showReason={!!blocker}>
           Raise the budget
         </Button>
       </form>

@@ -19,7 +19,7 @@ import { landedVerdict, latestLeadReply, liveText, needsYouItems, optionsLine, p
 import { VisionLine } from "./studio/VisionCard";
 import { Button, ButtonLink, Card, Chip, EmptyState, Field, Input, NeedsYouItem, Row, Rows, SimulatedChip, StatePill, useConfirm } from "./kit";
 import { importQuestions, importStatus, itemAnswerEffect } from "../domain/studio/import";
-import { nothingToBuild, readingSteps, roundRequest } from "./import/importView";
+import { importHalt, nothingToBuild, readingSteps, roundRequest } from "./import/importView";
 import type { FindingDecision, PrDelivery, SpecOption, State, Task, VisionRevision } from "../domain/types";
 
 /** The one name for each involvement setting, wherever it is shown. */
@@ -106,8 +106,9 @@ export function ImportHome() {
   if (status === "reading" || status === "stopped") {
     const steps = readingSteps(state);
     const done = steps.filter((s) => s.mark === "done" || s.mark === "skipped");
+    const halt = importHalt(state);
     return (
-      <Card title="The import" actions={<StatePill tone={status === "stopped" ? "fail" : "work"} pulse={status === "reading"}>{status === "stopped" ? "stopped" : "importing"}</StatePill>}>
+      <Card title="The import" actions={<StatePill tone={halt?.kind === "stopped" ? "fail" : halt?.kind === "budget" ? "you" : halt ? "neutral" : "work"} pulse={!halt} paused={halt?.kind === "paused" || halt?.kind === "pausing"}>{halt ? halt.pill : "importing"}</StatePill>}>
         <p className="no-margin">{status === "stopped" ? `It stopped: ${state.studio.import!.stopped!.reason}` : `${done.length} of ${steps.length} steps done${done.length ? `: ${done.map((s) => s.name).join(", ")}` : ""}.`}</p>
         <div className="k-actions">{vision}</div>
       </Card>
