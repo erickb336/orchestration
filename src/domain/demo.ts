@@ -19,15 +19,14 @@
 // changed the focus and passed a note to WT-005's coder while it ran, delivered and applied.
 
 import * as C from "./checks";
+import { runCommand } from "./commands";
 import * as D from "./delivery";
 import * as M from "./model";
 import { DEMO_SCRIPT, type ScriptFinding } from "./demoScript";
 import { demoVersion, fileList, shotName } from "./demoVision";
-import { setEnvironment } from "./environment";
 import { builtInCatalog, builtInOrInternal, flowRef } from "./flows";
 import { instantiate, toDef } from "./pipeline";
 import * as B from "./studio/blueprint";
-import { setPreview } from "./studio/evidence";
 import * as R from "./studio/runs";
 import * as S from "./studio/studio";
 import type { FeedbackInput, VerdictInput } from "./studio/studio";
@@ -227,6 +226,13 @@ class DemoBuilder {
     return st;
   }
 
+  /** The owner's action, sent through the command table as the app sends it. Returns the command's result. */
+  private owner<T = unknown>(name: string, args: object, m: number): T {
+    const r = runCommand(this.s, name, args, this.at(m));
+    this.s = r.state;
+    return r.result as T;
+  }
+
   private event(m: number, actor: Actor, kind: EventKind, message: string, taskId?: string) {
     M.event(this.s, this.at(m), actor, kind, message, taskId);
   }
@@ -347,8 +353,8 @@ class DemoBuilder {
     );
     this.checksReady(4314);
     // How the built product runs, so the Capture evidence step can show it (the fake runtime runs nothing).
-    this.s = setEnvironment(this.s, { image: DEMO_IMAGE, prepare: [["npm", "ci"]], hosts: [] }, this.at(4313));
-    this.s = setPreview(this.s, { preview: ["npm", "run", "preview"], port: 4173 }, this.at(4313));
+    this.owner("setEnvironment", { environment: { image: DEMO_IMAGE, prepare: [["npm", "ci"]], hosts: [] } }, 4313);
+    this.owner("setPreview", { preview: { preview: ["npm", "run", "preview"], port: 4173 } }, 4313);
   }
 
   private preflight(m: number) {
@@ -471,12 +477,12 @@ class DemoBuilder {
       const a = S.latestArtifacts(this.s).find((v) => v.title === x.title)!;
       return { artifactId: a.id, version: a.version, mark: x.mark, ...(x.pick ? { pickedVariant: x.pick } : {}), pins: [], note: x.note ?? "" };
     });
-    this.s = S.sendFeedback(this.s, entries, this.at(m));
+    this.owner("sendFeedback", { entries }, m);
     for (const [i, x] of marks.entries()) {
       const e = entries[i];
-      if (x.mark === "keep") this.s = B.approveArtifact(this.s, { artifactId: e.artifactId, version: e.version, ...(x.pick ? { variant: x.pick } : {}) }, this.at(m));
+      if (x.mark === "keep") this.owner("approveArtifact", { artifactId: e.artifactId, version: e.version, ...(x.pick ? { variant: x.pick } : {}) }, m);
       const held = B.draftItems(this.s).find((it) => it.artifactId === e.artifactId && it.status !== "dropped");
-      if (x.mark === "drop" && held) this.s = B.dropBlueprintItem(this.s, held.id, this.at(m));
+      if (x.mark === "drop" && held) this.owner("dropBlueprintItem", { itemId: held.id }, m);
     }
     return this.studioExchange(m, message, reply, studio);
   }
@@ -492,7 +498,7 @@ class DemoBuilder {
     this.studioExchange(4428, "Let's start with the experience: the map at the trailhead, the trip page and the packing list.", "I opened a round on the experience and asked the designer for the screens: the trail map, the trip page in two variants, the packing list and a group chat.", {
       openRound: { focus: "experience", summary: "The screens a group uses before and on a hike: the trail map, the trip page, the packing list." },
       designerRuns: [{ brief: "Design the trail map, the trip page (two variants: plan first, people first), the packing list and a group chat, for a phone at the trailhead.", kinds: ["screen"], variants: 2, devices: ["desktop", "mobile"] }],
-      questions: [{ text: "Should the group chat live in the app, or stay in the chat app people already use?", reason: "The research note says the chat was fine until the day, and useless at the trailhead." }],
+      questions: [{ question: "Should the group chat live in the app, or stay in the chat app people already use?", why: "The research note says the chat was fine until the day, and useless at the trailhead." }],
     });
     const [designer] = this.startStudioRuns(4426);
     this.designerHandsIn(designer, 4410, [{ title: "Trail map", version: 1 }, { title: "Trip page", version: 1 }, { title: "Packing list", version: 1 }, { title: "Group chat", version: 1 }], "4 screens: Trail map, Trip page (2 variants), Packing list, Group chat");
@@ -546,9 +552,9 @@ class DemoBuilder {
     });
 
     // The pre-flight: the two budgets, then Start the factory with the settings shown.
-    this.s = M.setBudgets(this.s, { buildingUsd: 60, maintenanceUsdPerMonth: 15 }, this.at(4322));
+    this.owner("setBudgets", { buildingUsd: 60, maintenanceUsdPerMonth: 15 }, 4322);
     const req = M.startFactoryRequest(this.s);
-    this.s = M.startFactory(this.s, { ...req, settings: { ...req.settings, delivery: { mode: "pr", branch: "main", merge: "user" }, pausePoints: { ...req.settings.pausePoints, tradeoffs: "user", changeOrders: "lead" } } }, this.at(4318));
+    this.owner("startFactory", { ...req, settings: { ...req.settings, delivery: { mode: "pr", branch: "main", merge: "user" }, pausePoints: { ...req.settings.pausePoints, tradeoffs: "user", changeOrders: "lead" } } }, 4318);
     if (this.s.project.stage !== "building" || this.s.blueprint.revisions.length !== 1) throw new Error("demo: the factory did not start from blueprint r1");
   }
 
@@ -847,10 +853,10 @@ class DemoBuilder {
   /** A simulated lead reply: the real run record, completed with the flag the fake runtime's replies carry. */
   private leadReplies(startM: number, endM: number, reply: string, steer?: Record<string, unknown>, studio?: Record<string, unknown>) {
     const r = M.startLeadRun(this.s, { provider: CLAUDE.provider, model: CLAUDE.model, trigger: "message" }, this.at(startM));
-    this.s = M.completeLeadRun(r.state, r.runId, { reply, proposals: [], ...(steer ? { steer } : {}), ...(studio ? { studio } : {}) } as M.LeadOutput, this.at(endM), { simulated: true });
+    this.s = M.completeLeadRun(r.state, r.runId, { reply, proposals: [], ...(steer ? { steer } : {}), ...(studio ? { studio } : {}) }, this.at(endM), { simulated: true });
     const run = this.s.leadRuns.find((x) => x.id === r.runId)!;
     if (run.outcome !== "completed") throw new Error(`demo: lead run ${r.runId} is ${run.outcome}`);
-    const notes = this.s.conversation.filter((x) => x.leadRunId === r.runId).flatMap((x) => (x as { notes?: string[] }).notes ?? []);
+    const notes = this.s.conversation.filter((x) => x.leadRunId === r.runId).flatMap((x) => x.rejected ?? []);
     if (studio && notes.length) throw new Error(`demo: lead run ${r.runId}'s studio block was refused in part: ${notes.join("; ")}`);
     return r.runId;
   }

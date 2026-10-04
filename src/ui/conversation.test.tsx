@@ -42,7 +42,7 @@ const render = (state: State, svc?: ServiceInfo) =>
     </ConfirmProvider>,
   );
 /** What a person reads: the markup without tags and attributes. */
-const text = (markup: string) => markup.replace(/<[^>]*>/g, " ").replace(/&[a-z]+;/g, " ").replace(/\s+/g, " ");
+const text = (markup: string) => markup.replace(/<[^>]*>/g, " ").replace(/&#x27;/g, "'").replace(/&[a-z]+;/g, " ").replace(/\s+/g, " ");
 const count = (s: string, needle: string) => s.split(needle).length - 1;
 
 describe("the lead conversation", () => {

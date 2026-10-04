@@ -43,11 +43,12 @@ h2 { margin: 18px 0 8px; font-size: 15px; text-transform: uppercase; letter-spac
 .list { margin: 0; padding: 0; list-style: none; }
 .list li { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid #ece7dc; }
 .list li:last-child { border-bottom: 0; }
+.list.card { padding: 2px 16px; }
 .muted { color: #5d6b63; }
 .who { display: flex; gap: 6px; flex-wrap: wrap; }
 .who span { min-width: 34px; height: 34px; padding: 0 8px; border-radius: 999px; display: grid; place-items: center; font-size: 13px; font-weight: 600; color: #fff; background: #3c7a89; }
 .who span.maybe { background: #b9b2a4; }
-.map { position: relative; min-height: 420px; border-radius: 14px; overflow: hidden; background: linear-gradient(155deg, #cfe2d0, #e7eedb 55%, #d6e5ee); }
+.map { position: relative; min-height: 420px; border-radius: 14px; overflow: hidden; background: #dfeadb; }
 .ridge { position: absolute; inset: 12% 8% 20% 14%; border: 5px dashed #b0552c; border-radius: 46% 54% 40% 60%; }
 .creek { position: absolute; left: 0; right: 0; top: 58%; height: 10px; background: #9cc3db; transform: rotate(-8deg); }
 .pin { position: absolute; padding: 4px 10px; border-radius: 999px; background: #1c2a24; color: #fff; font-size: 13px; white-space: nowrap; }

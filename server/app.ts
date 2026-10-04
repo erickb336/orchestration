@@ -18,6 +18,7 @@ import type { ProviderId } from "../src/domain/types";
 import { pruneCheckLogs, type CheckRunner } from "./checks";
 import type { GitHubHost } from "./github";
 import { Housekeeping, SWEEP_EVERY_MS, systemDocker } from "./housekeeping";
+import { writeDemoFiles } from "./demoFiles";
 import { createHttpServer } from "./http";
 import type { ArchiveOutcome } from "./runtimes/codex";
 import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
@@ -110,6 +111,22 @@ if (mode === "fake") {
   } catch (e) {
     log(`Vision documents: could not write the sample document: ${e instanceof Error ? e.message : String(e)}`);
   }
+  // The sample's studio versions and captures, as files (server/demoFiles.ts); again after Reset sample data, which
+  // records them under new ids.
+  let written = "";
+  const demoFiles = () => {
+    try {
+      const s = store.read().state;
+      const key = `${s.project.id}|${s.studio.artifacts[0]?.id ?? ""}|${s.studio.artifacts.length}`;
+      if (key === written) return;
+      written = key;
+      writeDemoFiles(dataDir, s);
+    } catch (e) {
+      log(`The sample's files: could not write them: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+  demoFiles();
+  store.onChange(demoFiles);
 }
 // The six flows are compiled in from flows/; the state's copy is refreshed at start so a changed
 // flow file takes effect after a restart. Tasks keep the steps they were created with.
