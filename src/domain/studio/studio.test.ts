@@ -57,22 +57,6 @@ describe("as it is today: round 0 of an existing repository (pass 4)", () => {
     expect(art(v3.state, a.id, 3).provenance).toBeUndefined();
   });
 
-  it("a reproduction is not revised for the PE: what the PE says of its faithfulness goes to the owner at once (review finding 5)", () => {
-    const zero = openRound(fresh(), "material", at(1));
-    const a = addScreen(zero.state, 0, at(2), asIs());
-    const s = pePass(a.state, a.id, 1, [{ verdict: "feasible-if", reasons: "The list matches the code.", change: "The code sorts trips by date; the reproduction does not." }], at(3));
-    const v1 = art(s, a.id, 1);
-    expect(S.peReview(s, v1)).toMatchObject({ status: "ended", ended: "as-is", pass: 1, objections: [], asks: [{ change: "The code sorts trips by date; the reproduction does not." }] });
-    expect(S.revisionDue(s, v1)).toBe(false);
-    expect(S.readyForOwner(s, v1)).toBe(true);
-    expect(s.events.at(-1)!.message).toBe(
-      "PE review of Trip list (as is) v1, pass 1: feasible if changed; review ended: it reproduces the code as it is today, and the designer does not revise a reproduction for the PE; it goes to the owner with the changes the PE asks for",
-    );
-    // The owner corrects it: a mark, and the round can close.
-    expect(S.currentFeedback(feedback(s, a.id, 1, { mark: "change", note: "Sort by date, as the code does." }, at(4)), a.id, 1)?.mark).toBe("change");
-    expect(S.roundBusy(s, 0)).toBeUndefined();
-  });
-
   it("refuses as-is artifacts anywhere else, from anyone else, and provenance that is not a path in the repository", () => {
     const zero = openRound(fresh(), "material", at(1));
     const outside = "Only the designer's reproductions of the existing code in round 0 (as it is today) are labelled as is.";

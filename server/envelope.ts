@@ -13,6 +13,7 @@ import { LEAD_PRINCIPLE_IDS, orderPrinciples, principle, wordCount } from "../sr
 import { buildingSpend, committedBuildUsd, countedSpend, fmtUsd, maintenanceEstimate } from "../src/domain/spend";
 import * as B from "../src/domain/studio/blueprint";
 import * as I from "../src/domain/studio/import";
+import { isImportReviewRun } from "../src/domain/model/lead";
 import { domainLines } from "../src/domain/studio/domains";
 import { MAX_DESIGNER_RUNS, MAX_RUN_VARIANTS } from "../src/domain/studio/lead";
 import { captureItems, notSetUpReason } from "../src/domain/studio/evidence";
@@ -1536,7 +1537,8 @@ export function buildLeadEnvelope(state: State, run: LeadRun, access: "read", do
   // vision draft go to message runs in either stage (ORC-029 pass 5, r10): Vision stays open while the factory runs, on
   // the draft. A planning run never drafts (the domain refuses).
   const shaping = p.stage === "shaping";
-  const canDraft = canSteer;
+  // The import's review reply (ORC-032) answers no message, and drafts too: the round's message and the vision today.
+  const canDraft = canSteer || isImportReviewRun(state, run);
   const canShape = shaping && canSteer;
   const roots = state.tasks.filter((t) => !t.parentTaskId);
   // The review and fix tasks the service creates for a pull request are delivery's, not steerable, and

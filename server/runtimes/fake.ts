@@ -599,6 +599,17 @@ export function writeImportSample(staging: string, prompt: string): string {
     manifest([{ kind: "dictionary", title: "Words", devices: [], variants: [{ id: "a", label: "As it is today", entry: "dictionary.json" }], files: ["dictionary.json"], provenance: ["README.md", "tally/cli.py"] }]);
     return "Collected tally's words from the README and the code (simulated sample).";
   }
+  if (/^## The import: a fix$/m.test(prompt)) {
+    // The staging folder holds the part's files: hand in its next version, marked fixed, its rules as they were.
+    const p = TALLY_PARTS.find((x) => existsSync(join(staging, x.entry)));
+    if (!p) throw new Error("its working directory holds none of tally's parts");
+    const folder = p.entry.split("/")[0];
+    const note = p.entry.endsWith(".md") ? "\n> Fixed from the owner's words (simulated: the fake runtime changed nothing else).\n" : "# Fixed from the owner's words (simulated: the fake runtime changed nothing else).\n";
+    writeFileSync(join(staging, p.entry), `${readFileSync(join(staging, p.entry), "utf8")}${note}`);
+    const files = [p.entry, ...(existsSync(join(staging, folder, "rules.json")) ? [`${folder}/rules.json`] : [])];
+    manifest([{ kind: p.kind, title: p.title, devices: p.devices, variants: [{ id: "a", label: "As it is today", entry: p.entry }], files, provenance: p.provenance }]);
+    return `Fixed ${p.title} from the owner's words (simulated sample).`;
+  }
   const section = /^The rules the reader found \(\d+\):\n((?:- .*\n?)*)/m.exec(prompt)?.[1] ?? "";
   const rules = [...section.matchAll(/^- (\S+) \((.*?)\): (.*?)(?: \[tests: ([^\]]*)\])?$/gm)].map(([, id, area, text, tests]) => ({ id, area, text, tests: tests ? tests.split(", ") : [] }));
   const artifacts = TALLY_PARTS.map((p, i) => {
@@ -864,6 +875,15 @@ export class FakeAdapter implements RuntimeAdapter {
           this.emit(answer.ok ? { type: "completed", attemptId: id, finalText: answer.text } : { type: "failed", attemptId: id, message: `The simulated PE could not read the version: ${answer.error}` });
           continue;
         }
+        if (p.studio !== undefined && /^## The import: (the words|the parts|a fix)$/m.test(p.prompt ?? "")) {
+          // ORC-032: the simulated import designer hands in tally's words, its parts with the reader's rules placed, or a part's fix.
+          try {
+            this.emit({ type: "completed", attemptId: id, finalText: writeImportSample(p.studio, p.prompt ?? "") });
+          } catch (e) {
+            this.emit({ type: "failed", attemptId: id, message: `The simulated designer could not write tally's parts: ${e instanceof Error ? e.message : String(e)}` });
+          }
+          continue;
+        }
         if (p.studio !== undefined && existsSync(p.studio) && readdirSync(p.studio).length) {
           // A revision: its staging folder starts with the files of the version it revises. The simulated designer
           // marks the variants its brief asks it to revise, and hands in that one artifact.
@@ -872,15 +892,6 @@ export class FakeAdapter implements RuntimeAdapter {
             this.emit({ type: "completed", attemptId: id, finalText: reviseSample(p.studio, { terminal: ask.terminal, variants: variantsToRevise(ask.brief) }) });
           } catch (e) {
             this.emit({ type: "failed", attemptId: id, message: `The simulated designer could not revise: ${e instanceof Error ? e.message : String(e)}` });
-          }
-          continue;
-        }
-        if (p.studio !== undefined && /^## The import: the (words|parts)$/m.test(p.prompt ?? "")) {
-          // ORC-032: the simulated import designer hands in tally's words or its parts, with the reader's rules placed.
-          try {
-            this.emit({ type: "completed", attemptId: id, finalText: writeImportSample(p.studio, p.prompt ?? "") });
-          } catch (e) {
-            this.emit({ type: "failed", attemptId: id, message: `The simulated designer could not write tally's parts: ${e instanceof Error ? e.message : String(e)}` });
           }
           continue;
         }

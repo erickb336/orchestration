@@ -9,9 +9,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import * as M from "../src/domain/model";
 import * as I from "../src/domain/studio/import";
 import * as Spend from "../src/domain/spend";
-import { PROBE_KEY, allowSubagentsForStudioRun, setResearchHelpers, setSubagentProviders } from "../src/domain/subagents";
+import { PROBE_KEY, setResearchHelpers, setSubagentProviders } from "../src/domain/subagents";
 import type { State } from "../src/domain/types";
 import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
 import type { Assignment } from "./runtimes/types";
@@ -147,6 +148,9 @@ describe("the import of tally, end to end with the fake runtime", () => {
     expect(imp.capture!.parts.map((p) => p.status)).toEqual(["captured", "captured", "captured"]);
     for (const p of imp.capture!.parts) if (p.status === "captured") expect(existsSync(join(importDir(dataDir, s.project.id, imp.id), "capture", p.files[0].path))).toBe(true);
 
+    // The review wakes the lead once; its reply says what the import found (src/domain/model/lead.ts).
+    await until((x) => x.leadRuns.length === 1 && !M.activeLeadRun(x), "the lead's review reply");
+    expect(state().conversation.filter((m) => m.author === "lead").at(-1)!.text).toMatch(/^I read the repository at commit [0-9a-f]{7} as it is today: the tests ran: 22, 22 pass; 17 rules, 13 named by tests;/);
     // Every checkout was read-only and at the commit; none is left, and the repository is as it was.
     expect(started.filter((a) => a.studio).every((a) => a.workspace.access === "read" || a.role === "designer")).toBe(true);
     expect(existsSync(join(repo, ".git", "worktrees")) ? readdirSync(join(repo, ".git", "worktrees")) : []).toEqual([]);
@@ -166,6 +170,23 @@ describe("the import of tally, end to end with the fake runtime", () => {
     expect(checkoutHeads.length).toBe(3);
     expect(new Set(checkoutHeads)).toEqual(new Set([commit]));
     for (const a of started.filter((x) => x.studio)) expect(a.prompt).toContain(`commit ${commit.slice(0, 7)}`);
+  });
+});
+
+describe("the owner's answers in review", () => {
+  it("a part the reader misread is fixed by a designer run, from the owner's words, before the baseline", async () => {
+    service();
+    startImport();
+    await until((s) => I.importStatus(s) === "review", "the import in review");
+    const ledger = I.importParts(state()).find((a) => a.title === "The ledger")!;
+    cmd("answerImport", { answers: [{ on: { rule: "R16" }, option: "correct", correction: "misread", text: "A negative amount is an error today; tally add stops." }] });
+    await until((s) => (I.importParts(s).find((a) => a.id === ledger.id)?.version ?? 0) > ledger.version, "the fixed version");
+    const fix = state().studio.runs.find((r) => r.importStep === "fix")!;
+    expect(fix).toMatchObject({ kind: "designer", round: 0, artifactId: ledger.id, status: "completed" });
+    expect(fix.brief).toContain("A negative amount is an error today; tally add stops.");
+    // One fix per answer: nothing more is asked once the new version is in.
+    for (let i = 0; i < 10; i++) await tick();
+    expect(state().studio.runs.filter((r) => r.importStep === "fix")).toHaveLength(1);
   });
 });
 
@@ -195,9 +216,7 @@ describe("the rules reader's access and helpers", () => {
     expect(started.find((a) => a.stepId === "reader")!.allowSubagents).toBeUndefined();
   });
 
-  // The domain resolves the reader's helpers from the import's own switch and cap (unit 1, phase B); skipped until it does.
-  const resolves = !!allowSubagentsForStudioRun({ project: { subagentProviders: ["claude"], researchHelpers: {} }, studio: { import: { helpers: 2 } } } as unknown as State, { kind: "reader", provider: "claude" });
-  it.skipIf(!resolves)("gives the reader helpers only with the owner's switch on and its cap set", async () => {
+  it("gives the reader helpers only with the owner's switch on and its cap set", async () => {
     service();
     startImport({ helpers: 2, setup: (s) => setSubagentProviders(s, ["claude"], iso()) });
     await until((s) => s.studio.runs.some((r) => r.importStep === "rules" && r.status !== "queued"), "the reader started");
@@ -249,8 +268,7 @@ describe("the import's controls", () => {
     expect(state().studio.import!.stopped!.reason).toBe("the words run failed 2 times: the designer gave up");
   });
 
-  // The import's own budget holds its runs (the domain's dispatch, unit 1 phase B); skipped until it does.
-  it.skipIf(!("importStop" in Spend))("holds new runs at the import's stop", async () => {
+  it("holds new runs at the import's stop (the domain's dispatch)", async () => {
     service();
     startImport({ budgetUsd: 0.000001 });
     store.update((s) => {
@@ -259,7 +277,10 @@ describe("the import's controls", () => {
       return next;
     }, iso());
     for (let i = 0; i < 20; i++) await tick();
-    expect(state().studio.runs.filter((r) => r.importStep && r.status !== "queued")).toEqual([]);
+    expect(Spend.importStop(state())).toBeDefined();
+    const asked = state().studio.runs.filter((r) => r.importStep);
+    expect(asked.length).toBeGreaterThan(0);
+    expect(asked.every((r) => r.status === "queued")).toBe(true);
   });
 });
 

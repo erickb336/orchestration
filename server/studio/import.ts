@@ -30,7 +30,7 @@ import * as I from "../../src/domain/studio/import";
 import { isCapturedKind, type CaptureItem, type CapturedKind, type PreviewSetting } from "../../src/domain/studio/evidence";
 import * as R from "../../src/domain/studio/runs";
 import { latestVersion, isInsidePath } from "../../src/domain/studio/studio";
-import { isUnderWay, type ImportStep, type ImportPartCapture, type ImportRule, type StudioArtifact, type StudioRun } from "../../src/domain/studio/types";
+import { isUnderWay, type ImportStep, type ImportPartCapture, type ImportRule, type StudioRun } from "../../src/domain/studio/types";
 import { ControlError, type State, type TestCaseResult, type TestReport } from "../../src/domain/types";
 import type { EnvironmentAssignment } from "../checks";
 import { lastJsonObject } from "../envelope";
@@ -364,32 +364,19 @@ export function askForImportRuns(state: State, now: string): State {
       if (failed.length >= MAX_STEP_RUNS) return I.stopImport(s, { importId: imp.id, reason: `the ${STEP_WORDS[step]} failed ${failed.length} times: ${failed.at(-1)!.note ?? "no reason was given"}` }, now);
       s = R.requestStudioRun(s, { kind: step === "rules" ? "reader" : "designer", round: 0, brief: BRIEF[step], importStep: step }, now).state;
     }
-    for (const fix of fixesDue(s)) s = R.requestStudioRun(s, { kind: "designer", round: 0, artifactId: fix.part.id, brief: fix.brief, importStep: "fix" }, now).state;
+    // The fixes the domain says are due (importFixesDue): a part the owner says the reader misread, before the baseline.
+    for (const fix of I.importFixesDue(s)) {
+      const part = latestVersion(s, fix.artifactId)!;
+      const failed = I.importRuns(s, "fix").filter((r) => r.artifactId === part.id && r.askedAt >= fix.at && (r.status === "failed" || r.status === "lost"));
+      if (failed.length >= MAX_STEP_RUNS) return I.stopImport(s, { importId: imp.id, reason: `the fix of ${part.title} failed ${failed.length} times: ${failed.at(-1)!.note ?? "no reason was given"}` }, now);
+      const brief = `The owner says the reader misread ${part.title}, in their words:\n${fix.text}\nRevise ${part.title} so it shows what the code does at commit ${short(imp.commit)}. Keep every other rule as it is.`;
+      s = R.requestStudioRun(s, { kind: "designer", round: 0, artifactId: part.id, brief, importStep: "fix" }, now).state;
+    }
   } catch (e) {
     if (!(e instanceof ControlError)) throw e;
     return I.stopImport(state, { importId: imp.id, reason: `the import could not ask for its next run: ${e.message}` }, now);
   }
   return s;
-}
-
-/**
- * The fixes due: each newest "the reader misread it" answer before the baseline, on a rule or a part of round 0, whose
- * part has no fix asked for since the answer.
- */
-function fixesDue(s: State): { part: StudioArtifact; brief: string }[] {
-  const imp = s.studio.import!;
-  const newest = new Map<string, (typeof imp.answers)[number]>();
-  for (const a of imp.answers) newest.set("rule" in a.on ? `rule:${a.on.rule}` : `part:${a.on.part}`, a);
-  const out: { part: StudioArtifact; brief: string }[] = [];
-  for (const a of newest.values()) {
-    if (a.correction !== "misread") continue;
-    const part = "rule" in a.on ? I.partOfRule(s, a.on.rule) : latestVersion(s, a.on.part);
-    if (!part || out.some((x) => x.part.id === part.id)) continue;
-    if (s.studio.runs.some((r) => r.importStep === "fix" && r.artifactId === part.id && r.askedAt >= a.at)) continue;
-    const what = "rule" in a.on ? `rule ${a.on.rule}` : part.title;
-    out.push({ part, brief: `The owner says the reader misread ${what}: "${a.text ?? ""}". Revise ${part.title} so it shows what the code does at commit ${short(imp.commit)}. Keep every other rule as it is.` });
-  }
-  return out;
 }
 
 /** The capture is due once the parts are in and no parts run is under way, and it is not recorded yet. */

@@ -8,8 +8,7 @@
 // The loop rule (ORC-029 pass 4). The PE judges every option before the owner sees it. When its pass asks for a change
 // (feasible-if) or objects (not-feasible) to a variant, the designer revises the version in the same round and the PE
 // reviews the new one, up to three passes in a round. A version reaches the owner when the PE's latest pass finds
-// every variant feasible, or once review ends (`LoopEnd`: the third pass, a reproduction of the code, the round
-// closed, runs that failed twice, or no provider to run the next step), with the PE's open objections and asked-for
+// every variant feasible, or once review ends (`LoopEnd`: the third pass, the round closed, runs that failed twice, or no provider to run the next step), with the PE's open objections and asked-for
 // changes shown. Where review stands is one value, `PeReview`, and the words the owner and the lead see are made from
 // it. An objection is never dropped: a later pass on a revision answers it, or the owner overrules it (recorded). A
 // kind the PE does not review (`KIND_RULES` in types.ts: what the owner brought, a probe's evidence, the dictionary) is
@@ -482,7 +481,6 @@ export function peRunsOf(s: State, artifactId: string, version: number): StudioR
 /** Why PE review of a version ended, in words that follow "PE review ended: ". `no-provider` comes with its note. */
 export const LOOP_END_WORDS: Record<LoopEnd, string> = {
   passes: `the PE made its ${MAX_PE_PASSES} passes in the round`,
-  "as-is": "it reproduces the code as it is today, and the designer does not revise a reproduction for the PE",
   "round-closed": "its round closed before the PE agreed",
   "no-revision": `the designer's runs revising it ended ${MAX_REVISION_RUNS} times without a new version`,
   "no-review": `the PE's runs on it ended ${MAX_PE_RUNS} times without a verdict`,
@@ -492,14 +490,13 @@ export const LOOP_END_WORDS: Record<LoopEnd, string> = {
 
 /**
  * Why PE review of a version is over before the PE agreed, or undefined while it goes on. `pass` is the PE's latest
- * pass on this version, 0 when it has none. In order: an end the service recorded; the round's last pass; a
- * reproduction of the code, which is not revised (round 0); the round closed; the revisions or the PE's runs failed
+ * pass on this version, 0 when it has none. In order: an end the service recorded; the round's last pass; the round
+ * closed; the revisions or the PE's runs failed
  * (those since the owner last asked the PE again).
  */
 function loopEnd(s: State, a: StudioArtifact, pass: number): LoopEnd | undefined {
   if (a.reviewEnd) return a.reviewEnd.reason;
   if (pass >= MAX_PE_PASSES) return "passes";
-  if (pass && a.provenance) return "as-is";
   const round = s.studio.rounds.find((r) => r.n === a.round);
   if (!round || round.closedAt) return "round-closed";
   if (pass && endedWithoutResult(revisionRunsOf(s, a)) >= MAX_REVISION_RUNS) return "no-revision";
