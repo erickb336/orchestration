@@ -4,7 +4,7 @@
 // the Lock in names the summary this screen showed, and when it changes while you read, the screen shows the new one
 // and clears your agreement. Words: importView.ts.
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import * as M from "../../domain/model";
 import { summaryDigest, type SummarySeen } from "../../domain/studio/blueprint";
 import { baselineBlocker, baselineSummary, importStatus } from "../../domain/studio/import";
@@ -12,7 +12,7 @@ import { fmtUsd, importSpend } from "../../domain/spend";
 import { Banner, Button, ButtonLink, Card, Checkbox, Chip, EmptyState, SimulatedChip } from "../kit";
 import { useStore } from "../store";
 import { ImportBudgetStop } from "./ImportPanel";
-import { baselineFacts, baselineRows, changeLine, keptRules, openChanges, openQuestions, productName } from "./importView";
+import { baselineFacts, baselineRows, changeLine, keptRules, openChanges, openQuestions, productName, summaryChanged } from "./importView";
 import "./import.css";
 
 /** The summary the screen shows, as the Lock in names it. */
@@ -27,17 +27,20 @@ export function BaselineLockIn() {
   const now = status === "review" ? seenNow(state) : undefined;
   const [seen, setSeen] = useState<SummarySeen | undefined>(now);
   const [agreed, setAgreed] = useState(false);
-  const [stale, setStale] = useState(false);
+  const [note, setNote] = useState<ReturnType<typeof summaryChanged>>(undefined);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
-  // The summary changed under the owner (another tab, a fixed part): show the new one, and clear the agreement.
+  /** You pressed Accept the vision here: the next change of the summary is yours. */
+  const own = useRef(false);
+  // The summary changed: show the new one, and clear the agreement, with why (summaryChanged).
   useEffect(() => {
     if (!now || busy || done) return;
     if (!seen) return setSeen(now);
     if (now.summaryDigest === seen.summaryDigest && now.draftRev === seen.draftRev) return;
+    setNote(summaryChanged({ own: own.current, agreed }));
+    own.current = false;
     setSeen(now);
     setAgreed(false);
-    setStale(true);
   }, [now?.summaryDigest, now?.draftRev, seen, busy, done]);
 
   const header = (title: string) => (
@@ -85,10 +88,26 @@ export function BaselineLockIn() {
     if (r.ok) setDone(true);
     setBusy(false);
   };
-  return <BaselineSummary header={header} stale={stale} agreed={agreed} onAgree={(v) => (setAgreed(v), setStale(false))} busy={busy} blocker={disabled ? "The service is offline." : baselineBlocker(state)} onLockIn={() => void submit()} />;
+  const acceptVision = async (args: { draftId: string; expectedRev: number }) => {
+    own.current = true;
+    if (!(await send("acceptVisionDraft", args)).ok) own.current = false;
+  };
+  return <BaselineSummary header={header} note={note} agreed={agreed} onAgree={(v) => (setAgreed(v), setNote(undefined))} busy={busy} blocker={disabled ? "The service is offline." : baselineBlocker(state)} onLockIn={() => void submit()} onAcceptVision={(a) => void acceptVision(a)} />;
 }
 
-function BaselineSummary({ header, stale, agreed, onAgree, busy, blocker, onLockIn }: { header: (t: string) => ReactNode; stale: boolean; agreed: boolean; onAgree: (v: boolean) => void; busy: boolean; blocker: string | undefined; onLockIn: () => void }) {
+interface SummaryProps {
+  header: (t: string) => ReactNode;
+  /** Why the agreement was cleared: the summary changed. */
+  note: ReturnType<typeof summaryChanged>;
+  agreed: boolean;
+  onAgree: (v: boolean) => void;
+  busy: boolean;
+  blocker: string | undefined;
+  onLockIn: () => void;
+  onAcceptVision: (a: { draftId: string; expectedRev: number }) => void;
+}
+
+function BaselineSummary({ header, note, agreed, onAgree, busy, blocker, onLockIn, onAcceptVision }: SummaryProps) {
   const { state } = useStore();
   const imp = state.studio.import!;
   const name = productName(state);
@@ -105,11 +124,6 @@ function BaselineSummary({ header, stale, agreed, onAgree, busy, blocker, onLock
       <p className="small muted no-margin">
         What Vision will say {name} is today, at commit {imp.commit.slice(0, 7)}. {simulated && <SimulatedChip />}
       </p>
-      {stale && (
-        <Banner tone="you" title="The summary changed while you read it.">
-          This is the new summary. Read it again, and agree again to lock it in.
-        </Banner>
-      )}
       <ImportBudgetStop />
       <div className="imp-cols">
         <Card title={`${rows.length} parts become the baseline: in force and built`} className="imp-bcard">
@@ -203,10 +217,15 @@ function BaselineSummary({ header, stale, agreed, onAgree, busy, blocker, onLock
               <li>The baseline stays on this computer. No file in your repository changes.</li>
             </ul>
           </Card>
-          <VisionDraftCard />
+          <VisionDraftCard onAccept={onAcceptVision} />
         </div>
       </div>
       <Card title="Your agreement" className="imp-agree">
+        {note && (
+          <Banner tone={note.tone} title={note.title}>
+            {note.text}
+          </Banner>
+        )}
         <Checkbox label={`I have reviewed the baseline. It is what ${name} does today, with my answers.`} checked={agreed} onChange={(e) => onAgree(e.target.checked)} disabled={!!blocker} />
         <div className="k-actions">
           <Button variant="primary" disabled={!agreed || !!blocker} disabledReason={blocker ?? (!agreed ? "Tick the box first: your agreement is recorded with this summary." : undefined)} showReason={!!blocker} loading={busy} onClick={onLockIn}>
@@ -223,8 +242,8 @@ function BaselineSummary({ header, stale, agreed, onAgree, busy, blocker, onLock
 }
 
 /** The lead's draft of the vision, "what it is today" (C10): accept it, or see the vision in force. */
-function VisionDraftCard() {
-  const { state, send, disabled } = useStore();
+function VisionDraftCard({ onAccept }: { onAccept: (a: { draftId: string; expectedRev: number }) => void }) {
+  const { state, disabled } = useStore();
   const draft = M.openVisionDraft(state);
   const vision = M.currentVision(state);
   const name = productName(state);
@@ -235,7 +254,7 @@ function VisionDraftCard() {
           <p className="small no-margin imp-pre">{draft.text}</p>
           <p className="micro muted no-margin">The lead's draft{draft.simulated ? " (simulated)" : ""}. Start the factory needs a vision text.</p>
           <div className="k-actions">
-            <Button size="small" disabled={disabled} onClick={() => void send("acceptVisionDraft", { draftId: draft.id, expectedRev: vision.rev })}>
+            <Button size="small" disabled={disabled} onClick={() => onAccept({ draftId: draft.id, expectedRev: vision.rev })}>
               Accept the vision
             </Button>
             <ButtonLink size="small" variant="quiet" href="#/vision">

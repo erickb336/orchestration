@@ -510,6 +510,16 @@ export function baselineFacts(s: State): { bold: string; rest: string }[] {
   return facts;
 }
 
+/**
+ * What the Baseline screen says when the summary it shows changes, beside your agreement (which it clears): a change
+ * from elsewhere (another tab, a fixed part) is news; your own Accept of the vision on this screen is not, and needs a
+ * word only when it clears an agreement you gave.
+ */
+export function summaryChanged(o: { own: boolean; agreed: boolean }): { tone: "you" | "info"; title: string; text: string } | undefined {
+  if (!o.own) return { tone: "you", title: "The summary changed while you read it.", text: "This is the new summary. Read it again, and agree again to lock it in." };
+  return o.agreed ? { tone: "info", title: "You accepted the vision, so the summary changed.", text: "It now holds the vision. Agree again to lock it in." } : undefined;
+}
+
 /** The changes to design that wait (C5): open while no newer version of their part exists. */
 export const openChanges = (s: State) => changeRequests(s).filter((c) => c.open);
 

@@ -20,7 +20,7 @@ import { BaselineLockIn } from "./BaselineLockIn";
 import { ImportPanel } from "./ImportPanel";
 import { ImportReview } from "./ImportReview";
 import { TALLY_START_INFO } from "./importScene";
-import { UNANSWERED_TEXT, previewSetting, startBlocker, startDraft, type FoundRepository } from "./importView";
+import { UNANSWERED_TEXT, previewSetting, startBlocker, startDraft, summaryChanged, type FoundRepository } from "./importView";
 import { StartForm } from "./StartImport";
 
 const svc = testService({ prototypePort: 5320 });
@@ -262,6 +262,12 @@ describe("4 · Baseline (C4, C5, C10)", () => {
     expect(baselineArgs(changed).summaryDigest).not.toBe(seen.summaryDigest);
     expect(() => run(changed, "lockInBaseline", seen, at(111))).toThrow(/changed since you read it|draft/i);
     expect(run(changed, "lockInBaseline", baselineArgs(changed), at(112)).state.studio.import!.lockedInAt).toBe(at(112));
+  });
+
+  it("your own Accept of the vision is not news: no 'changed while you read it'; a change from elsewhere is (UX-9)", () => {
+    expect(summaryChanged({ own: true, agreed: false })).toBeUndefined();
+    expect(summaryChanged({ own: true, agreed: true })?.title).toBe("You accepted the vision, so the summary changed.");
+    expect(summaryChanged({ own: false, agreed: true })?.title).toBe("The summary changed while you read it.");
   });
 
   it("shows the lead's draft of the vision, what tally is today, to accept (C10)", () => {
