@@ -539,43 +539,6 @@ describe("as it is today (round 0 of an existing repository)", () => {
     expect(versionHistory(s, S.getArtifact(s, id, 1))).toEqual([{ version: 1, round: 0, current: true, tone: "done", state: "matches", text: "PE pass 1: it matches the code." }]);
   });
 
-  it("a reproduction with differences: the PE lists them, the designer does not revise it, and you correct it", () => {
-    const r = openRound(vision(), "material", at(1));
-    const a = addScreen(r.state, r.n, at(2), {
-      title: "Trip board",
-      variants: [
-        { id: "a", label: "Board", entry: "board/index.html" },
-        { id: "b", label: "Trip page", entry: "trip/index.html" },
-      ],
-      files: [
-        { path: "board/index.html", sha256: sha("a") },
-        { path: "trip/index.html", sha256: sha("b") },
-      ],
-      provenance: { files: ["src/board/index.html", "src/trip.html"] },
-    });
-    const s = pePass(
-      a.state,
-      a.id,
-      1,
-      [
-        { variant: "a", verdict: "feasible-if", reasons: "The cards match, apart from the dates.", change: "The code shows each trip's dates; the reproduction leaves them out." },
-        { variant: "b", verdict: "not-feasible", reasons: "This page is not in the code.", change: "The code has no trip page; the board links nowhere." },
-      ],
-      at(3),
-    );
-    expect(S.peReview(s, S.getArtifact(s, a.id, 1))).toMatchObject({ status: "ended", ended: "as-is", pass: 1 });
-    const text = peText(s);
-    expect(text).toContain("The PE found differences from the code: Board Some differences The cards match, apart from the dates. The differences: The code shows each trip's dates; the reproduction leaves them out.");
-    expect(text).toContain("Trip page Does not match the code This page is not in the code. What is wrong: The code has no trip page; the board links nowhere.");
-    expect(text).toContain("PE review ended: it reproduces the code as it is today, and the designer does not revise a reproduction for the PE. You can overrule the objection, with your reason. Mark it Keep, Change or Drop, and pick a variant.");
-    expect(text).not.toMatch(/feasible/i);
-    expect(text).not.toContain("every option");
-    expect(versionHistory(s, S.getArtifact(s, a.id, 1))[0]).toMatchObject({
-      state: "waiting for you",
-      text: "PE pass 1: found differences from the code; review ended: it reproduces the code as it is today, and the designer does not revise a reproduction for the PE. This is waiting for you.",
-    });
-  });
-
   it("what the owner brought, and every later round, keep their names", () => {
     const { s } = withSample();
     expect(s.studio.rounds.map((r) => roundLabel(s, r))).toEqual(["The experience"]);

@@ -172,14 +172,13 @@ export interface StudioArtifact {
  * Why PE review of a version ended before the PE agreed. The version then goes to the owner with what the PE still
  * asks for and objects to (studio.ts, the loop rule).
  * - passes: the PE made its last pass in the round;
- * - as-is: the version reproduces the code as it is today (round 0): the designer does not revise it for the PE;
  * - round-closed: its round closed first (a round closed before the lead's close waited for PE review);
  * - no-revision: the designer's runs revising it ended without a new version, twice;
  * - no-review: the PE's runs on it ended without a verdict, twice;
  * - no-provider: no enabled provider could run the next step (the PE or the designer's revision);
  * - earlier-rule: the PE reviewed it under pass 3's rule, one pass and no revision (recorded at the upgrade).
  */
-export type LoopEnd = "passes" | "as-is" | "round-closed" | "no-revision" | "no-review" | "no-provider" | "earlier-rule";
+export type LoopEnd = "passes" | "round-closed" | "no-revision" | "no-review" | "no-provider" | "earlier-rule";
 /** The ends the service records on the version (`reviewEnd`), because no other record shows them. */
 export type RecordedEnd = Extract<LoopEnd, "no-provider" | "earlier-rule">;
 

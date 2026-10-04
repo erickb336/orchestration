@@ -2,7 +2,8 @@
 
 import type { CommandName } from "./domain/commands";
 import type { AttachResult } from "./domain/model";
-import type { CheckCommand, ProviderId, State } from "./domain/types";
+import type { CheckCommand, Device, ProjectDomain, ProviderId, State } from "./domain/types";
+import type { ImportEstimate, RepoSize } from "./domain/studio/types";
 import type { CapabilityMap } from "./runtime/adapter";
 
 export const CLIENT_HEADER = "X-Orchestration-Client";
@@ -144,6 +145,33 @@ export interface VisionDocUploadOk {
 export type AttachVisionDocsResult = AttachResult;
 
 /** Body of GET /api/checks/suggest: the commands the repository's files suggest, read at `ref`. Nothing is saved until the user chooses them. */
+/**
+ * What the import's Start screen shows (ORC-032; GET /api/import/start?path=…, or POST /api/import/demo for the bundled
+ * sample with the simulated runtime). Read from the repository without changing it; nothing is saved. With it, the
+ * screen sends initProject, setDomains, setDevices, the environment and checks setters, and startImport.
+ */
+export type ImportStartInfo =
+  | { ok: false; reason: string }
+  | {
+      ok: true;
+      /** The bundled sample, tally, made in the service's data folder: the simulated runtime imports only it. */
+      demo?: true;
+      path: string;
+      /** HEAD, which the import is pinned to (C11), and its branch (absent when HEAD is detached). */
+      commit: string;
+      branch?: string;
+      size: RepoSize;
+      estimate: ImportEstimate;
+      /** The kinds of product the repository shows, each with the file that shows it. */
+      domains: { domain: ProjectDomain; device?: Device; because: string }[];
+      /** How it runs (C1): the proposed image, the dev container, and the check commands the repository's files suggest. */
+      proposal?: EnvironmentFound["proposal"];
+      devcontainer?: EnvironmentFound["devcontainer"];
+      checks: CheckCommand[];
+      /** A test command that writes a JUnit report, and the report's path, when the repository shows one. */
+      testReport?: { command: CheckCommand; path: string; because: string };
+    };
+
 export interface CheckSuggestions {
   commands: CheckCommand[];
   /** The trusted base the files were read at ("" when nothing was read). */
