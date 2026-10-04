@@ -288,7 +288,8 @@ class DemoBuilder {
         domains: ["screen"],
         factoryStarts: [],
         changeOrders: "lead",
-        // The demo's factory started before PE review of new work existed (ORC-030 retakes the demo).
+        // Off in the demo (the setting a project had before PE review of new work existed): the story does not show the
+        // PE reviewing a task, so the change order's new task says "No PE review".
         peReviewsNewWork: false,
         shapingSince: at(4440),
         checks: structuredClone(DEFAULT_CHECKS),
