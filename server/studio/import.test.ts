@@ -13,6 +13,7 @@ import type { TestCaseResult } from "../../src/domain/types";
 import type { StagedArtifact } from "./artifacts";
 import { EnvironmentImport, NO_ENVIRONMENT, SimulatedImport, TALLY_FIXTURE, askForImportRuns, partsRefusal, readImportReading, reportCases, tallyRepo } from "./import";
 import { handedIn, importDesignerRun } from "./runs";
+import { importDemo } from "./media";
 import { validateCast, validateTape } from "./terminal";
 
 let dir: string;
@@ -124,9 +125,10 @@ describe("the runners", () => {
       signal,
     });
     expect(capture.simulated).toBe(true);
-    expect(capture.parts[0]).toMatchObject({ artifactId: "art-1", status: "captured", files: [{ path: "art-1/demo.cast", type: "cast" }] });
+    expect(capture.parts[0]).toMatchObject({ artifactId: "art-1", status: "captured", files: [{ path: "art-1/demo.cast", type: "cast" }, { path: "art-1/demo.txt", type: "txt" }] });
+    expect(readFileSync(join(out, "art-1", "demo.txt"), "utf8")).toContain("> tally add 42 Dinner --by ana\nAdded 42.00 EUR for Dinner");
     expect(capture.parts[1]).toMatchObject({ status: "none", reason: "unavailable" });
-    expect(readdirSync(join(out, "art-1"))).toEqual(["demo.cast"]);
+    expect(readdirSync(join(out, "art-1")).sort()).toEqual(["demo.cast", "demo.txt"]);
   });
 
   it("the service's runner runs nothing without an environment, and says why", async () => {
@@ -157,6 +159,29 @@ describe("the runners", () => {
     expect(await new EnvironmentImport({ lender: lender(true) }).checks(job)).toEqual({ status: "read", counts: { passed: 22, failed: 0, skipped: 0, error: 0 }, reportFile: "checks/report.json" });
     expect(await new EnvironmentImport({ lender: lender(false) }).checks(job)).toEqual({ status: "not-run", reason: "The checks wrote no report at reports/junit.xml." });
     expect(await new EnvironmentImport({ lender: lender(false) }).checks({ ...job, testReport: undefined })).toMatchObject({ status: "not-run", reason: "No JUnit report path is set, so the import cannot read the tests' results. Set it in Settings › Checks." });
+  });
+});
+
+describe("an imported part's terminal demo, shown from the capture (U3-F1)", () => {
+  const part = { id: "art-1", version: 1, variants: [{ id: "a", label: "As it is today", entry: "add/demo.tape" }] };
+  const capture = (p: object) => ({ at: "2026-10-03T09:01:00.000Z", parts: [{ artifactId: "art-1", version: 1, ...p }] }) as never;
+  const now = () => "2026-10-03T09:02:00.000Z";
+
+  it("copies the capture's transcript into the version's recording folder, and reads recorded, or recorded with errors", () => {
+    const captured = join(dir, "capture");
+    mkdirSync(join(captured, "art-1"), { recursive: true });
+    writeFileSync(join(captured, "art-1", "demo.txt"), "> tally add 42 Dinner --by ana\nAdded 42.00 EUR\n");
+    const files = [{ path: "art-1/demo.cast", type: "cast", bytes: 1, sha256: "0".repeat(64) }, { path: "art-1/demo.txt", type: "txt", bytes: 1, sha256: "0".repeat(64) }];
+    expect(importDemo(join(dir, "studio"), part, capture({ status: "captured", files }), captured, now)).toEqual({ demo: { status: "done", at: now(), variants: [{ variant: "a", status: "recorded", tape: "add/demo.tape", txt: "recording/a/demo.txt" }] } });
+    expect(readFileSync(join(dir, "studio", "artifacts", "art-1", "v1", "recording", "a", "demo.txt"), "utf8")).toContain("Added 42.00 EUR");
+    expect(importDemo(join(dir, "studio"), part, capture({ status: "captured", files, warnings: ["The recording shows a failure: Traceback"] }), captured, now).demo.variants).toEqual([{ variant: "a", status: "recorded-with-errors", tape: "add/demo.tape", txt: "recording/a/demo.txt", reason: "The recording shows a failure: Traceback" }]);
+  });
+
+  it("says why when the capture did not record it, or recorded another version", () => {
+    const none = importDemo(join(dir, "studio"), part, capture({ status: "none", reason: "unavailable", detail: "Docker is not running" }), dir, now);
+    expect(none.demo.variants).toEqual([{ variant: "a", status: "not-recorded", reason: "the import's capture did not record it: Docker is not running" }]);
+    const later = importDemo(join(dir, "studio"), { ...part, version: 2 }, capture({ status: "none", reason: "unavailable", detail: "x" }), dir, now);
+    expect(later.demo.variants).toEqual([{ variant: "a", status: "not-recorded", reason: "the import's capture recorded version 1; this version came after it" }]);
   });
 });
 

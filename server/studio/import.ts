@@ -277,10 +277,27 @@ export class SimulatedImport implements ImportRunner {
       const cast = join(TALLY_FIXTURE, "casts", `${key}.cast`);
       if (!p.tape || !/^[a-z]+$/.test(key) || !existsSync(cast)) return { artifactId: p.artifactId, version: p.version, status: "none", reason: "unavailable", detail: "Simulated: the fake runtime records only tally's terminal demos." };
       const data = readFileSync(cast);
-      const rel = `${p.artifactId}/demo.cast`;
+      // Its transcript, as a real capture keeps one: the text the cast prints.
+      const text = Buffer.from(
+        data
+          .toString("utf8")
+          .split("\n")
+          .slice(1)
+          .flatMap((l) => (l ? [(JSON.parse(l) as [number, string, string])[2]] : []))
+          .join("")
+          .replace(/\r/g, ""),
+      );
       mkdirSync(join(job.outDir, p.artifactId), { recursive: true, mode: 0o700 });
-      writeFileSync(join(job.outDir, rel), data, { mode: 0o600 });
-      return { artifactId: p.artifactId, version: p.version, status: "captured", files: [{ path: rel, type: "cast", bytes: data.length, sha256: sha256(data) }] };
+      const files = (
+        [
+          ["demo.cast", "cast", data],
+          ["demo.txt", "txt", text],
+        ] as const
+      ).map(([name, type, body]) => {
+        writeFileSync(join(job.outDir, p.artifactId, name), body, { mode: 0o600 });
+        return { path: `${p.artifactId}/${name}`, type, bytes: body.length, sha256: sha256(body) };
+      });
+      return { artifactId: p.artifactId, version: p.version, status: "captured", files };
     });
     return { parts, simulated: true };
   }

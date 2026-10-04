@@ -19,6 +19,7 @@ import type { Assignment } from "./runtimes/types";
 import { Scheduler } from "./scheduler";
 import { Store } from "./store";
 import { EnvironmentImport, SimulatedImport, captureDir, importDir, tallyRepo, type ImportRunner } from "./studio/import";
+import type { StudioMedia } from "./studio/media";
 import { WorkspaceManager } from "./workspaces";
 
 let dir: string;
@@ -68,6 +69,14 @@ function fingerprint() {
   return { head: git("rev-parse", "HEAD"), tree: git("rev-parse", "HEAD^{tree}"), refs: git("for-each-ref", "--format=%(refname) %(objectname)"), files: files.sort().join("\n") };
 }
 
+/** The studio's media: screenshots skipped; a recording is never made of an imported part's tape (it runs the real command). */
+const media: StudioMedia = {
+  shots: async () => ({ skipped: "no browser in this test" }),
+  record: async () => {
+    throw new Error("the studio recorded an imported part's tape");
+  },
+};
+
 function service(runner: ImportRunner = new SimulatedImport()) {
   store = new Store(join(dataDir, "db.sqlite"));
   const catalog = store.read().state.project.catalog;
@@ -79,7 +88,7 @@ function service(runner: ImportRunner = new SimulatedImport()) {
     if (checkout && existsSync(join(checkout, ".git"))) checkoutHeads.push(execFileSync("git", ["-C", checkout, "rev-parse", "HEAD"], { encoding: "utf8" }).trim());
     start(a);
   };
-  scheduler = new Scheduler(store, { claude, codex: new FakeAdapter("codex", defaultFakeConfig(), catalog.codex) }, { dataDir, leaseMs: 600_000, workspaces: new WorkspaceManager(join(dir, "worktrees")), imports: runner });
+  scheduler = new Scheduler(store, { claude, codex: new FakeAdapter("codex", defaultFakeConfig(), catalog.codex) }, { dataDir, leaseMs: 600_000, workspaces: new WorkspaceManager(join(dir, "worktrees")), imports: runner, studioMedia: media });
 }
 
 /** A new project on tally, a screen and code product on the terminal, and the import started at HEAD. */
@@ -148,6 +157,11 @@ describe("the import of tally, end to end with the fake runtime", () => {
     expect(imp.capture!.parts.map((p) => p.status)).toEqual(["captured", "captured", "captured"]);
     for (const p of imp.capture!.parts) if (p.status === "captured") expect(existsSync(join(captureDir(dataDir, s.project.id, imp.id), p.files[0].path))).toBe(true);
 
+    // Each terminal demo is shown from the capture (U3-F1): its transcript, in the version's folder; the studio recorded no tape.
+    await until((x) => I.importParts(x).every((a) => a.demo?.status !== "pending"), "the demos shown");
+    const add = I.importParts(state()).find((a) => a.title === "tally add")!;
+    expect(add.demo).toMatchObject({ status: "done", variants: [{ variant: "a", status: "recorded", tape: "add/demo.tape", txt: "recording/a/demo.txt" }] });
+    expect(readFileSync(join(dataDir, "studio", s.project.id, "artifacts", add.id, "v1", "recording", "a", "demo.txt"), "utf8")).toContain("Added 42.00 EUR for Dinner, paid by ana, shared by ana, ben, cy.");
     // The review wakes the lead once; its reply says what the import found (src/domain/model/lead.ts).
     await until((x) => x.leadRuns.length === 1 && !M.activeLeadRun(x), "the lead's review reply");
     expect(state().conversation.filter((m) => m.author === "lead").at(-1)!.text).toMatch(/^I read the repository at commit [0-9a-f]{7} as it is today: the tests ran: 22, 22 pass; 17 rules, 13 named by tests;/);

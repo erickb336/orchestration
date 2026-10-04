@@ -18,11 +18,11 @@
 // commands are relative to the artifact's root, as everywhere else.
 
 import { createHash } from "node:crypto";
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import type { MediaResult } from "../../src/domain/studio/studio";
-import type { ArtifactShots, VariantDemo } from "../../src/domain/studio/types";
+import type { ArtifactShots, ImportCapture, StudioArtifact, VariantDemo } from "../../src/domain/studio/types";
 import { variantFallback, variantTape } from "./artifacts";
 import { readManifest, versionDir, type PrototypeManifest } from "./serve";
 import { captureShots, type ShotsOutcome } from "./shots";
@@ -57,6 +57,40 @@ export async function makeShots(media: StudioMedia, studioDir: string, artifactI
   if (!out.shots.length) return skipped(out.failed.length ? `every screenshot failed: ${out.failed[0].error}` : "the version has no variant on a screen device");
   const shots: ArtifactShots = { status: "taken", at: now(), shots: out.shots, failed: out.failed };
   return { shots };
+}
+
+/**
+ * An imported part's terminal demo (ORC-032), shown from the import's capture: its tape types the real command, which
+ * the recorder cannot run outside the project's environment, so the studio never records it. The capture's transcript
+ * is copied into the version's recording/<variant>/ (the folder the app serves), and the variant reads "recorded", or
+ * "recorded with errors" with the capture's warning; a part the capture did not record, or recorded at another
+ * version, says why. Never throws: a file that cannot be copied is a reason too.
+ */
+export function importDemo(studioDir: string, a: Pick<StudioArtifact, "id" | "version" | "variants">, capture: ImportCapture, captureDir: string, now: () => string): Extract<MediaResult, { demo: unknown }> {
+  const part = capture.parts.find((p) => p.artifactId === a.id);
+  const why = !part
+    ? "the import's capture did not list it"
+    : part.version !== a.version
+      ? `the import's capture recorded version ${part.version}; this version came after it`
+      : part.status === "none"
+        ? `the import's capture did not record it: ${part.detail}`
+        : undefined;
+  const variants = a.variants.map((v): VariantDemo => {
+    if (why || part?.status !== "captured" || !v.entry) return { variant: v.id, status: "not-recorded", reason: why ?? "it has no tape" };
+    const txt = part.files.find((f) => f.type === "txt");
+    if (!txt) return { variant: v.id, status: "not-recorded", reason: "the import's capture kept no transcript of it" };
+    const rel = `recording/${v.id}/${txt.path.split("/").at(-1)}`;
+    try {
+      const to = join(versionDir(studioDir, a.id, a.version), rel);
+      mkdirSync(dirname(to), { recursive: true });
+      copyFileSync(join(captureDir, txt.path), to);
+    } catch (e) {
+      return { variant: v.id, status: "not-recorded", reason: `the capture's transcript could not be copied (${e instanceof Error ? e.message : String(e)})` };
+    }
+    const warning = part.warnings?.[0];
+    return warning ? { variant: v.id, status: "recorded-with-errors", tape: v.entry, txt: rel, reason: warning } : { variant: v.id, status: "recorded", tape: v.entry, txt: rel };
+  });
+  return { demo: { status: "done", at: now(), variants } };
 }
 
 /** Why a variant was not recorded, for the owner: the tool's own words, without its advice to the designer. */

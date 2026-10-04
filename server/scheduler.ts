@@ -39,10 +39,10 @@ import type { AdapterEvent, Connection, ProviderHealth, RuntimeAdapter } from ".
 import { LeaseLostError, type Store } from "./store";
 import { ManifestError, readStaged, studioRoot, versionDir } from "./studio/artifacts";
 import { SimulatedEvidence, evidenceDir, evidenceInputLines, evidenceReadRoots, type EvidenceRunner } from "./studio/evidence";
-import { makeDemo, makeShots, type StudioMedia } from "./studio/media";
+import { importDemo, makeDemo, makeShots, type StudioMedia } from "./studio/media";
 import { PeAnswerError, checkPeAnswer, newWorkPeEnvelope, peEnvelope, readPeAnswer, recordNewWorkPeRun, recordPeRun } from "./studio/pe";
 import { repoGlance } from "./studio/existing";
-import { EnvironmentImport, ImportDriver, NO_ENVIRONMENT, SimulatedImport, importDir, partsRefusal, readImportReading, readerEnvelope, reportCases, type ImportRunner } from "./studio/import";
+import { EnvironmentImport, ImportDriver, NO_ENVIRONMENT, captureDir, SimulatedImport, importDir, partsRefusal, readImportReading, readerEnvelope, reportCases, type ImportRunner } from "./studio/import";
 import { askForRevisions } from "./studio/revise";
 import { checkHandedIn, designerEnvelope, handedIn, importDesignerRun, prepareStaging, type HandedIn } from "./studio/runs";
 import { withStudioPrinciples, withStudioProse } from "./studio/writing";
@@ -1142,17 +1142,28 @@ export class Scheduler {
     } catch (e) {
       return this.log(`Studio screenshots and recordings: ${e instanceof Error ? e.message : String(e)}`);
     }
+    const imp = state.studio.import;
     for (const p of S.pendingMedia(state)) {
       const key = `${projectId}/${p.artifactId}@${p.version}/${p.kind}`;
       if (this.mediaStarted.has(key)) continue;
+      const a = S.getArtifact(state, p.artifactId, p.version);
+      // An imported part's terminal demo runs the real command: it is shown from the import's capture (ORC-032), once
+      // the capture is recorded, and never recorded by the studio.
+      const fromCapture = p.kind === "demo" && !!a.provenance && !!imp;
+      if (fromCapture && !imp.capture) continue;
       this.mediaStarted.add(key);
-      const variants = S.getArtifact(state, p.artifactId, p.version).variants.map((v) => v.id);
+      const variants = a.variants.map((v) => v.id);
       const now = () => new Date().toISOString();
+      const dataDir = this.dataDir;
       this.mediaChain = this.mediaChain
         .then(async () => {
           // Paused since it was queued behind another: it is asked for again once the project resumes.
           if (this.store.read().state.project.hold) return void this.mediaStarted.delete(key);
-          const result = p.kind === "shots" ? await makeShots(media, studioDir, p.artifactId, p.version, now) : await makeDemo(media, studioDir, p.artifactId, p.version, variants, now);
+          const result = fromCapture
+            ? importDemo(studioDir, a, imp.capture!, captureDir(dataDir, projectId, imp.id), now)
+            : p.kind === "shots"
+              ? await makeShots(media, studioDir, p.artifactId, p.version, now)
+              : await makeDemo(media, studioDir, p.artifactId, p.version, variants, now);
           this.queue.push({ type: "studio-media", attemptId: "", projectId, artifactId: p.artifactId, version: p.version, result });
         })
         .catch((e) => this.log(`Studio ${p.kind === "shots" ? "screenshots" : "recording"} of ${p.artifactId} v${p.version} failed: ${e instanceof Error ? e.message : String(e)}`));
@@ -1273,10 +1284,8 @@ export class Scheduler {
         if (!out || !("artifacts" in out)) return fail(`studio.json was refused: ${out && "refused" in out ? out.refused : "it was not read"}`);
         try {
           const r = importDesignerRun(started, run.id, out, studioRoot(this.dataDir!, s.project.id), now);
-          // Screenshots and recordings are made after this transaction commits; the run completes without them. An
-          // imported part's terminal demo runs the real command, so the import's capture records it, not the studio (ORC-032).
-          const own = run.importStep ? r.imported.filter((v) => !["terminal-demo", "tui"].includes(S.getArtifact(r.state, v.artifactId, v.version).kind)) : r.imported;
-          const marked = this.media ? own.reduce((acc, v) => S.startArtifactMedia(acc, v.artifactId, v.version), r.state) : r.state;
+          // Screenshots and recordings are made after this transaction commits; the run completes without them.
+          const marked = this.media ? r.imported.reduce((acc, v) => S.startArtifactMedia(acc, v.artifactId, v.version), r.state) : r.state;
           return withStudioProse(R.completeStudioRun(marked, run.id, now, { usage: e.usage, actualModel: e.model, summary: r.summary }), run.id, this.studioProse.get(run.id));
         } catch (err) {
           return fail(`studio.json was refused: ${err instanceof Error ? err.message : String(err)}`);
