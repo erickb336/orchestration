@@ -19,6 +19,7 @@ import type { Browser, BrowserContext, Page } from "playwright-core";
 import { build } from "vite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildDemo } from "../src/domain/demo";
+import { writeDemoFiles } from "./demoFiles";
 import type { State } from "../src/domain/types";
 import { appPagePolicy, createHttpServer } from "./http";
 import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
@@ -48,6 +49,8 @@ async function serve(name: string, state: State, versions: ReturnType<typeof stu
   const store = new Store(join(dataDir, "test.db"), () => state);
   const studioDir = projectStudioDir(dataDir, store.read().state.project.id)!;
   for (const v of versions) writeVersion(studioDir, v.id, v.version, v.files, v.meta);
+  // The sample's own studio versions and captures, as the fake service writes them at start (server/app.ts).
+  writeDemoFiles(dataDir, store.read().state);
   const config = defaultFakeConfig();
   const scheduler = new Scheduler(store, { claude: new FakeAdapter("claude", config), codex: new FakeAdapter("codex", config) });
   const free = async () => {
