@@ -20,7 +20,7 @@ import { Studio } from "../studio/Studio";
 import { renderScreen, testService, visible } from "../testStore";
 import { BaselineLockIn } from "./BaselineLockIn";
 import { ImportPanel } from "./ImportPanel";
-import { ImportReview } from "./ImportReview";
+import { ImportReview, loadReviewDraft, saveReviewDraft } from "./ImportReview";
 import { TALLY_START_INFO } from "./importScene";
 import { UNANSWERED_TEXT, effectSentence, previewLines, previewSetting, startArgs, startBlocker, startDraft, summaryChanged, type FoundRepository } from "./importView";
 import { StartForm, StartWaits, WhoReads } from "./StartImport";
@@ -296,6 +296,33 @@ describe("3 · Review (C5, C8, C9, C15)", () => {
     const written = M.editVision(s, M.currentVision(s).rev, "tally splits costs.", "", "test", at(104));
     const t2 = text(<Studio />, written);
     expect(t2).toContain(`Accept as r${M.currentVision(written).rev + 1}`);
+  });
+
+  it("keeps the answers and the note you have not sent in this browser: a reload shows them again (QA3-F2)", () => {
+    const s = stage("review");
+    const kept = new Map<string, string>();
+    const g = globalThis as { window?: unknown };
+    const prev = g.window;
+    g.window = { localStorage: { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v), removeItem: (k: string) => void kept.delete(k) } };
+    try {
+      expect(text(<ImportReview />, s)).toContain("0 of 5 answered.");
+      saveReviewDraft(s.studio.import!.id, { draft: { "rule:R15": { option: "confirm" } }, note: "Check the rounding." });
+      const t = text(<ImportReview />, s);
+      expect(t).toContain("1 of 5 answered. 4 stay open if you send now.");
+      expect(t).toContain("Confirmed. It goes into the baseline as it is.");
+      expect(renderScreen(<ImportReview />, s, svc)).toContain("Check the rounding.</textarea>");
+      // What another import kept, or what is not an answer, is not shown.
+      expect(loadReviewDraft("another-import")).toEqual({ draft: {}, note: "" });
+      kept.set([...kept.keys()][0], '{"draft":{"rule:R15":{"option":7},"x":{"option":"confirm"}},"note":3}');
+      expect(loadReviewDraft(s.studio.import!.id)).toEqual({ draft: {}, note: "" });
+      // Once sent, nothing is kept.
+      saveReviewDraft(s.studio.import!.id, { draft: {}, note: "" });
+      expect(kept.size).toBe(0);
+    } finally {
+      g.window = prev;
+    }
+    // Without storage (blocked, or no browser), the review still works, with nothing kept.
+    expect(text(<ImportReview />, s)).toContain("0 of 5 answered.");
   });
 
   it("a test that fails makes its rule a conflict: the code as it is, or the test (Q2)", () => {

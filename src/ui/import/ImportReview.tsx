@@ -1,9 +1,9 @@
 // Review (ORC-032, screen 3), in Vision once the reading is done: round 0, As it is today (C9). It asks only the
 // conflicts and the important guesses, at most 10, conflicts first (Q4); the confirmed rules and the parts are listed,
-// not asked (C8), and "Correct" offers its two choices on any of them (C15). Your answers wait here until Send, which
+// not asked (C8), and "Correct" offers its two choices on any of them (C15). Your answers wait here, kept in this browser across a reload, until Send, which
 // records them together (answerImport) and opens the baseline. Words: importView.ts.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { fmtUsd, importSpend } from "../../domain/spend";
 import { importParts, importQuestions, ruleConfidence, ruleTitle } from "../../domain/studio/import";
 import type { ImportRule, StudioArtifact } from "../../domain/studio/types";
@@ -38,12 +38,48 @@ import {
 } from "./importView";
 import "./import.css";
 
+/** Where this browser keeps the review's answers and note until Send (QA3-F2): one key per import. */
+const keptKey = (importId: string) => `orchestration.import.${importId}.review`;
+type Kept = { draft: ReviewDraft; note: string };
+const isAnswer = (a: unknown): a is DraftAnswer => {
+  if (!a || typeof a !== "object") return false;
+  const x = a as Record<string, unknown>;
+  return typeof x.option === "string" && (x.correction === undefined || x.correction === "change" || x.correction === "misread") && (x.text === undefined || typeof x.text === "string");
+};
+
+/** The answers and the note this browser kept for the import; none when storage is blocked or holds anything else. */
+export function loadReviewDraft(importId: string): Kept {
+  try {
+    const raw: unknown = JSON.parse(window.localStorage.getItem(keptKey(importId)) ?? "null");
+    if (!raw || typeof raw !== "object") return { draft: {}, note: "" };
+    const { draft, note } = raw as Record<string, unknown>;
+    const entries = draft && typeof draft === "object" ? Object.entries(draft) : [];
+    if (typeof note !== "string" || !entries.every(([k, a]) => /^(rule|part):./.test(k) && isAnswer(a))) return { draft: {}, note: "" };
+    return { draft: Object.fromEntries(entries) as ReviewDraft, note };
+  } catch {
+    return { draft: {}, note: "" };
+  }
+}
+
+/** Keep the answers and the note in this browser, or forget them when there are none. A blocked storage keeps nothing. */
+export function saveReviewDraft(importId: string, kept: Kept) {
+  try {
+    if (!Object.keys(kept.draft).length && !kept.note) window.localStorage.removeItem(keptKey(importId));
+    else window.localStorage.setItem(keptKey(importId), JSON.stringify(kept));
+  } catch {
+    /* storage blocked: the answers last for this page only */
+  }
+}
+
 export function ImportReview() {
   const { state, send, disabled } = useStore();
-  const [draft, setDraft] = useState<ReviewDraft>({});
-  const [note, setNote] = useState("");
-  const [sending, setSending] = useState(false);
   const imp = state.studio.import!;
+  // The answers you have not sent survive a reload (QA3-F2).
+  const [restored] = useState(() => loadReviewDraft(imp.id));
+  const [draft, setDraft] = useState<ReviewDraft>(restored.draft);
+  const [note, setNote] = useState(restored.note);
+  const [sending, setSending] = useState(false);
+  useEffect(() => saveReviewDraft(imp.id, { draft, note }), [imp.id, draft, note]);
   const name = productName(state);
   const qs = importQuestions(imp).asked;
   const c = reviewCounts(state, draft);
@@ -77,6 +113,7 @@ export function ImportReview() {
     const ok = (await send("answerImport", { answers })).ok && (!note.trim() || (await send("postMessage", { text: note.trim() })).ok);
     setSending(false);
     if (!ok) return;
+    saveReviewDraft(imp.id, { draft: {}, note: "" });
     setDraft({});
     setNote("");
     location.hash = BASELINE_HASH;
