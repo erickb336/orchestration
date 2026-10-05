@@ -2,7 +2,7 @@
 
 **What this is.** The list of Orchestrator's milestones, ORC-001 to ORC-033: what each added, and what survives today. Each has a spec in [`tasks/`](tasks/) with the options, the decision and the evidence. Later milestones sometimes replaced earlier ones; the last column says what survives.
 
-**Where things stand.** Twenty-six are done, four were dropped, and three are planned. The [real-run records](real-runs/README.md) say which features have run with real models.
+**Where things stand.** Twenty-seven are done, five were dropped, and one is planned. The [real-run records](real-runs/README.md) say which features have run with real models.
 
 **The foundation** (the five milestones in the [project spec](PROJECT_SPEC.md), plus pipelines):
 
@@ -38,7 +38,7 @@
 | --- | --- | --- |
 | [ORC-021](tasks/ORC-021.md) Flows | Six plain flows in place of the pattern catalog, and a security review beside every code review | Done |
 | [ORC-022](tasks/ORC-022.md) Notes to a running agent | Through the lead or directly; a note shows Delivered once the runtime acknowledges it | Done; **verified with real models** ([records](real-runs/README.md)) |
-| [ORC-023](tasks/ORC-023.md) Orchestrator inside Claude Code | A Claude Code plugin to talk to the lead of the repository you are in, also from your phone through Remote Control | **Planned** |
+| [ORC-023](tasks/ORC-023.md) Orchestrator inside Claude Code | A Claude Code plugin to talk to the lead of the repository you are in, also from your phone through Remote Control | Dropped on 2026-10-04: sage mode replaces it |
 | [ORC-024](tasks/ORC-024.md) Working principles | Fifteen principles adapted from pstack, given to each step's agent where they fit | Done |
 | [ORC-025](tasks/ORC-025.md) UI audit and rebuild | One dark theme, a component kit, every screen rebuilt, a new demo | Done |
 | [ORC-026](tasks/ORC-026.md) Write for the reader | A sixteenth principle, our own, given to every agent and the lead | Done |
