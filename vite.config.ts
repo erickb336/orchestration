@@ -11,6 +11,7 @@ const HEAVY_TESTS = [
   "server/studio/escape.test.ts",
   "server/studio/evidence.container.test.ts",
   "server/studio/evidence.scheduler.test.ts",
+  "server/studio/import.docker.test.ts",
   "server/studio/media.test.ts",
   "server/studio/runs.test.ts",
   "server/studio/shots.test.ts",

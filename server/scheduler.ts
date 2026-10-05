@@ -19,9 +19,11 @@ import { stepAccess } from "../src/domain/pipeline";
 import { reportSubagent } from "../src/domain/subagents";
 import * as R from "../src/domain/studio/runs";
 import { evidenceSummary } from "../src/domain/studio/evidence";
+import * as I from "../src/domain/studio/import";
+import { startPendingImport } from "../src/domain/studio/importStart";
 import * as S from "../src/domain/studio/studio";
-import { DESIGNER_KINDS } from "../src/domain/studio/types";
-import { REVIEW_ROLES, isProvider, type Artifact, type ChecksHealth, type Integration, type ProseCheck, type ProviderId, type Runner, type State, type Step, type Task } from "../src/domain/types";
+import { DESIGNER_KINDS, type ImportRule } from "../src/domain/studio/types";
+import { REVIEW_ROLES, isProvider, type Artifact, type ChecksHealth, type Integration, type ProseCheck, type ProviderId, type Runner, type State, type Step, type Task, type TestCaseResult } from "../src/domain/types";
 import { SimulatedChecks, checkEnv, type CheckAssignment, type CheckRunner, type EnvironmentAssignment } from "./checks";
 import { checksPrepareCommands, environmentPlan, environmentSource, type UnconfirmedDevcontainer } from "../src/domain/environment";
 import { readDevcontainer } from "./environment/devcontainer";
@@ -38,9 +40,10 @@ import type { AdapterEvent, Connection, ProviderHealth, RuntimeAdapter } from ".
 import { LeaseLostError, type Store } from "./store";
 import { ManifestError, readStaged, studioRoot, versionDir } from "./studio/artifacts";
 import { SimulatedEvidence, evidenceDir, evidenceInputLines, evidenceReadRoots, type EvidenceRunner } from "./studio/evidence";
-import { makeDemo, makeShots, type StudioMedia } from "./studio/media";
+import { importDemo, makeDemo, makeShots, type StudioMedia } from "./studio/media";
 import { PeAnswerError, checkPeAnswer, newWorkPeEnvelope, peEnvelope, readPeAnswer, recordNewWorkPeRun, recordPeRun } from "./studio/pe";
 import { repoGlance } from "./studio/existing";
+import { EnvironmentImport, ImportDriver, NO_ENVIRONMENT, captureDir, SimulatedImport, importDir, partsRefusal, readImportReading, readerEnvelope, reportCases, type ImportRunner } from "./studio/import";
 import { askForRevisions } from "./studio/revise";
 import { checkHandedIn, designerEnvelope, handedIn, importDesignerRun, prepareStaging, type HandedIn } from "./studio/runs";
 import { withStudioPrinciples, withStudioProse } from "./studio/writing";
@@ -92,6 +95,11 @@ interface SchedulerOptions {
    * none is when this service stops scheduling. Without it nothing is held.
    */
   keepAwake?: { set(active: boolean): void };
+  /**
+   * What runs the import's service steps (ORC-032): its baseline test run and its capture, in the project's environment
+   * only. Real mode uses the environment; without workspaces (the fake runtime) a simulated runner is used, which runs nothing.
+   */
+  imports?: ImportRunner;
 }
 
 /** The repository instruction files read from the trusted base as project conventions. */
@@ -103,6 +111,8 @@ interface Launched {
   provider: Runner;
   access: "write" | "read";
   workspace?: PreparedWorkspace;
+  /** A lead or studio run: its read-only copy of the repository (a checkout or a snapshot), removed when the run ends. */
+  folder?: string;
   stepId: string;
   taskId: string;
   /** A check run: the protected inputs its change touched, computed at launch, recorded with the result. */
@@ -115,8 +125,8 @@ interface Launched {
 
 /** What the scheduler saw of a studio run outside the store: a lost process, an unconfirmed stop, a launch that failed. */
 type StudioIssue = { id: string; kind: "lost" } | { id: string; kind: "timeout" } | { id: string; kind: "failed"; reason: string };
-/** A designer run's studio.json, read and checked before the transaction that imports it. */
-type StudioOutput = HandedIn | { refused: string };
+/** A designer run's studio.json, or the import reader's rules, read and checked before the transaction that records them. */
+type StudioOutput = HandedIn | { reading: { rules: ImportRule[]; cases: TestCaseResult[] } } | { refused: string };
 
 /**
  * What the service recorded about a run before it started (the changed-path set a reviewer was shown,
@@ -201,6 +211,8 @@ export class Scheduler {
   private repoCheck: { path: string; ok: boolean; at: number } | undefined;
   /** Pull-request delivery: the only code that talks to GitHub or pushes. */
   private readonly pr: PrDriver;
+  /** The import of an existing repository (ORC-032): its runs in order, and its service steps. */
+  private readonly importer: ImportDriver;
   /** Why the lead cannot run right now (shown in the conversation), if anything. */
   leadBlocked: string | undefined;
 
@@ -221,6 +233,13 @@ export class Scheduler {
     this.ackTimeoutMs = opts.ackTimeoutMs ?? (this.isFake ? 8000 : 45000);
     this.log = opts.log ?? (() => {});
     this.pr = new PrDriver(store, opts.github ?? (this.workspaces ? undefined : new SimulatedGitHub()), this.workspaces, { log: this.log, workerShell: opts.workerShell });
+    const dataDir = opts.dataDir;
+    this.importer = new ImportDriver(store, opts.imports ?? (this.workspaces ? new EnvironmentImport({ log: this.log }) : new SimulatedImport()), {
+      dataDir,
+      workspaces: this.workspaces,
+      studioDir: (s) => (dataDir ? studioRoot(dataDir, s.project.id) : undefined),
+      log: this.log,
+    });
     for (const [p, a] of Object.entries(adapters) as [ProviderId, RuntimeAdapter][]) {
       a.onEvent((e) => this.queue.push(e));
       // The fake runtime is always available; real providers are checked asynchronously.
@@ -259,6 +278,7 @@ export class Scheduler {
     this.queue = [];
     this.launched.clear();
     this.notesSent.clear();
+    this.importer.abort();
     // A GitHub operation in flight is stopped and its result dropped: its intent stays recorded and is
     // reconciled with GitHub by whoever holds the lease next.
     this.pr.abortAll();
@@ -411,6 +431,9 @@ export class Scheduler {
     const canDispatch = !this.workspaces || (!project.sample && this.repoUsable(repoPath, nowMs));
     const workspaceFor = this.workspaces ? (_t: string, _s: string, attemptId: string) => this.workspaces!.pathFor(repoPath, attemptId, project.id) : undefined;
 
+    // 0. An import's start that waits for the sample's runs to stop (ORC-032): once none is active, it starts.
+    if (project.importPending) this.store.update((s) => startPendingImport(s, now), now, lease);
+
     // 1. Lead promotion and dispatch, committed before any process starts. If the service dies
     //    between the commit and the start, reconciliation marks the run lost.
     const dispatched = new Set<string>();
@@ -428,6 +451,11 @@ export class Scheduler {
       now,
       lease,
     );
+
+    // 1b. The import (ORC-032): what its service steps found, its next runs in order (dispatched below, in this cycle),
+    //     and its next service step.
+    if (canDispatch) this.importer.tick(nowMs, lease, (s, commit) => this.importEnvironment(s, commit));
+    else this.importer.abort();
 
     // 2. Start the runs dispatched in step 1; stop orphans; forward stop requests.
     const { state } = this.store.read();
@@ -564,13 +592,16 @@ export class Scheduler {
       }
       const studioRun = R.getStudioRun(current, e.attemptId);
       if (studioRun) {
-        // A designer hands in files; the PE answers in its final message, read in the transaction.
+        // A designer hands in files; the PE answers in its final message, read in the transaction. The import's reader
+        // answers with rules, checked here against the baseline report the service kept (ORC-032).
         if (studioRun.kind === "designer") studioOutputs.set(e.attemptId, this.readStudioOutput(current, e.attemptId));
+        if (studioRun.kind === "reader") studioOutputs.set(e.attemptId, this.readReaderOutput(current, e.finalText));
         // What it wrote for the owner is checked here too (the PE's verdicts, the designer's documents), and recorded with its result.
         // With the project's words (the dictionary in force), as for the lead.
         const words = this.prose ? this.projectWords(current) : undefined;
         const prose = this.prose && ((text: string) => this.prose!(text, words));
-        const check = !prose ? undefined : studioRun.kind === "pe" ? checkPeAnswer(e.finalText, prose, now) : studioRun.kind === "designer" ? checkHandedIn(studioOutputs.get(e.attemptId), prose, now) : undefined;
+        const given = studioOutputs.get(e.attemptId);
+        const check = !prose ? undefined : studioRun.kind === "pe" ? checkPeAnswer(e.finalText, prose, now) : studioRun.kind === "designer" && given && !("reading" in given) ? checkHandedIn(given, prose, now) : undefined;
         if (check) this.studioProse.set(e.attemptId, check);
         continue;
       }
@@ -629,7 +660,8 @@ export class Scheduler {
       const info = this.launched.get(e.attemptId);
       // Lead and studio checkouts are only for reading the repository during the run: remove them afterwards.
       // A check run's throwaway copy of the change goes too, pass or fail.
-      if ((info?.taskId === "LEAD" || info?.taskId === "STUDIO" || info?.provider === "service") && info.workspace && this.workspaces) this.workspaces.remove(state.project.repoPath, info.workspace.path);
+      const read = info?.folder ?? (info?.provider === "service" ? info.workspace?.path : undefined);
+      if (read && this.workspaces) this.workspaces.remove(state.project.repoPath, read);
       // A studio run's staging folder goes once what it handed in is imported; a failed or stopped run's stays, to look at.
       if (info?.staging && R.getStudioRun(after, e.attemptId)?.status === "completed") rmSync(info.staging, { recursive: true, force: true });
       if (info?.tmp) rmSync(info.tmp, { recursive: true, force: true });
@@ -830,12 +862,9 @@ export class Scheduler {
     const adapter = this.adapterFor(run.provider);
     const limits = state.project.runLimits;
     try {
-      let workspace: PreparedWorkspace | undefined;
-      if (this.workspaces) {
-        workspace = this.workspaces.prepare({ repoPath: state.project.repoPath, projectId: state.project.id, attemptId: runId, taskId: "LEAD", stepId: "plan", access: "read" });
-      }
+      const folder = this.workspaces ? this.readRepo(state, runId, "LEAD", "plan") : undefined;
       const conventions = this.conventionsFor(state, Date.now());
-      this.launched.set(runId, { provider: run.provider, access: "read", workspace, stepId: "LEAD", taskId: "LEAD" });
+      this.launched.set(runId, { provider: run.provider, access: "read", ...(folder ? { folder } : {}), stepId: "LEAD", taskId: "LEAD" });
       adapter.start({
         attemptId: runId,
         taskId: "LEAD",
@@ -843,7 +872,7 @@ export class Scheduler {
         role: "lead",
         provider: run.provider,
         model: run.model,
-        workspace: { path: workspace?.path ?? "", access: "read" },
+        workspace: { path: folder ?? "", access: "read" },
         environment: state.project.workerEnvironment[run.provider],
         connections: state.project.workerConnections[run.provider],
         // In Vision the lead's studio brief says whether the repository has code (an "as it is today" first round).
@@ -923,6 +952,7 @@ export class Scheduler {
     const adapter = this.adapterFor(run.provider);
     const limits = state.project.runLimits;
     if (run.kind === "pe" && run.review) return this.launchNewWorkPe(state, run);
+    if (run.kind === "reader") return this.launchReader(state, run);
     if (run.kind === "pe") {
       try {
         const root = studioRoot(this.dataDir, state.project.id);
@@ -931,10 +961,7 @@ export class Scheduler {
         const tmp = join(root, run.workspace);
         rmSync(tmp, { recursive: true, force: true });
         mkdirSync(tmp, { recursive: true });
-        // A reproduction of the code as it is today is judged against the code: the PE reads a checkout of it (review finding 5).
-        const asIs = !!S.getArtifact(state, run.artifactId!, run.baseVersion!).provenance;
-        const checkout = asIs && this.workspaces ? this.workspaces.prepare({ repoPath: state.project.repoPath, projectId: state.project.id, attemptId: runId, taskId: "STUDIO", stepId: run.kind, access: "read" }) : undefined;
-        this.launched.set(runId, { provider: run.provider, access: "read", workspace: checkout, stepId: run.kind, taskId: "STUDIO", tmp });
+        this.launched.set(runId, { provider: run.provider, access: "read", stepId: run.kind, taskId: "STUDIO", tmp });
         adapter.start({
           attemptId: runId,
           taskId: "STUDIO",
@@ -942,11 +969,11 @@ export class Scheduler {
           role: "pe",
           provider: run.provider,
           model: run.model,
-          workspace: { path: folder, access: "read", tmp, ...(checkout ? { readRoots: [checkout.path] } : {}) },
+          workspace: { path: folder, access: "read", tmp },
           studio: true,
           environment: "isolated",
           connections: [],
-          prompt: peEnvelope(state, run, { folder, checkout: checkout?.path }),
+          prompt: peEnvelope(state, run, { folder }),
           outputs: [],
           limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
         });
@@ -954,16 +981,16 @@ export class Scheduler {
       } catch (e) {
         const info = this.launched.get(runId);
         if (info?.tmp) rmSync(info.tmp, { recursive: true, force: true });
-        if (info?.workspace && this.workspaces) this.workspaces.remove(state.project.repoPath, info.workspace.path);
         this.launched.delete(runId);
         return `Could not start the PE run: ${e instanceof Error ? e.message : String(e)}`;
       }
     }
-    let checkout: PreparedWorkspace | undefined;
+    let checkout: string | undefined;
     try {
       const staging = prepareStaging(state, run, studioRoot(this.dataDir, state.project.id));
-      if (this.workspaces) checkout = this.workspaces.prepare({ repoPath: state.project.repoPath, projectId: state.project.id, attemptId: runId, taskId: "STUDIO", stepId: run.kind, access: "read" });
-      this.launched.set(runId, { provider: run.provider, access: "write", workspace: checkout, stepId: run.kind, taskId: "STUDIO", staging });
+      // An import's designer reads the repository at the import's commit (C11), whatever HEAD is now.
+      if (this.workspaces) checkout = this.readRepo(state, run.id, "STUDIO", run.kind);
+      this.launched.set(runId, { provider: run.provider, access: "write", ...(checkout ? { folder: checkout } : {}), stepId: run.kind, taskId: "STUDIO", staging });
       adapter.start({
         attemptId: runId,
         taskId: "STUDIO",
@@ -971,18 +998,18 @@ export class Scheduler {
         role: "designer",
         provider: run.provider,
         model: run.model,
-        workspace: { path: staging, access: "write", ...(checkout ? { readRoots: [checkout.path] } : {}) },
+        workspace: { path: staging, access: "write", ...(checkout ? { readRoots: [checkout] } : {}) },
         studio: true,
         environment: "isolated",
         connections: [],
-        prompt: designerEnvelope(state, run, { staging, checkout: checkout?.path }),
+        prompt: designerEnvelope(state, run, { staging, checkout }),
         outputs: [],
         limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
       });
       return undefined;
     } catch (e) {
       this.launched.delete(runId);
-      if (checkout && this.workspaces) this.workspaces.remove(state.project.repoPath, checkout.path);
+      if (checkout && this.workspaces) this.workspaces.remove(state.project.repoPath, checkout);
       return `Could not start the studio run: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
@@ -995,17 +1022,17 @@ export class Scheduler {
   private launchNewWorkPe(state: State, run: ReturnType<typeof R.getStudioRun> & object): string | undefined {
     const adapter = this.adapterFor(run.provider);
     const limits = state.project.runLimits;
-    let checkout: PreparedWorkspace | undefined;
+    let checkout: string | undefined;
     try {
       const root = studioRoot(this.dataDir!, state.project.id);
       const tmp = join(root, run.workspace);
       rmSync(tmp, { recursive: true, force: true });
       mkdirSync(tmp, { recursive: true });
-      if (this.workspaces) checkout = this.workspaces.prepare({ repoPath: state.project.repoPath, projectId: state.project.id, attemptId: run.id, taskId: "STUDIO", stepId: "pe", access: "read" });
+      if (this.workspaces) checkout = this.readRepo(state, run.id, "STUDIO", "pe");
       const task = state.tasks.find((t) => t.id === run.review!.taskId)!;
       const protos = prototypeFolders(state, task, root);
-      this.launched.set(run.id, { provider: run.provider, access: "read", workspace: checkout, stepId: "pe", taskId: "STUDIO", tmp });
-      const folder = checkout?.path ?? tmp;
+      this.launched.set(run.id, { provider: run.provider, access: "read", ...(checkout ? { folder: checkout } : {}), stepId: "pe", taskId: "STUDIO", tmp });
+      const folder = checkout ?? tmp;
       adapter.start({
         attemptId: run.id,
         taskId: "STUDIO",
@@ -1017,7 +1044,7 @@ export class Scheduler {
         studio: true,
         environment: "isolated",
         connections: [],
-        prompt: newWorkPeEnvelope(state, run, { folder, checkout: checkout?.path, studioDir: root }),
+        prompt: newWorkPeEnvelope(state, run, { folder, checkout, studioDir: root }),
         outputs: [],
         limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
       });
@@ -1025,9 +1052,78 @@ export class Scheduler {
     } catch (e) {
       const info = this.launched.get(run.id);
       if (info?.tmp) rmSync(info.tmp, { recursive: true, force: true });
-      if (checkout && this.workspaces) this.workspaces.remove(state.project.repoPath, checkout.path);
+      if (checkout && this.workspaces) this.workspaces.remove(state.project.repoPath, checkout);
       this.launched.delete(run.id);
       return `Could not start the PE run: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  /**
+   * The project's environment for the import's service steps, with the dev container read at the import's commit
+   * (C11); or why there is none. Without one, the import runs nothing of the repository (Q3).
+   */
+  private importEnvironment(state: State, commit: string): { environment?: EnvironmentAssignment; reason?: string } {
+    const { environment, hostReason } = this.environmentFor(state, commit);
+    return environment ? { environment } : { reason: hostReason ? `${hostReason}. ${NO_ENVIRONMENT}` : NO_ENVIRONMENT };
+  }
+
+  /**
+   * The folder a lead or studio run reads the repository in, read-only. While the project's import has no baseline
+   * (ORC-032), the repository may be someone else's: the files of the import's commit (C11), written from git's object
+   * store, so nothing its git config sets runs (SR-2). Else a read-only checkout at HEAD, as for every project.
+   */
+  private readRepo(state: State, attemptId: string, taskId: string, stepId: string): string {
+    const imp = state.studio.import;
+    const { repoPath, id: projectId } = state.project;
+    if (imp && !imp.lockedInAt) return this.workspaces!.snapshot({ repoPath, projectId, attemptId, commit: imp.commit }).path;
+    return this.workspaces!.prepare({ repoPath, projectId, attemptId, taskId, stepId, access: "read" }).path;
+  }
+
+  /**
+   * Start the import's rules reader (ORC-032): read-only research, like the PE's run, in a checkout of the repository at
+   * the import's commit (its own empty folder when there is none), with the baseline report's test ids in its envelope.
+   * Isolated, with no connections and no shell. Helpers only as its record allows: the domain resolved them at dispatch
+   * from the owner's switch and cap (ORC-031), and the adapter enforces the cap.
+   */
+  private launchReader(state: State, run: ReturnType<typeof R.getStudioRun> & object): string | undefined {
+    const adapter = this.adapterFor(run.provider);
+    const limits = state.project.runLimits;
+    const imp = state.studio.import;
+    if (!imp) return "This project has no import to read";
+    let checkout: string | undefined;
+    try {
+      const root = studioRoot(this.dataDir!, state.project.id);
+      const tmp = join(root, run.workspace);
+      rmSync(tmp, { recursive: true, force: true });
+      mkdirSync(tmp, { recursive: true });
+      if (this.workspaces) checkout = this.readRepo(state, run.id, "STUDIO", run.kind);
+      const cases = imp.checks.status === "read" ? reportCases(importDir(this.dataDir!, state.project.id, imp.id)) : [];
+      this.launched.set(run.id, { provider: run.provider, access: "read", ...(checkout ? { folder: checkout } : {}), stepId: "reader", taskId: "STUDIO", tmp });
+      const folder = checkout ?? tmp;
+      adapter.start({
+        attemptId: run.id,
+        taskId: "STUDIO",
+        stepId: "reader",
+        // The studio's read-only role: the adapters confine the run by its workspace's access, not by its role.
+        role: "pe",
+        provider: run.provider,
+        model: run.model,
+        workspace: { path: folder, access: "read", tmp },
+        studio: true,
+        environment: "isolated",
+        connections: [],
+        prompt: readerEnvelope(state, run, { folder, checkout, cases }),
+        outputs: [],
+        limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
+        ...(run.allowSubagents ? { allowSubagents: { ...run.allowSubagents } } : {}),
+      });
+      return undefined;
+    } catch (e) {
+      const info = this.launched.get(run.id);
+      if (info?.tmp) rmSync(info.tmp, { recursive: true, force: true });
+      if (checkout && this.workspaces) this.workspaces.remove(state.project.repoPath, checkout);
+      this.launched.delete(run.id);
+      return `Could not start the import's reader: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 
@@ -1048,17 +1144,28 @@ export class Scheduler {
     } catch (e) {
       return this.log(`Studio screenshots and recordings: ${e instanceof Error ? e.message : String(e)}`);
     }
+    const imp = state.studio.import;
     for (const p of S.pendingMedia(state)) {
       const key = `${projectId}/${p.artifactId}@${p.version}/${p.kind}`;
       if (this.mediaStarted.has(key)) continue;
+      const a = S.getArtifact(state, p.artifactId, p.version);
+      // An imported part's terminal demo runs the real command: it is shown from the import's capture (ORC-032), once
+      // the capture is recorded, and never recorded by the studio.
+      const fromCapture = p.kind === "demo" && !!a.provenance && !!imp;
+      if (fromCapture && !imp.capture) continue;
       this.mediaStarted.add(key);
-      const variants = S.getArtifact(state, p.artifactId, p.version).variants.map((v) => v.id);
+      const variants = a.variants.map((v) => v.id);
       const now = () => new Date().toISOString();
+      const dataDir = this.dataDir;
       this.mediaChain = this.mediaChain
         .then(async () => {
           // Paused since it was queued behind another: it is asked for again once the project resumes.
           if (this.store.read().state.project.hold) return void this.mediaStarted.delete(key);
-          const result = p.kind === "shots" ? await makeShots(media, studioDir, p.artifactId, p.version, now) : await makeDemo(media, studioDir, p.artifactId, p.version, variants, now);
+          const result = fromCapture
+            ? importDemo(studioDir, a, imp.capture!, captureDir(dataDir, projectId, imp.id), now)
+            : p.kind === "shots"
+              ? await makeShots(media, studioDir, p.artifactId, p.version, now)
+              : await makeDemo(media, studioDir, p.artifactId, p.version, variants, now);
           this.queue.push({ type: "studio-media", attemptId: "", projectId, artifactId: p.artifactId, version: p.version, result });
         })
         .catch((e) => this.log(`Studio ${p.kind === "shots" ? "screenshots" : "recording"} of ${p.artifactId} v${p.version} failed: ${e instanceof Error ? e.message : String(e)}`));
@@ -1068,6 +1175,11 @@ export class Scheduler {
   /** Resolves when the studio screenshots and recordings started so far are made (their results are queued). */
   mediaIdle(): Promise<void> {
     return this.mediaChain;
+  }
+
+  /** Resolves when the import's service step in flight, if any, has ended (its result is recorded in a later cycle). */
+  importIdle(): Promise<void> {
+    return this.importer.idle();
   }
 
   /**
@@ -1109,10 +1221,21 @@ export class Scheduler {
     const staging = this.launched.get(runId)?.staging;
     if (!staging) return { refused: "its staging folder is not known to this service (it was started before a restart)" };
     try {
-      return handedIn(state, runId, readStaged(staging, DESIGNER_KINDS));
+      const given = handedIn(state, runId, readStaged(staging, DESIGNER_KINDS));
+      // An import run's hand-in: the words run's one dictionary, or every rule of the reading placed once, unchanged.
+      const refused = partsRefusal(state, R.getStudioRun(state, runId)!, given.artifacts);
+      return refused ? { refused } : given;
     } catch (e) {
       return { refused: e instanceof ManifestError ? e.message : `it could not be read (${e instanceof Error ? e.message : String(e)})` };
     }
+  }
+
+  /** The import reader's rules, from its final message, checked against the baseline report the import kept (ORC-032). */
+  private readReaderOutput(state: State, finalText: string): StudioOutput {
+    const imp = state.studio.import;
+    if (!imp || !this.dataDir) return { refused: "this project has no import" };
+    const r = readImportReading(finalText, imp.checks.status === "read" ? reportCases(importDir(this.dataDir, state.project.id, imp.id)) : []);
+    return "refused" in r ? r : { reading: r };
   }
 
   /**
@@ -1150,7 +1273,17 @@ export class Scheduler {
           }
         }
         const out = outputs.get(run.id);
-        if (!out || "refused" in out) return fail(`studio.json was refused: ${out && "refused" in out ? out.refused : "it was not read"}`);
+        if (run.kind === "reader") {
+          // The import's rules (ORC-032): checked against the baseline report before the transaction, recorded here.
+          if (!out || !("reading" in out)) return fail(`Its rules were refused: ${out && "refused" in out ? out.refused : "they were not read"}.`);
+          try {
+            const r = I.recordImportRules(started, { importId: started.studio.import!.id, runId: run.id, ...out.reading }, now);
+            return R.completeStudioRun(r, run.id, now, { usage: e.usage, actualModel: e.model, summary: `${out.reading.rules.length} rules, ${out.reading.rules.filter((x) => x.tests.length).length} from the tests` });
+          } catch (err) {
+            return fail(`Its rules were refused: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        if (!out || !("artifacts" in out)) return fail(`studio.json was refused: ${out && "refused" in out ? out.refused : "it was not read"}`);
         try {
           const r = importDesignerRun(started, run.id, out, studioRoot(this.dataDir!, s.project.id), now);
           // Screenshots and recordings are made after this transaction commits; the run completes without them.
@@ -1371,9 +1504,8 @@ export class Scheduler {
    * not confirmed goes with the run (`unconfirmed`), so its record asks the owner, and the reason it was not used
    * becomes the host sandbox's reason when nothing else is set up.
    */
-  private environmentFor(state: State): { environment?: EnvironmentAssignment; hostReason?: string; unconfirmed?: UnconfirmedDevcontainer } {
+  private environmentFor(state: State, ref = M.trustedBaseRef(state)): { environment?: EnvironmentAssignment; hostReason?: string; unconfirmed?: UnconfirmedDevcontainer } {
     if (!this.workspaces || state.project.sample || !state.project.repoPath) return {};
-    const ref = M.trustedBaseRef(state);
     const found = readDevcontainer((path, maxBytes) => {
       try {
         return this.workspaces!.readFileAt({ repoPath: state.project.repoPath, ref, path, maxBytes });
@@ -1645,8 +1777,10 @@ export class Scheduler {
     this.keepAwake?.set(false);
     await Promise.all(this.allRunners().map((a) => a.shutdown().catch(() => undefined)));
     // A screenshot or recording in progress is waited for, so Chrome and VHS end with it; its result is dropped with
-    // the queue, so the version stays pending and the next service makes it again.
+    // the queue, so the version stays pending and the next service makes it again. The import's step in flight too:
+    // its containers stop, and the next service runs it again.
     await this.mediaChain;
+    await this.importer.idle();
   }
 
   /** Forget runtime processes after the project state was replaced. */

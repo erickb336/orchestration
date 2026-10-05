@@ -4,7 +4,8 @@
 import { undeliveredTasks } from "../delivery";
 import * as F from "../findings";
 import { revisionsDueForLead, showRevisionsInto } from "../peReview";
-import { budgetStop } from "../spend";
+import { budgetStop, importStop } from "../spend";
+import { importReviewWaits } from "../studio/import";
 import {
   type Attempt,
   type Autonomy,
@@ -124,6 +125,9 @@ export function leadDue(s: State, nowMs: number, localMinutes: number): LeadTrig
     if (!newMessage && nowMs - Date.parse(lastEnd) < Math.min(60, 2 ** (streak - 1)) * 60_000) return null;
   }
   if (pendingMessages(s).length) return "message";
+  // The import's review (ORC-032): one reply in Vision writes the round's message and a vision draft. It waits at the
+  // import's stop, as the import's studio runs do.
+  if (importReviewWaits(s) && !importStop(s)) return "message";
   // Findings routed to the lead hold work up, so a decision run needs neither autonomy,
   // operating hours nor room under the planning caps (the failure backoff above still applies). Only
   // decisions no lead run has been shown yet start one: a run that left a decision open does not

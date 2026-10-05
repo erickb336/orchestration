@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as M from "../domain/model";
 import { PROVIDERS, type Autonomy, type ModelSelection, type RoleId, type Runner, type State, type Task } from "../domain/types";
 
@@ -101,6 +101,53 @@ export function ProviderMark({ provider }: { provider: Runner | undefined }) {
 
 /** The fake runtime's lead records `simulated: true` on the vision revisions and steering change sets it writes. */
 export const isSimulated = (x: unknown): boolean => !!(x as { simulated?: boolean } | undefined)?.simulated;
+
+/** Set by a user's action that opens another import screen (goTo); the screen that opens takes it once (useArrival). */
+let arriving = false;
+
+/**
+ * Open the screen at `hash` because the user asked for it (UX30-1): it opens at its top with focus on its heading.
+ * Only the action knows that the user moved; a server update or a reload opens a screen without it (R33-1, QA36-2).
+ * An action can end long after its click (a start waits for the sample's agents): if you type in a field or the lead
+ * drawer outside the page by then, the screen opens without the move, and focus stays where you type (R43-1).
+ */
+export function goTo(hash: string) {
+  const el = document.activeElement;
+  arriving = !el || !!el.closest("main") || !(el.matches("input, textarea, select, [contenteditable]") || el.closest("aside, [role=dialog]"));
+  location.hash = hash;
+}
+
+/** The same for a link to another import screen: a plain click opens it here (a click with a key opens a new tab). */
+export const arrive = (e: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean }) => {
+  if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) arriving = true;
+};
+
+/** The route changed: a move that no screen took ends with it, so a later screen does not take it. */
+export const endArrival = () => {
+  arriving = false;
+};
+
+/** A ref for a screen's heading: when the screen opens by goTo, the page goes to its top and focus goes to the heading. */
+export function useArrival<T extends HTMLElement = HTMLHeadingElement>() {
+  const ref = useRef<T>(null);
+  useEffect(() => {
+    if (!arriving) return;
+    arriving = false;
+    focusHeading(ref.current, true);
+  }, []);
+  return ref;
+}
+
+/**
+ * Put focus on a heading. `top` scrolls the page to its top first, for a screen that replaces another; without it,
+ * focus scrolls the heading into view, for a panel that opens inside a page.
+ */
+export function focusHeading(heading: HTMLElement | null, top: boolean) {
+  if (!heading) return;
+  if (top) window.scrollTo(0, 0);
+  heading.tabIndex = -1;
+  heading.focus({ preventScroll: top });
+}
 
 /** True below `query` (phones by default); follows the viewport. */
 export function useNarrow(query = "(max-width: 767px)") {

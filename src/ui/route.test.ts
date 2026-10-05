@@ -37,6 +37,12 @@ describe("routes", () => {
     expect(["#/vision/lock-in", "#/results/design", "#/task/WT-1", "#/vision", "#/results"].map((h) => tabOf(parseRoute(h)))).toEqual(["vision", "review", "tasks", "vision", "review"]);
   });
 
+  it("#/vision/baseline is the import's baseline Lock in, under Vision (ORC-032)", () => {
+    expect(parseRoute("#/vision/baseline")).toEqual({ page: "baseline" });
+    expect(tabOf(parseRoute("#/vision/baseline"))).toBe("vision");
+    expect(parseRoute("#/vision/baselines")).toEqual({ page: "vision" });
+  });
+
   it("a query after the page name is the page's to read; it never changes which page opens", () => {
     expect(parseRoute("#/tasks?area=Offline%20maps")).toEqual({ page: "tasks" });
     expect(parseRoute("#/overview?history=1")).toEqual({ page: "overview" });

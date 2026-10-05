@@ -479,22 +479,28 @@ function stageRefusal(prev: State, next: State, command: string | undefined): st
 
 /**
  * The owner-only Lock in, enforced where state is written (ORC-029 pass 5): what is in force (the blueprint's
- * revisions) changes only by the owner's `lockIn` command, which adds exactly one revision, or by `startFactory` (the
- * first Lock in), which adds at most one. No write may change or remove a revision in force. Any other write that
+ * revisions) changes only by the owner's `lockIn` command, which adds exactly one revision, by `startFactory` (the
+ * first Lock in), which adds at most one, or by `lockInBaseline` (an import's baseline, ORC-032), which adds the first
+ * one. No write may change or remove a revision in force. Any other write that
  * would (another command, the scheduler, a runtime report, a lead run's result) is refused before anything is stored.
- * Replacing everything with the sample project (`resetSampleData`) or with a new project (`initProject`) starts a new
- * blueprint, not a Lock in. Returns why a write is refused, or undefined.
+ * Replacing everything with the sample project (`resetSampleData`) or with a new project (`initProject`, or an import's
+ * start) starts a new blueprint, not a Lock in. Returns why a write is refused, or undefined.
  */
 function blueprintRefusal(prev: State, next: State, command: string | undefined): string | undefined {
   const before = prev.blueprint.revisions;
   const after = next.blueprint.revisions;
   if (command === "resetSampleData" && next.project.sample) return undefined;
   if (command === "initProject" && after.length === 0) return undefined;
+  // An import's start is a new project too (ORC-032): the owner's startImport, or the service starting the one that
+  // waited for the sample's runs to stop (`importPending`).
+  if ((command === "startImport" || (command === undefined && prev.project.importPending)) && after.length === 0 && next.project.id !== prev.project.id) return undefined;
   const kept = after.length >= before.length && before.every((r, i) => JSON.stringify(r) === JSON.stringify(after[i]));
   const added = after.length - before.length;
   if (kept && added === 0) return undefined;
   if (kept && command === "lockIn" && added === 1) return undefined;
   if (kept && command === "startFactory" && added <= 1) return undefined;
+  // The baseline Lock in of an import (ORC-032, C4): the first revision, and only that one.
+  if (kept && command === "lockInBaseline" && added === 1 && before.length === 0) return undefined;
   const what = !kept ? "changed or removed a revision in force" : `${command === "lockIn" || command === "startFactory" ? `made ${added} revisions` : "made a revision"}`;
   return `Refused: only the owner's Lock in puts the blueprint into force; ${command ? `the ${command} command` : "an internal update"} ${what}. Nothing was written.`;
 }

@@ -1,6 +1,10 @@
 // Studio runs (ORC-029 pass 3): the agent runs of Vision, the designer's and the PE's (probes' come in pass 4).
 // Pure: each operation returns a new State; the service's scheduler dispatches, launches and reports them.
 //
+// The import's runs (ORC-032) work in round 0 and name their step (`importStep`): the rules reader (a research run,
+// read-only, with the helpers the owner allowed on the import), and designers for the words, the parts and a fix. They
+// run on the provider the owner chose to read the repository, Claude by default, and wait at the import budget.
+//
 // One kind runs in the factory instead (pass 5): a PE run on new work (`review`), which has no round. It is asked
 // for by askForNewWorkReviews (src/domain/peReview.ts) and dispatched only while building; everything below about
 // Vision applies to the other runs.
@@ -22,12 +26,12 @@ import { busyAgents, draft, event, nextId } from "../model/core";
 import { draftVisionText } from "../model/vision";
 import { providerLabel } from "../model/resolution";
 import { CONTROL_RE, stripInvisible, visibleOrEmpty } from "../model/textSafety";
-import { budgetStop } from "../spend";
+import { budgetStop, importStop } from "../spend";
 import { allowSubagentsForStudioRun } from "../subagents";
 import { ControlError, PROVIDERS, roleDefaultFor, type ModelSelection, type ProviderId, type State } from "../types";
 import { artifactName, endReview, latestArtifacts, latestVersion, peReview, peRunsOf } from "./studio";
 import { newWorkStaleReason } from "../peReview";
-import { isUnderWay, type NewWorkReviewRef, type StudioArtifact, type StudioRun, type StudioRunKind } from "./types";
+import { isUnderWay, type ImportStep, type NewWorkReviewRef, type StudioArtifact, type StudioRun, type StudioRunKind } from "./types";
 
 /** The longest brief a run takes, in characters. */
 const MAX_BRIEF = 20_000;
@@ -47,7 +51,7 @@ export function activeStudioRuns(s: State): StudioRun[] {
 
 export const isActiveStudioRun = (r: StudioRun) => r.status === "running" || r.status === "stopping";
 
-const KIND_WORDS: Record<StudioRunKind, string> = { designer: "Designer", pe: "PE", probe: "Probe" };
+const KIND_WORDS: Record<StudioRunKind, string> = { designer: "Designer", pe: "PE", probe: "Probe", reader: "Reader" };
 /** "Designer run studio-12" */
 export const studioRunName = (r: StudioRun) => `${KIND_WORDS[r.kind]} run ${r.id}`;
 
@@ -58,6 +62,7 @@ export const studioRunName = (r: StudioRun) => `${KIND_WORDS[r.kind]} run ${r.id
 export function staleReason(s: State, r: StudioRun): string | undefined {
   // A PE run on new work in the factory: the work it reads must still wait for it, as it was.
   if (r.review) return newWorkStaleReason(s, r.review);
+  if (r.importStep && s.studio.import?.stopped) return "the import stopped";
   const round = s.studio.rounds.find((x) => x.n === r.round);
   if (!round || round.closedAt) return `round ${r.round} was closed`;
   if (r.artifactId !== undefined) {
@@ -82,6 +87,28 @@ export interface StudioRunRequest {
   brief: string;
   /** A designer run the lead asked for in its studio block: recorded on the run (lead.ts). */
   fromLead?: StudioRun["fromLead"];
+  /** A run of the import (ORC-032): the rules are the reader's; the words, the parts and a fix are a designer's, in round 0. */
+  importStep?: ImportStep;
+}
+
+/** The kind of run each step of the import takes. */
+const IMPORT_STEP_KIND: Record<ImportStep, StudioRunKind> = { words: "designer", rules: "reader", parts: "designer", fix: "designer" };
+
+/**
+ * Why a run of the import cannot be asked for now, or undefined: the import must go on (a fix only before the baseline,
+ * on a part of round 0), in round 0, and the step takes its own kind of run. A reader works only for the import.
+ */
+function importRunRefusal(s: State, req: StudioRunRequest): string | undefined {
+  const step = req.importStep;
+  if (step === undefined) return req.kind === "reader" ? "A reader run reads a repository for its import: it names the import's step" : undefined;
+  const imp = s.studio.import;
+  if (!imp) return "This project has no import";
+  if (imp.stopped) return `The import stopped: ${imp.stopped.reason}`;
+  if (imp.lockedInAt) return "The import is locked in: a change to a part goes through the draft";
+  if (IMPORT_STEP_KIND[step] !== req.kind) return `The import's ${step} step is a ${IMPORT_STEP_KIND[step]}'s run, not a ${req.kind}'s`;
+  if (req.round !== 0) return "The import works in round 0, As it is today";
+  if ((step === "fix") !== (req.artifactId !== undefined)) return "A fix names the part it revises, and only a fix does";
+  return undefined;
 }
 
 /**
@@ -123,11 +150,13 @@ function resolveSelection(s: State, kind: StudioRunKind, given: ModelSelection |
 export function requestStudioRun(state: State, req: StudioRunRequest, now: string): { state: State; runId: string } {
   if (req.kind === "probe") throw new ControlError("Probe runs cannot be asked for yet; they come in ORC-029 pass 4.");
   if (req.review) return requestNewWorkRun(state, req, req.review, now);
+  const refused = importRunRefusal(state, req);
+  if (refused) throw new ControlError(`${refused}.`);
   const round = state.studio.rounds.find((r) => r.n === req.round);
   if (!round) throw new ControlError(`There is no round ${req.round}.`);
   if (round.closedAt) throw new ControlError(`Round ${req.round} is closed.`);
-  // Round 0 is what already exists: the designer works there only to reproduce an existing repository "as is" (its
-  // import refuses anything else there), and the PE reviews those reproductions like any other designer's work.
+  // Round 0 is what already exists: the designer works there only for the import, to reproduce the repository "as is"
+  // (addArtifact refuses anything else there). The PE does not review those reproductions (C6).
   const base = req.artifactId === undefined ? undefined : latestVersion(state, req.artifactId);
   if (req.artifactId !== undefined && !base) throw new ControlError(`Unknown studio artifact ${req.artifactId}.`);
   let note: string | undefined;
@@ -139,7 +168,9 @@ export function requestStudioRun(state: State, req: StudioRunRequest, now: strin
     if (!req.selection) note = peSelection(state, base).note;
   }
   const brief = cleanBrief(req.brief);
-  const { provider, model } = resolveSelection(state, req.kind, req.selection ?? (req.kind === "pe" ? peSelection(state, base!).selection : undefined));
+  // The import's runs read an untrusted repository: on the provider the owner chose for it (Claude by default, Q5).
+  const readsOn = req.importStep && state.studio.import ? { provider: state.studio.import.readsOn, model: "auto" } : undefined;
+  const { provider, model } = resolveSelection(state, req.kind, req.selection ?? (req.kind === "pe" ? peSelection(state, base!).selection : readsOn));
   const s = draft(state);
   const id = nextId(s, "studio");
   const run: StudioRun = {
@@ -154,6 +185,7 @@ export function requestStudioRun(state: State, req: StudioRunRequest, now: strin
     ...(req.kind === "designer" && req.fromLead ? { fromLead: structuredClone(req.fromLead) } : {}),
     askedAt: now,
     workspace: `staging/${id}`,
+    ...(req.importStep ? { importStep: req.importStep } : {}),
   };
   s.studio.runs.push(run);
   const what = !base ? "" : req.kind === "pe" ? `, reviewing ${artifactName(base)}` : `, revising ${artifactName(base)}`;
@@ -285,7 +317,8 @@ const inItsStage = (s: State, r: StudioRun) => !r.review || s.project.stage === 
 
 export function dispatchStudioRuns(state: State, now: string, opts: StudioDispatchOptions = {}): { state: State; started: string[] } {
   if (state.project.hold || !state.studio.runs.some((r) => r.status === "queued" && inItsStage(state, r))) return { state, started: [] };
-  if (budgetStop(state)) return { state, started: [] };
+  // At the building budget, or while an import goes on, at the import budget (ORC-032): nothing new starts.
+  if (budgetStop(state) || importStop(state)) return { state, started: [] };
   const s = draft(state);
   const started: string[] = [];
   for (const r of s.studio.runs) {
@@ -373,6 +406,7 @@ export function reportStudioRunStopped(state: State, id: string, now: string, op
       status: "queued",
       brief: r.brief,
       ...(r.fromLead ? { fromLead: structuredClone(r.fromLead) } : {}),
+      ...(r.importStep ? { importStep: r.importStep } : {}),
       askedAt: now,
       workspace: "",
       retryOf: r.id,

@@ -36,9 +36,13 @@ import { DeviceFrame, NoPrototypeServer, PlainFrame, ScreenshotFallback } from "
 import { PeQuestions } from "./PeQuestions";
 import { TerminalArtifact } from "./Preview";
 import { VisionCard } from "./VisionCard";
+import { ImportOpenQuestions } from "../import/AfterBaseline";
+import { ImportPanel } from "../import/ImportPanel";
+import { ImportReview } from "../import/ImportReview";
+import { baselinePartLine, importScreen } from "../import/importView";
+import { TermsTable } from "./Preview";
 import {
   AS_IS_FILES_SHOWN,
-  AS_IS_LABEL,
   DEVICE_LABEL,
   DOMAIN_CHOICES,
   addPin,
@@ -93,7 +97,19 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 /** Whether the fake runtime made this version: its run was simulated. */
 const simulatedRun = (s: ReturnType<typeof useStore>["state"], a: StudioArtifact) => a.madeBy.role !== "user" && !!s.studio.runs.find((r) => r.id === (a.madeBy as { attemptId: string }).attemptId)?.simulated;
 
+/**
+ * Vision. While a project imports a repository (ORC-032), its round 0 is the import: the reading, then the review
+ * (src/ui/import); once locked in as the baseline, the studio shows it as any round.
+ */
 export function Studio() {
+  const { state } = useStore();
+  const screen = importScreen(state);
+  if (screen === "reading") return <ImportPanel />;
+  if (screen === "review") return <ImportReview />;
+  return <StudioCanvas />;
+}
+
+function StudioCanvas() {
   const { state, service, send, disabled } = useStore();
   const [roundChoice, setRoundChoice] = useState<number | undefined>(undefined);
   const [artifactChoice, setArtifactChoice] = useState<string | undefined>(undefined);
@@ -171,7 +187,8 @@ export function Studio() {
   };
   const variant = shown ? (shownVariant[draftKey(shown)] ?? draftOf(shown).pickedVariant ?? shown.variants[0]?.id) : undefined;
   // The bar shows when there is something to answer: a part, the lead's questions, or a change not sent yet.
-  const showBar = !!round && (!!shown || questions.length > 0 || changed.length > 0 || !!sent);
+  // An imported part of the baseline takes no mark (UX-5): a round changes it.
+  const showBar = !!round && ((!!shown && !shown.provenance?.asIs) || questions.length > 0 || changed.length > 0 || !!sent);
 
   return (
     <div className="k-stack st-page">
@@ -181,6 +198,7 @@ export function Studio() {
       </header>
       <VisionCard />
       <DraftBar />
+      <ImportOpenQuestions />
       <DomainPrompt />
       {state.studio.rounds.length === 0 ? (
         <EmptyState title="No rounds yet.">When the lead opens a round, the designer makes screens, terminal demos or documents for it, and they appear here for you to mark, pin and pick.</EmptyState>
@@ -305,11 +323,11 @@ interface AnswerBarProps {
 function AnswerBar({ artifact: a, draft, update, variant, onVariant, pending, parts, kept, blocker, sending, sent, sentDraft, onSend }: AnswerBarProps) {
   const { state, disabled } = useStore();
   const locked = a ? lockedWhy(state, a, disabled) : undefined;
-  const open = !!a && standing(state, a).kind === "open";
+  const open = !!a && standing(state, a).kind === "open" && !a.provenance?.asIs;
   const nothing = pending.length === 0 && parts.length === 0;
   return (
     <section className="st-answer" aria-label="Your answer">
-      {a && draft && a.variants.length > 1 && (
+      {a && draft && open && a.variants.length > 1 && (
         <div className="st-answer__row">
           <SegmentedControl label="Variant" size="small" value={variant ?? ""} onChange={onVariant} options={a.variants.map((v) => ({ value: v.id, label: v.label }))} />
           <Button
@@ -324,7 +342,7 @@ function AnswerBar({ artifact: a, draft, update, variant, onVariant, pending, pa
         </div>
       )}
       <div className="st-answer__row">
-        {a && draft && (
+        {a && draft && !a.provenance?.asIs && (
           <div className="st-toolbar__grp" role="group" aria-label="Your mark">
             {MARKS.map((m) => (
               <Button
@@ -459,7 +477,9 @@ function ArtifactItem({ artifact: a, draft, current, onClick }: { artifact: Stud
             <Chip tone="you">PE objects</Chip>{" "}
           </>
         )}
-        {st.kind === "pe" ? (
+        {a.provenance?.asIs ? (
+          <Chip>the baseline</Chip>
+        ) : st.kind === "pe" ? (
           <Chip>with the PE</Chip>
         ) : st.kind === "replaced" ? (
           <Chip>replaced by v{st.by.version}</Chip>
@@ -550,7 +570,8 @@ function ArtifactView({ artifact: a, draft, update, variant, device, onDevice, p
   const numbered = draft.pins.map((pin, i) => ({ pin, n: i + 1 }));
   const shownPins = numbered.filter(({ pin }) => pin.variant === undefined || pin.variant === variant);
   const onPin = useCallback((pin: PinMessage) => update(a, (d) => addPin(d, pin, pinVariant)), [update, a, pinVariant]);
-  const canPin = kind === "screen" && !!src && !locked;
+  const asIs = !!a.provenance?.asIs;
+  const canPin = kind === "screen" && !!src && !locked && !asIs;
 
   return (
     <div className="st-stack">
@@ -568,7 +589,7 @@ function ArtifactView({ artifact: a, draft, update, variant, device, onDevice, p
             <SegmentedControl label="Device" size="small" value={shownDevice} onChange={onDevice} options={options.map((d) => ({ value: d, label: DEVICE_LABEL[d] }))} />
           )}
           {kind === "screen" && options.length === 1 && <Chip>{DEVICE_LABEL[shownDevice]}</Chip>}
-          {kind === "screen" && (
+          {kind === "screen" && !asIs && (
             <Button size="small" aria-pressed={pinMode} disabled={!canPin} disabledReason={!src ? "The prototype is not shown, so there is nothing to pin." : locked} onClick={() => setPinMode(!pinMode)}>
               {pinMode ? "Stop pinning" : "Pin a comment"}
             </Button>
@@ -576,7 +597,7 @@ function ArtifactView({ artifact: a, draft, update, variant, device, onDevice, p
         </div>
       </div>
 
-      {a.provenance?.asIs && <AsIsNote files={a.provenance.files} />}
+      {asIs && <BaselineNote files={a.provenance!.files} />}
       {locked && st.kind !== "open" && <p className="small muted">{locked}</p>}
       {kind === "screen" && shots && <p className="small muted">{shots}</p>}
 
@@ -595,7 +616,7 @@ function ArtifactView({ artifact: a, draft, update, variant, device, onDevice, p
           ) : kind === "document" ? (
             <DocumentArtifact key={variant} artifact={a} variant={variant} />
           ) : kind === "dictionary" ? (
-            <DictionaryTable artifact={a} draft={draft} update={update} locked={locked} />
+            asIs ? <TermsTable artifact={a} /> : <DictionaryTable artifact={a} draft={draft} update={update} locked={locked} />
           ) : src ? (
             <PlainFrame src={src} title={frameTitle} />
           ) : (
@@ -607,7 +628,7 @@ function ArtifactView({ artifact: a, draft, update, variant, device, onDevice, p
       <p className={cx("small", pinMode ? "st-hint" : "sr-only")} role="status">
         {pinMode ? "Pin mode: click a spot in the prototype to pin a comment there. Clicks still work inside the prototype." : ""}
       </p>
-      {a.kind === "flow" && <RulesTable key={variant} artifact={a} variant={variant} draft={draft} update={update} locked={locked} />}
+      {a.kind === "flow" && <RulesTable key={variant} artifact={a} variant={variant} draft={draft} update={update} locked={locked} marks={!asIs} />}
 
       {draft.pins.length > 0 && <PinList artifact={a} draft={draft} update={update} locked={locked} />}
     </div>
@@ -727,7 +748,7 @@ function DictionaryTable({ artifact: a, draft, update, locked }: TableProps) {
  * A flow variant's rules (its rules.json), each with the pattern it fits and your mark, then its examples. An edge
  * case is an "If …, then …" rule, so a case nobody decided shows as a missing rule. Nothing for a flow without rules.
  */
-function RulesTable({ artifact: a, variant, draft, update, locked }: TableProps & { variant: string | undefined }) {
+function RulesTable({ artifact: a, variant, draft, update, locked, marks }: TableProps & { variant: string | undefined; marks: boolean }) {
   const set = variantRules(a, variant);
   if (!set) return null;
   const v = a.variants.length > 1 ? set.variant : undefined;
@@ -741,9 +762,11 @@ function RulesTable({ artifact: a, variant, draft, update, locked }: TableProps 
           <tr>
             <th scope="col">Rule</th>
             <th scope="col">Pattern</th>
-            <th scope="col" className="st-table__marks">
-              Your mark
-            </th>
+            {marks && (
+              <th scope="col" className="st-table__marks">
+                Your mark
+              </th>
+            )}
           </tr>
         </thead>
         <tbody>
@@ -759,15 +782,17 @@ function RulesTable({ artifact: a, variant, draft, update, locked }: TableProps 
                     {PATTERN_NAME[r.pattern]}
                   </Chip>
                 </td>
-                <td className="st-table__marks">
-                  <RowMarks label={`rule ${r.id}`} mark={mark} locked={locked} onMark={(m) => update(a, (d) => toggleRow(d, r.id, v, m))} />
-                </td>
+                {marks && (
+                  <td className="st-table__marks">
+                    <RowMarks label={`rule ${r.id}`} mark={mark} locked={locked} onMark={(m) => update(a, (d) => toggleRow(d, r.id, v, m))} />
+                  </td>
+                )}
               </tr>
             );
           })}
         </tbody>
       </table>
-      <TableFoot artifact={a} draft={draft} update={update} locked={locked} rows={rows} what="rule" />
+      {marks && <TableFoot artifact={a} draft={draft} update={update} locked={locked} rows={rows} what="rule" />}
       {set.examples.length > 0 && (
         <>
           <h3 className="st-label">Examples ({set.examples.length})</h3>
@@ -785,10 +810,12 @@ function RulesTable({ artifact: a, variant, draft, update, locked }: TableProps 
 }
 
 /**
- * An "as is" artifact (round 0 of an existing repository): the designer's reproduction of what the code does now, not
- * a proposal, with the repository files it came from. It is there for you to correct.
+ * An imported part (round 0 of an existing repository, ORC-032), which Vision shows once its baseline Lock in put it
+ * into force: what the code does at the import's commit, with the repository files it came from. It takes no mark: a
+ * round changes it (UX-5).
  */
-function AsIsNote({ files }: { files: string[] }) {
+function BaselineNote({ files }: { files: string[] }) {
+  const { state } = useStore();
   const list = (paths: string[]) => (
     <ul className="st-asis__files">
       {paths.map((f) => (
@@ -799,9 +826,9 @@ function AsIsNote({ files }: { files: string[] }) {
     </ul>
   );
   return (
-    <section className="st-asis" aria-label={AS_IS_LABEL}>
+    <section className="st-asis" aria-label="The baseline">
       <p className="small">
-        <Chip strong>{AS_IS_LABEL}</Chip> The designer made this from the code, to show what the product does now. It is not a proposal. Correct what it gets wrong: mark it, pin comments or write a note.
+        <Chip strong>The baseline</Chip> {baselinePartLine(state)}
       </p>
       <p className="micro muted">Made from {plural(files.length, "file")} in the repository:</p>
       {list(files.slice(0, AS_IS_FILES_SHOWN))}

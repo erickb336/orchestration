@@ -15,6 +15,7 @@ import { NEUTRAL_FINDING, PLANNING_IDEAS, breakdownItems, neutralSummary, script
 import { DEVICES, type CatalogModel, type Device, type LeadTrigger, type OutputDef, type ProviderId, type State } from "../../src/domain/types";
 import type { CapabilityMap } from "../../src/runtime/adapter";
 import { TERMINAL_BRIEF, addDictionarySample, addFlowRules, askedKinds, asksForRules, designerAsk, fakePeAnswer, reviseSample, variantsToRevise, writeSamplePrototype, writeTerminalSample } from "../studio/sample";
+import { TALLY_FIXTURE } from "../studio/import";
 import { statusAnswer, statusQuestion } from "./fakeStatus";
 import type { AdapterEvent, Assignment, ProviderHealth, RuntimeAdapter } from "./types";
 
@@ -223,44 +224,57 @@ const FOCUS_WORDS: Record<string, string> = { "what exists": "material", "the ex
 /**
  * ORC-029 pass 4: a simulated studio block, built only from the lead's studio brief in the envelope (a reply in
  * Vision). When no round is open it plans the next one and asks for one designer run and one question, so the demo
- * shows the loop: round 0 "as it is today" when the repository has code and there is no round yet, else the next
- * focus in order (the experience, then the data, then the flows). While a round is open it plans nothing. Every text
- * says it is simulated.
+ * shows the loop: the next focus in order (the experience, then the data, then the flows). While a round is open, or
+ * the import is under way (ORC-032: the import makes round 0), it plans nothing. Every text says it is simulated.
  */
 export function fakeStudio(prompt: string): Record<string, unknown> | undefined {
   // The simulated lead runs the studio in Vision only: while the factory runs it gets the studio brief too (pass 5), but
   // it cannot tell a message about the design from one about the work, so it opens no round there.
   if (!/^Project stage: shaping$/m.test(prompt) || !/^## The studio$/m.test(prompt) || !/^- No round is open\./m.test(prompt)) return undefined;
+  if (/^The import of the repository at commit \S+ is (reading|in review):/m.test(prompt)) return undefined;
   const scope = (/^Devices \(the user's scope\): ([^\n]*)\.$/m.exec(prompt)?.[1] ?? "desktop").split(", ");
   const screens = scope.filter((d) => d === "desktop" || d === "mobile");
-  const asIs = /^No round yet, and the repository has code\./m.test(prompt);
   const done = [...prompt.matchAll(/^- Round \d+ \(([^)]*)\), closed/gm)].map((m) => FOCUS_WORDS[m[1]]);
-  const focus = asIs ? "material" : FOCUS_ORDER.find((f) => !done.includes(f));
+  const focus = FOCUS_ORDER.find((f) => !done.includes(f));
   if (!focus) return undefined;
   const run =
-    focus === "material"
+    focus === "experience"
       ? screens.length
-        ? { brief: "Simulated lead: reproduce the main screen as the code has it today, read-only, and name the files it came from.", kinds: ["screen"], variants: 1, devices: screens }
-        : { brief: "Simulated lead: reproduce the main command as the code has it today, read-only, and name the files it came from.", kinds: ["terminal-demo"], variants: 1, devices: ["terminal"] }
-      : focus === "experience"
-        ? screens.length
-          ? { brief: "Simulated lead: make the main screen of the vision in two takes that differ in a real choice.", kinds: ["screen"], variants: 2, devices: screens }
-          : { brief: "Simulated lead: make a terminal demo of the main command.", kinds: ["terminal-demo"], variants: 1, devices: ["terminal"] }
-        : focus === "data"
-          ? { brief: "Simulated lead: describe the product's things and how they relate, with a worked example, and propose the project's dictionary.", kinds: ["contract", "dictionary"], variants: 1, devices: [] }
-          : { brief: "Simulated lead: decide every case of the main flow, as a table of cases and outcomes.", kinds: ["flow"], variants: 1, devices: [] };
+        ? { brief: "Simulated lead: make the main screen of the vision in two takes that differ in a real choice.", kinds: ["screen"], variants: 2, devices: screens }
+        : { brief: "Simulated lead: make a terminal demo of the main command.", kinds: ["terminal-demo"], variants: 1, devices: ["terminal"] }
+      : focus === "data"
+        ? { brief: "Simulated lead: describe the product's things and how they relate, with a worked example, and propose the project's dictionary.", kinds: ["contract", "dictionary"], variants: 1, devices: [] }
+        : { brief: "Simulated lead: decide every case of the main flow, as a table of cases and outcomes.", kinds: ["flow"], variants: 1, devices: [] };
   const summary = {
-    material: "As it is today (simulated): what the code in the repository does now.",
     experience: "The experience (simulated): the main screen, in two takes.",
     data: "The data (simulated): the product's things and how they relate.",
     flows: "The flows (simulated): every case of the main flow, decided.",
   }[focus];
   // The owner chooses the domains in the app; the brief tells the lead not to ask about them.
-  const question =
-    focus === "material"
-      ? { question: "Is this how the product works today? (simulated)", why: "Later rounds change what the code does now, so it must be right first.", options: ["Yes", "Mostly: see my pins", "No"] }
-      : { question: "Is anything missing from this round? (simulated)", why: "A case the design leaves open becomes special-casing in code.", options: ["Nothing is missing", "Yes: see my note"] };
+  const question = { question: "Is anything missing from this round? (simulated)", why: "A case the design leaves open becomes special-casing in code.", options: ["Nothing is missing", "Yes: see my note"] };
   return { openRound: { focus, summary }, designerRuns: [run], questions: [question] };
+}
+
+/**
+ * ORC-032: the simulated lead's message once the import is in review, built only from its envelope's import line: what
+ * the import found, that the questions wait in Vision, and a vision draft of the product as it is today. Labelled
+ * simulated. A reply to the owner's message during the review answers it and drafts nothing: the import's draft stays
+ * (QA3-F3). Undefined when the import is not in review.
+ */
+export function fakeImportReview(prompt: string): { reply: string; vision?: Record<string, unknown> } | undefined {
+  const m = /^The import of the repository at commit (\S+) is in review: ([^\n]*)$/m.exec(prompt);
+  if (!m) return undefined;
+  const message = newestMessage(prompt);
+  if (message) return { reply: `I read your message ("${message}"). The import's questions wait in Vision, round 0, and its draft of the vision stays open for you to accept. I wrote no new draft (simulated).` };
+  const found = m[2].replace(/\.$/, "");
+  return {
+    reply: `I read the repository at commit ${m[1]} as it is today: ${found}. The questions wait in Vision, round 0: answer the conflicts and the guesses that matter, then lock the baseline in (simulated).`,
+    vision: {
+      text: [`(Simulated draft) What the product is today, from the import at commit ${m[1]}: ${found}.`, "", "The simulation wrote this from the import's counts alone; it reads no code."].join("\n"),
+      focus: "What the product is today",
+      reason: "A first draft from the import, for you to accept on the Baseline screen.",
+    },
+  };
 }
 
 /** One of the owner's marks the lead's studio brief lists since its last reply. */
@@ -477,9 +491,11 @@ export function fakeLeadReply(attemptId: string, trigger: LeadTrigger, prompt = 
   const proposals = [...(trigger === "planning" ? [fakePlanningProposal(prompt)] : []), ...revisions];
   // A message that carries the owner's marks is answered by them (Q-07): no steer, vision draft or questions from it.
   const marks = trigger === "message" ? studioMarks(prompt) : [];
-  const answer = marks.length ? fakeMarksAnswer(prompt, marks) : undefined;
+  // ORC-032: once the import is in review, the lead's message says what it found, with a vision draft of the product today.
+  const review = trigger === "message" && !marks.length ? fakeImportReview(prompt) : undefined;
+  const answer = marks.length ? fakeMarksAnswer(prompt, marks) : review ? { text: review.reply, studio: undefined } : undefined;
   const steer = trigger === "message" && !answer ? fakeSteer(prompt) : undefined;
-  const vision = trigger === "message" && !answer ? fakeVision(prompt) : undefined;
+  const vision = review?.vision ?? (trigger === "message" && !answer ? fakeVision(prompt) : undefined);
   const shaping = trigger === "message" && !answer ? fakeShaping(prompt) : undefined;
   const studio = trigger === "message" ? (answer?.studio ?? fakeStudio(prompt)) : undefined;
   // ORC-029 pass 5 (5b): a run started for a change order answers it with an update per touched task.
@@ -501,7 +517,7 @@ export function fakeLeadReply(attemptId: string, trigger: LeadTrigger, prompt = 
   // ORC-029 pass 4: what the simulated lead asked of the studio, said after the rest of the reply.
   const round = studio?.openRound as { focus: string } | undefined;
   const studioLine = round
-    ? ` I opened a round on ${round.focus === "material" ? "the product as it is today" : `the ${round.focus}`} and asked the designer for one run, with one question beside it (simulated).`
+    ? ` I opened a round on the ${round.focus} and asked the designer for one run, with one question beside it (simulated).`
     : "";
   // The reply carries the simulated chip; the text says only what happened.
   const replyText = changeOrder
@@ -539,7 +555,7 @@ export function fakeLeadAnswer(reply: Record<string, unknown>, schema: Record<st
   return why ? { ok: false, why } : { ok: true, json: JSON.stringify(answer) };
 }
 
-// ---------- the simulated designer's documents and "as is" reproductions (ORC-029 pass 4) ----------
+// ---------- the simulated designer's documents (ORC-029 pass 4) ----------
 
 /** The document kind a designer's brief asks for, when every kind it names is a document ("The lead asks for: contract; …"). */
 export function documentAsk(brief: string): StudioArtifactKind | undefined {
@@ -548,19 +564,71 @@ export function documentAsk(brief: string): StudioArtifactKind | undefined {
   return kinds.length && kinds.every((k) => DOCUMENT_KINDS.includes(k)) ? kinds[0] : undefined;
 }
 
+// ---------- the simulated import of tally (ORC-032) ----------
+
 /**
- * The repository's code files an "as it is today" designer envelope lists (round 0), at most three, for the
- * simulated designer's provenance; undefined when the envelope is not round 0's. The simulated designer reads no
- * code: it names files the service listed from git, so the import's check that the repository has them holds.
+ * tally's parts as the simulated parts designer hands them in, from the bundled fixture (server/studio/fixtures/tally/
+ * parts): each with its kind, its entry, the repository files it came from, and the rules' area it holds.
  */
-export function asIsFiles(prompt: string): string[] | undefined {
-  if (!/^## As it is today$/m.test(prompt)) return undefined;
-  const listed = /^- Code in the repository \([^)]*\): (.+)\.$/m.exec(prompt)?.[1];
-  if (!listed || listed === "none") return [];
-  return listed
-    .split(", ")
-    .sort((a, b) => Number(!/\.html?$/.test(a)) - Number(!/\.html?$/.test(b)))
-    .slice(0, 3);
+const TALLY_PARTS = [
+  { key: "add", area: "tally add", kind: "terminal-demo", title: "tally add", entry: "add/demo.tape", devices: ["terminal"], provenance: ["tally/cli.py", "tally/ledger.py"] },
+  { key: "split", area: "tally split", kind: "terminal-demo", title: "tally split", entry: "split/demo.tape", devices: ["terminal"], provenance: ["tally/cli.py", "tally/settle.py"] },
+  { key: "report", area: "tally report", kind: "terminal-demo", title: "tally report", entry: "report/demo.tape", devices: ["terminal"], provenance: ["tally/cli.py", "tally/report.py"] },
+  { key: "splitting", area: "splitting", kind: "algorithm", title: "Splitting", entry: "splitting/splitting.md", devices: [], provenance: ["tally/settle.py", "tally/money.py"] },
+  { key: "ledger", area: "the ledger", kind: "contract", title: "The ledger", entry: "ledger/ledger.md", devices: [], provenance: ["tally/ledger.py"] },
+] as const;
+
+/**
+ * The simulated rules reader's answer: tally's 17 rules (the fixture's reading.json), each naming only the tests its
+ * envelope lists, so none when the tests did not run. It reads no code.
+ */
+export function fakeReaderAnswer(prompt: string): string {
+  const listed = new Set([...prompt.matchAll(/^- (\S+::\S+)$/gm)].map((m) => m[1]));
+  const { rules } = JSON.parse(readFileSync(join(TALLY_FIXTURE, "reading.json"), "utf8")) as { rules: { tests: string[] }[] };
+  const out = rules.map((r) => ({ ...r, tests: r.tests.filter((t) => listed.has(t)) }));
+  return `Read the repository's tests and code (simulated: the fake runtime gives tally's rules).\n\n\`\`\`json\n${JSON.stringify({ rules: out }, null, 2)}\n\`\`\`\n`;
+}
+
+/**
+ * The simulated import designer: tally's words (one dictionary), or its parts, each with the rules its envelope lists
+ * for it placed once, unchanged (a rule of an area no part has goes to the first part). Copied from the bundled
+ * fixture, with provenance, as a designer agent would write them. Returns its final message.
+ */
+export function writeImportSample(staging: string, prompt: string): string {
+  const parts = join(TALLY_FIXTURE, "parts");
+  const manifest = (artifacts: Record<string, unknown>[]) => writeFileSync(join(staging, "studio.json"), `${JSON.stringify({ artifacts }, null, 2)}\n`);
+  if (/^## The import: the words$/m.test(prompt)) {
+    writeFileSync(join(staging, "dictionary.json"), readFileSync(join(parts, "words", "dictionary.json")));
+    manifest([{ kind: "dictionary", title: "Words", devices: [], variants: [{ id: "a", label: "As it is today", entry: "dictionary.json" }], files: ["dictionary.json"], provenance: ["README.md", "tally/cli.py"] }]);
+    return "Collected tally's words from the README and the code (simulated sample).";
+  }
+  if (/^## The import: a fix$/m.test(prompt)) {
+    // The staging folder holds the part's files: hand in its next version, marked fixed, its rules as they were.
+    const p = TALLY_PARTS.find((x) => existsSync(join(staging, x.entry)));
+    if (!p) throw new Error("its working directory holds none of tally's parts");
+    const folder = p.entry.split("/")[0];
+    const note = p.entry.endsWith(".md") ? "\n> Fixed from the owner's words (simulated: the fake runtime changed nothing else).\n" : "# Fixed from the owner's words (simulated: the fake runtime changed nothing else).\n";
+    writeFileSync(join(staging, p.entry), `${readFileSync(join(staging, p.entry), "utf8")}${note}`);
+    const files = [p.entry, ...(existsSync(join(staging, folder, "rules.json")) ? [`${folder}/rules.json`] : [])];
+    manifest([{ kind: p.kind, title: p.title, devices: p.devices, variants: [{ id: "a", label: "As it is today", entry: p.entry }], files, provenance: p.provenance }]);
+    return `Fixed ${p.title} from the owner's words (simulated sample).`;
+  }
+  const section = /^The rules the reader found \(\d+\):\n((?:- .*\n?)*)/m.exec(prompt)?.[1] ?? "";
+  const rules = [...section.matchAll(/^- (\S+) \((.*?)\): (.*?)(?: \[tests: ([^\]]*)\])?$/gm)].map(([, id, area, text, tests]) => ({ id, area, text, tests: tests ? tests.split(", ") : [] }));
+  const artifacts = TALLY_PARTS.map((p, i) => {
+    const mine = rules.filter((r) => r.area === p.area || (i === 0 && !TALLY_PARTS.some((x) => x.area === r.area)));
+    const folder = p.entry.split("/")[0];
+    mkdirSync(join(staging, folder), { recursive: true });
+    writeFileSync(join(staging, p.entry), readFileSync(join(parts, p.entry)));
+    const files: string[] = [p.entry];
+    if (mine.length) {
+      writeFileSync(join(staging, folder, "rules.json"), `${JSON.stringify({ rules: mine.map((r) => ({ id: r.id, text: r.text, ...(r.tests.length ? { tests: r.tests } : {}) })) }, null, 2)}\n`);
+      files.push(`${folder}/rules.json`);
+    }
+    return { kind: p.kind, title: p.title, devices: p.devices, variants: [{ id: "a", label: "As it is today", entry: p.entry }], files, provenance: p.provenance };
+  });
+  manifest(artifacts);
+  return `Reproduced tally's ${artifacts.length} parts as the code has them today, with the reader's ${rules.length} rules (simulated sample).`;
 }
 
 const DOCUMENT_TEXT: Record<string, { title: string; md: string; mmd: string }> = {
@@ -584,25 +652,6 @@ export function writeDocumentSample(staging: string, kind: StudioArtifactKind) {
   writeFileSync(join(staging, "doc", "diagram.mmd"), text.mmd);
   const manifest = { artifacts: [{ kind, title: text.title, devices: [], variants: [{ id: "a", label: "A · As drafted", entry: "doc/index.md" }], files: ["doc/index.md", "doc/diagram.mmd"] }] };
   writeFileSync(join(staging, "studio.json"), `${JSON.stringify(manifest, null, 2)}\n`);
-}
-
-/**
- * Turn the sample just written into "as is" reproductions: each artifact names `files` as its provenance and says
- * so in its title; a screen keeps one take (what the code does now has no variants).
- */
-export function markAsIs(staging: string, files: string[]) {
-  const path = join(staging, "studio.json");
-  const manifest = JSON.parse(readFileSync(path, "utf8")) as { artifacts: { kind: string; title: string; variants: { id: string; label: string; entry: string }[]; files: string[]; provenance?: string[] }[] };
-  for (const a of manifest.artifacts) {
-    a.title = a.title.replace(" (simulated sample)", " as it is today (simulated sample)");
-    if (files.length) a.provenance = files;
-    if (a.kind !== "screen") continue;
-    const [first] = a.variants;
-    const folder = first.entry.includes("/") ? `${first.entry.slice(0, first.entry.lastIndexOf("/"))}/` : "";
-    a.variants = [{ ...first, label: "As it is today" }];
-    a.files = a.files.filter((f) => f.startsWith(folder));
-  }
-  writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
 function jitter(id: string) {
@@ -817,11 +866,25 @@ export class FakeAdapter implements RuntimeAdapter {
           this.emit({ type: "completed", attemptId: id, finalText: fakeNewWorkPeAnswer(p.prompt ?? "") });
           continue;
         }
+        if (/^# Import reader run /.test(p.prompt ?? "")) {
+          // ORC-032: the simulated rules reader answers with tally's rules, naming only the tests its envelope lists.
+          this.emit({ type: "completed", attemptId: id, finalText: fakeReaderAnswer(p.prompt ?? "") });
+          continue;
+        }
         if (p.studio !== undefined && p.studioRole === "pe") {
           // A simulated PE reads the version's manifest and its envelope (its earlier asks), and answers as a real one
           // would: a verdict per variant, each with its checks of the earlier asks on a later pass.
           const answer = fakePeAnswer(p.studio, p.prompt ?? "");
           this.emit(answer.ok ? { type: "completed", attemptId: id, finalText: answer.text } : { type: "failed", attemptId: id, message: `The simulated PE could not read the version: ${answer.error}` });
+          continue;
+        }
+        if (p.studio !== undefined && /^## The import: (the words|the parts|a fix)$/m.test(p.prompt ?? "")) {
+          // ORC-032: the simulated import designer hands in tally's words, its parts with the reader's rules placed, or a part's fix.
+          try {
+            this.emit({ type: "completed", attemptId: id, finalText: writeImportSample(p.studio, p.prompt ?? "") });
+          } catch (e) {
+            this.emit({ type: "failed", attemptId: id, message: `The simulated designer could not write tally's parts: ${e instanceof Error ? e.message : String(e)}` });
+          }
           continue;
         }
         if (p.studio !== undefined && existsSync(p.studio) && readdirSync(p.studio).length) {
@@ -841,7 +904,6 @@ export class FakeAdapter implements RuntimeAdapter {
           const ask = designerAsk(p.prompt ?? "");
           const doc = documentAsk(ask.brief);
           const terminal = !doc && TERMINAL_BRIEF.test(ask.brief);
-          const asIs = asIsFiles(p.prompt ?? "");
           // Pass 4d: the project's dictionary when the brief asks for one (alone, or with a document), and a flow's rules in a flows round.
           const kinds = askedKinds(ask.brief);
           const words = kinds.includes("dictionary");
@@ -851,7 +913,6 @@ export class FakeAdapter implements RuntimeAdapter {
               if (doc) writeDocumentSample(p.studio, doc);
               else if (terminal) writeTerminalSample(p.studio, ask.terminal);
               else writeSamplePrototype(p.studio);
-              if (asIs) markAsIs(p.studio, asIs);
               if (words) addDictionarySample(p.studio);
               if (doc === "flow" && asksForRules(p.prompt ?? "")) addFlowRules(p.studio);
             }
@@ -866,11 +927,9 @@ export class FakeAdapter implements RuntimeAdapter {
               ? "Made the project's dictionary (simulated sample)."
               : doc
               ? `Made a ${doc} document in Markdown and Mermaid${doc === "flow" && asksForRules(p.prompt ?? "") ? ", with its rules" : ""}${words ? ", and the project's dictionary" : ""} (simulated sample).`
-              : asIs
-                ? `Reproduced the ${terminal ? "trips CLI" : "trip plan"} as it is today, as is, from ${asIs.join(", ") || "no file"} (simulated sample).`
-                : terminal
-                  ? "Made a terminal demo of the trips CLI, and its TUI in two layouts (simulated sample)."
-                  : "Made the trip plan in two variants, for desktop and mobile (simulated sample).",
+              : terminal
+                ? "Made a terminal demo of the trips CLI, and its TUI in two layouts (simulated sample)."
+                : "Made the trip plan in two variants, for desktop and mobile (simulated sample).",
           });
           continue;
         }

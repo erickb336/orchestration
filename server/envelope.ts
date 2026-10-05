@@ -12,6 +12,8 @@ import { childDefault, effectiveDefault, eligible, flowSummary } from "../src/do
 import { LEAD_PRINCIPLE_IDS, orderPrinciples, principle, wordCount } from "../src/domain/principles";
 import { buildingSpend, committedBuildUsd, countedSpend, fmtUsd, maintenanceEstimate } from "../src/domain/spend";
 import * as B from "../src/domain/studio/blueprint";
+import * as I from "../src/domain/studio/import";
+import { isImportReviewRun } from "../src/domain/studio/import";
 import { domainLines } from "../src/domain/studio/domains";
 import { MAX_DESIGNER_RUNS, MAX_RUN_VARIANTS } from "../src/domain/studio/lead";
 import { captureItems, notSetUpReason } from "../src/domain/studio/evidence";
@@ -1226,12 +1228,38 @@ function studioAnswers(state: State): string[] {
 }
 
 /**
+ * The import of the repository (ORC-032), when the project has one: where it stands, and the lead's part. The service
+ * runs the import. Once it is in review, only the import's own review run writes the round's message and a vision draft;
+ * a reply to the user's message answers in chat and leaves the draft alone (N2).
+ */
+function importLines(state: State, run?: Pick<LeadRun, "trigger" | "messageIds">): string {
+  const imp = state.studio.import;
+  if (!imp) return "";
+  const status = I.importStatus(state);
+  const c = imp.checks;
+  const total = c.status === "read" ? Object.values(c.counts).reduce((a, b) => a + b, 0) : 0;
+  const tests = c.status === "read" ? `the tests ran: ${total}, ${c.counts.passed} pass` : c.status === "not-run" ? `the tests did not run (${truncate(c.reason, 160)})` : "the tests have not run yet";
+  const rules = imp.reading ? `${imp.reading.rules.length} rules, ${imp.reading.rules.filter((r) => r.tests.length).length} named by tests` : "no rules yet";
+  const recorded = imp.capture ? `${imp.capture.parts.filter((x) => x.status === "captured").length} of ${imp.capture.parts.length} recorded` : "not recorded yet";
+  const where = status === "review" ? "is in review" : status === "reading" ? "is reading" : status === "locked-in" ? "is the baseline" : `stopped (${truncate(imp.stopped?.reason ?? "", 160)})`;
+  const what =
+    status === "review"
+      ? run && isImportReviewRun(state, run)
+        ? 'The import asks the user its own questions in round 0. In your reply, say in two or three sentences what the import found, and that its questions wait in Vision. Write "vision": what the product is today, from its parts and rules, for the user to accept. Open no round and ask for no designer run while round 0 is open.'
+        : 'The import asks the user its own questions in round 0, and the review run of the import writes the vision draft. Answer the user in "reply" only: leave "vision" out, open no round and ask for no designer run while round 0 is open.'
+      : status === "reading"
+        ? "The service runs the import. Open no round and ask for no designer run; if the user asks, say what it is doing."
+        : "";
+  return `\nThe import of the repository at commit ${imp.commit.slice(0, 7)} ${where}: ${tests}; ${rules}; ${I.importParts(state).length} parts; the screens and commands ${recorded}.${what ? `\n${what}` : ""}`;
+}
+
+/**
  * The lead's studio brief while the project is in Vision (pass 4): what the studio is and the lead's part in it, the
  * order of focus (aiming at completeness, r8), the domains and devices, the repository (for an "as it is today"
  * first round), the rounds with their artifacts and PE review, the designer runs under way, and the user's answers
  * since the lead's last reply. Bounded: the open round's artifacts, the answers and the pins are capped and counted.
  */
-export function studioBriefSection(state: State, repo?: RepoGlance): string {
+export function studioBriefSection(state: State, repo?: RepoGlance, run?: Pick<LeadRun, "trigger" | "messageIds">): string {
   const p = state.project;
   const rounds = state.studio.rounds;
   const open = S.currentRound(state);
@@ -1240,10 +1268,11 @@ export function studioBriefSection(state: State, repo?: RepoGlance): string {
     : repo.codeFiles
       ? `Repository: has code, ${repo.codeFiles} code file${repo.codeFiles === 1 ? "" : "s"} of ${repo.files} tracked (${repo.code.slice(0, 12).join(", ")}${repo.codeFiles > 12 ? ", …" : ""}).`
       : `Repository: no code yet (${repo.files} tracked file${repo.files === 1 ? "" : "s"}, documents only).`;
+  // An existing repository has one way in: the import (ORC-032), which the user starts on the new-project screen.
   const start = rounds.length
     ? ""
     : repo?.codeFiles
-      ? `\nNo round yet, and the repository has code. Unless the user said otherwise, start with round 0, "as it is today": openRound { "focus": "material", "summary": "As it is today: <what the code does now>" }, and ask the designer to reproduce the key screens, or the interface and core algorithms, or the topology, from the code (one take each, kinds by the domains). The designer reads the code read-only; the service labels each artifact "as is" with the files it came from. The PE checks only that each reproduction is faithful to the code, and the designer does not revise it for the PE: the user corrects it, and later rounds change it.`
+      ? "\nNo round yet, and the repository has code. Do not reproduce it in a round: the import reads it into round 0, As it is today, and the user starts it on the new-project screen. Otherwise open round 1 on the experience once you know enough to brief the designer."
       : "\nNo round yet: open round 1 on the experience once you know enough to brief the designer.";
   const latest = S.latestArtifacts(state);
   const openRows = open ? latest.filter((a) => a.round === open.n) : [];
@@ -1281,7 +1310,7 @@ The factory is running. Vision stays open: when the user's messages are about th
       : "";
   return `
 ## The studio
-You run Vision's studio. Each round, the designer makes artifacts the user opens, marks (keep, change, drop), pins comments on and picks between. The PE reviews each design before the user sees it (not dictionaries, material or evidence); when it asks for a change or objects, the designer revises, up to ${S.MAX_PE_PASSES} passes, and then the user sees it with what the PE still says. What the user approves becomes the blueprint the factory builds from. You plan the rounds and brief the designer through "studio" in your output. You never approve, overrule the PE, lock in or start the factory, and you never answer for the user: only the user's own actions do those.
+You run Vision's studio. Each round, the designer makes artifacts the user opens, marks (keep, change, drop), pins comments on and picks between. The PE reviews each design before the user sees it (not dictionaries, material, evidence or the import's parts); when it asks for a change or objects, the designer revises, up to ${S.MAX_PE_PASSES} passes, and then the user sees it with what the PE still says. What the user approves becomes the blueprint the factory builds from. You plan the rounds and brief the designer through "studio" in your output. You never approve, overrule the PE, lock in or start the factory, and you never answer for the user: only the user's own actions do those.
 ${building}
 Order of focus, aiming at a design that is complete before the factory starts (revisit a focus when the user's answers call for it):
 1. experience: the key screens or commands, or the interface, or the topology, and how they behave;
@@ -1295,7 +1324,7 @@ Product domains: the kind of product this is, which decides what the designer ma
 The user chooses the domains in the app. You never set them, and you do not ask about them in "questions"; you may recommend domains in one sentence of your reply. The user's choice:
 ${domainLines(p.domains).map((l) => `- ${l}`).join("\n")}
 Devices (the user's scope): ${p.devices.join(", ")}.
-${repoLine}${start}
+${repoLine}${start}${importLines(state, run)}
 
 Rounds:
 ${roundLines}${earlier.length ? `\n${earlier.join("\n")}` : ""}
@@ -1511,7 +1540,8 @@ export function buildLeadEnvelope(state: State, run: LeadRun, access: "read", do
   // vision draft go to message runs in either stage (ORC-029 pass 5, r10): Vision stays open while the factory runs, on
   // the draft. A planning run never drafts (the domain refuses).
   const shaping = p.stage === "shaping";
-  const canDraft = canSteer;
+  // The import's review reply (ORC-032) answers no message, and drafts too: the round's message and the vision today.
+  const canDraft = canSteer || isImportReviewRun(state, run);
   const canShape = shaping && canSteer;
   const roots = state.tasks.filter((t) => !t.parentTaskId);
   // The review and fix tasks the service creates for a pull request are delivery's, not steerable, and
@@ -1619,14 +1649,19 @@ Planning runs cannot steer. Serve the current focus; do not re-propose deferred 
     : "";
   // The studio brief goes to the replies that may run the studio: message runs, in Vision and while the factory runs
   // (pass 5): when the user talks to the lead about the design, the lead may open rounds on the draft.
-  const studioBrief = canDraft ? studioBriefSection(state, repo) : "";
+  const studioBrief = canDraft ? studioBriefSection(state, repo, run) : "";
+  // While the import is in review, only its review run drafts the vision (importLines, N2): a chat reply gets no living draft (R28-1).
+  const livingDraft =
+    I.importStatus(state) === "review" && !isImportReviewRun(state, run)
+      ? ""
+      : `
+- Keep a living draft. From the first exchange that gives you enough to start, propose the whole vision in "vision" and improve it every turn: fill gaps with proposed defaults, each marked "(assumption)" for the user to confirm or change. Do not wait for full coverage; the coverage and the open questions say what is still uncertain. The draft replaces the current text, so keep what already stands and still holds. The user accepts, edits or dismisses each draft; it never applies by itself, and a newer draft replaces one still open. Do not resend a draft the user dismissed unless they ask.`;
   const shapingBrief = shaping
     ? `
 ## Draft the vision with the user
 Project stage: shaping (the user sees it as Vision; say Vision, never shaping). No worker step runs and no planning run starts until the user starts the factory; nothing is paused. You are the user's active partner in working out the vision: a discovery interview in which you also contribute ideas. Each turn:
 - Restate what you understand so far in a few lines ("Here is what I understand…"), point out contradictions, and label anything you assume as an assumption.
-- Ask 3–5 targeted questions about the most important open areas, each with a one-line reason why it matters. Ground them in what you already know: the conversation, the vision text, the vision documents (the "Vision documents" section above holds the user's own material: read it before asking, and cite the document a question or a draft rests on), and the repository you can read. When the code or the documents answer a question, say what you found instead of asking. Ask about intent first (why, for whom, what outcome); keep solution ideas separate. Prefer concrete questions: offer 2–3 options or examples where that helps the user answer quickly.
-- Keep a living draft. From the first exchange that gives you enough to start, propose the whole vision in "vision" and improve it every turn: fill gaps with proposed defaults, each marked "(assumption)" for the user to confirm or change. Do not wait for full coverage; the coverage and the open questions say what is still uncertain. The draft replaces the current text, so keep what already stands and still holds. The user accepts, edits or dismisses each draft; it never applies by itself, and a newer draft replaces one still open. Do not resend a draft the user dismissed unless they ask.
+- Ask 3–5 targeted questions about the most important open areas, each with a one-line reason why it matters. Ground them in what you already know: the conversation, the vision text, the vision documents (the "Vision documents" section above holds the user's own material: read it before asking, and cite the document a question or a draft rests on), and the repository you can read. When the code or the documents answer a question, say what you found instead of asking. Ask about intent first (why, for whom, what outcome); keep solution ideas separate. Prefer concrete questions: offer 2–3 options or examples where that helps the user answer quickly.${livingDraft}
 - For open areas, offer options with a recommendation ("I'd suggest A, because …; alternatives: B, C") so the user can answer by picking.
 - Suggest what the user may not have considered: edge cases, users they did not mention, risks, success measures, a smaller first milestone, and non-goals that keep scope in check. Ground each suggestion in the conversation, the documents or the repository.
 - Once intent and scope are at least partly clear, propose a first roadmap as proposals and say how each serves the vision. They are held until the user starts the factory; on Autopilot they start then.

@@ -1,11 +1,13 @@
 // ORC-029 pass 4: an existing repository, read only from git at HEAD: whether it has code, and which files it tracks.
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { isCode, repoFiles, repoGlance, trackedAmong } from "./existing";
+import { hostilePartialClone } from "../testing/partialClone";
+import { isCode, repoAt, repoFiles, repoGlance, trackedAmong } from "./existing";
+import { importStartInfo } from "./import";
 
 let dir: string;
 beforeEach(() => {
@@ -28,6 +30,15 @@ function repo(files: Record<string, string>, commit = true): string {
 }
 
 describe("an existing repository", () => {
+  it("a partial clone: Start refuses it with a plain reason, and no read runs its remote's command (SR-3)", () => {
+    const { repo: partial, marker } = hostilePartialClone(dir);
+    expect(importStartInfo(partial)).toEqual({ ok: false, reason: "This repository is a partial clone: git would fetch its missing files from its remote, and that can run a command on this computer. Import a full clone." });
+    // Each read fails closed on the missing file: git fetches nothing.
+    expect(repoAt(partial)).toBeUndefined();
+    expect(repoFiles(partial)).toEqual(["README.md", "src/app.js"]);
+    expect(existsSync(marker)).toBe(false);
+  });
+
   it("code is anything but documents, licences, git and editor settings, and images", () => {
     for (const p of ["src/App.tsx", "index.html", "styles/site.css", "main.go", "infra/main.tf", "k8s/deploy.yaml", "Makefile", "Dockerfile", "docs/api.json"]) expect([p, isCode(p)]).toEqual([p, true]);
     for (const p of ["README.md", "docs/guide.md", "LICENSE", "licence.txt", "CHANGELOG", ".gitignore", "sub/.editorconfig", "logo.png", "notes.txt"]) expect([p, isCode(p)]).toEqual([p, false]);
@@ -58,6 +69,24 @@ describe("an existing repository", () => {
     // A folder is not a file it came from.
     expect(trackedAmong(r, ["src"])?.has("src")).toBe(false);
     expect(trackedAmong(join(dir, "missing"), ["src/index.html"])).toBeUndefined();
+  });
+
+  it("the provenance lookup reads the import's commit when given one (C11): a file committed later is not there", () => {
+    const r = repo({ "src/index.html": "<h1>Trips</h1>" });
+    const first = execFileSync("git", ["-C", r, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    writeFileSync(join(r, "src", "later.js"), "1");
+    execFileSync("git", ["-C", r, "add", "-A"]);
+    execFileSync("git", ["-C", r, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "later"]);
+    expect(trackedAmong(r, ["src/index.html", "src/later.js"])).toEqual(new Set(["src/index.html", "src/later.js"]));
+    expect(trackedAmong(r, ["src/index.html", "src/later.js"], first)).toEqual(new Set(["src/index.html"]));
+    expect(trackedAmong(r, ["src/index.html"], "f".repeat(40))).toBeUndefined();
+  });
+
+  it("the import's start reads the commit, the branch and the size: source and test files apart, and their kilobytes", () => {
+    const r = repo({ "README.md": "# tally\n", "tally/cli.py": "x".repeat(2048), "tally/money.py": "1", "tests/test_add.py": "x".repeat(1024), "src/app.test.ts": "1", "pkg/a_test.go": "1", "logo.png": "png" });
+    const head = execFileSync("git", ["-C", r, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    expect(repoAt(r)).toEqual({ commit: head, branch: "main", size: { sourceFiles: 2, testFiles: 3, kb: 3.0 } });
+    expect(repoAt(join(dir, "missing"))).toBeUndefined();
   });
 
   it("a repository with documents only has no code; one that cannot be read gives nothing", () => {

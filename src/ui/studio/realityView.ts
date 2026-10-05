@@ -103,8 +103,17 @@ const DEVICE_WORD: Record<CaptureDevice, string> = { desktop: "desktop", mobile:
 
 const openOf = (v: ItemFactoryView): UxDifference[] => (v.uxReview?.ofLandedWork ? v.uxReview.differences.filter((d) => d.state === "open") : []);
 
-/** Why the item stands where it does, in one or two sentences. */
+/**
+ * Why the item stands where it does, in one or two sentences. A part of an import's baseline (ORC-032; phase B gives
+ * the view its `baseline`) says that the repository at the import's commit built it, and what proves it.
+ */
 export function statusWhy(v: ItemFactoryView): string {
+  if (v.baseline && v.status !== "in-force" && v.status !== "in-the-draft") {
+    const at = `From the import, at commit ${shortSha(v.baseline.commit)}.`;
+    if (v.status === "fails-a-check") return `${at} ${count(v.rules?.counts.failed ?? 0, "rule")} ${v.rules?.counts.failed === 1 ? "has" : "have"} a failing test in the import's run of your tests.`;
+    if (v.status === "built-not-verified") return `${at} The checks do not prove it yet: ${gapWords(v.notVerified!, v.item.kind)}.`;
+    return `${at} ${v.rules ? "Every rule has a passing test" : "Its recording shows it"}${v.rules && ["screen", "terminal-demo", "tui"].includes(v.item.kind) ? ", and the running code was recorded" : ""}.`;
+  }
   const inProgress = v.tasks.filter((t) => t.state === "running" || t.state === "finished");
   const running = inProgress.filter((t) => t.thisVersion);
   const runningBefore = inProgress.filter((t) => !t.thisVersion);

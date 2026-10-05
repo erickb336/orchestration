@@ -6,17 +6,19 @@ import * as C from "./checks";
 import * as D from "./delivery";
 import * as F from "./findings";
 import { buildDemo } from "./demo";
-import { setEnvironment } from "./environment";
+import { setEnvironment, type EnvironmentInput } from "./environment";
 import * as M from "./model";
 import * as P from "./peReview";
 import type { PeReviewTarget } from "./peReview";
 import * as B from "./studio/blueprint";
 import { setDomains } from "./studio/domains";
-import { setPreview } from "./studio/evidence";
+import { setPreview, type PreviewInput } from "./studio/evidence";
 import { markSubagentsSeen, setResearchHelpers } from "./subagents";
+import * as I from "./studio/import";
+import { startImportProject } from "./studio/importStart";
 import * as R from "./studio/runs";
 import * as S from "./studio/studio";
-import { type Mark, type StudioMaker, type VariantRules, ROUND_FOCUSES, STUDIO_AGENT_ROLES, STUDIO_ARTIFACT_KINDS, STUDIO_RUN_KINDS, VERDICTS } from "./studio/types";
+import { type ImportProjectStart, type Mark, type StudioMaker, type VariantRules, IMPORT_STEPS, ROUND_FOCUSES, STUDIO_AGENT_ROLES, STUDIO_ARTIFACT_KINDS, STUDIO_RUN_KINDS, VERDICTS } from "./studio/types";
 import { parseDictionary, parseRules } from "./studio/words";
 import {
   ControlError,
@@ -203,7 +205,86 @@ function peReviewTarget(a: Args): PeReviewTarget {
  * them like any command, but a client never sends them: the HTTP endpoint refuses them, as it refuses
  * `stageVisionDoc`.
  */
-export const SERVICE_COMMANDS: ReadonlySet<string> = new Set(["openRound", "closeRound", "addStudioArtifact", "addPeVerdicts", "addProbe", "setProbeStatus", "recordPeReview", "startStudioRun"]);
+export const SERVICE_COMMANDS: ReadonlySet<string> = new Set([
+  "openRound",
+  "closeRound",
+  "addStudioArtifact",
+  "addPeVerdicts",
+  "addProbe",
+  "setProbeStatus",
+  "recordPeReview",
+  "startStudioRun",
+  // the import (ORC-032): what the service's own runs found, and its stop
+  "recordImportChecks",
+  "recordImportRules",
+  "recordImportCapture",
+  "stopImport",
+]);
+
+/** An answer on the import, as the review sends it: a rule or a part, an option, and for "correct" its kind and the owner's words. */
+function devicesArg(v: unknown): Device[] {
+  return strings(v, "devices").map((d) => {
+    if (!DEVICES.includes(d as Device)) throw new InvalidCommandError(`unknown device ${d}: choose desktop, mobile or terminal`);
+    return d as Device;
+  });
+}
+function domainsArg(v: unknown): ProjectDomain[] {
+  return strings(v, "domains").map((d) => {
+    if (!PROJECT_DOMAINS.includes(d as ProjectDomain)) throw new InvalidCommandError(`unknown domain ${d}: choose screen, code or infrastructure`);
+    return d as ProjectDomain;
+  });
+}
+function previewArg(v: unknown): PreviewInput {
+  const p = obj(v, "preview");
+  const opt = (k: string) => (p[k] === undefined || p[k] === null ? undefined : p[k]);
+  return {
+    ...(opt("preview") !== undefined ? { preview: strings(p.preview, "preview.preview") } : {}),
+    ...(opt("port") !== undefined ? { port: num(p, "port") } : {}),
+    ...(opt("cliEntry") !== undefined && p.cliEntry !== "" ? { cliEntry: str(p, "cliEntry") } : {}),
+  };
+}
+function environmentArg(v: unknown): EnvironmentInput {
+  const e = obj(v, "environment");
+  const prepare = e.prepare === undefined || e.prepare === null ? [] : array<unknown>(e.prepare, "environment.prepare").map((c, i) => strings(c, `environment.prepare[${i}]`));
+  return {
+    ...(e.image === undefined || e.image === null || e.image === "" ? {} : { image: str(e, "image") }),
+    prepare,
+    hosts: e.hosts === undefined || e.hosts === null ? [] : strings(e.hosts, "environment.hosts"),
+    ...(e.devcontainer === undefined || e.devcontainer === null
+      ? {}
+      : (() => {
+          const d = obj(e.devcontainer, "environment.devcontainer");
+          return { devcontainer: { file: str(d, "file"), sha256: str(d, "sha256") } };
+        })()),
+  };
+}
+/** The import's start, as the Start screen sends it (ImportProjectStart). */
+function importProjectStart(a: Args): ImportProjectStart {
+  const size = obj(a.size, "size");
+  const tests = a.tests === undefined || a.tests === null ? undefined : obj(a.tests, "tests");
+  return {
+    name: str(a, "name"),
+    repoPath: str(a, "repoPath"),
+    commit: str(a, "commit"),
+    ...(a.branch === undefined ? {} : { branch: str(a, "branch") }),
+    size: { sourceFiles: num(size, "sourceFiles"), testFiles: num(size, "testFiles"), kb: num(size, "kb") },
+    domains: domainsArg(a.domains),
+    devices: devicesArg(a.devices),
+    ...(a.environment === undefined || a.environment === null ? {} : { environment: environmentArg(a.environment) }),
+    ...(a.preview === undefined || a.preview === null ? {} : { preview: previewArg(a.preview) }),
+    ...(tests ? { tests: { argv: strings(tests.argv, "tests.argv"), ...(tests.report === undefined || tests.report === null || tests.report === "" ? {} : { report: str(tests, "report") }) } } : {}),
+    ...(a.readsOn === undefined ? {} : { readsOn: provider(a.readsOn) }),
+    budgetUsd: num(a, "budgetUsd"),
+    helpers: numOrNull(a, "helpers"),
+  };
+}
+
+function importAnswer(v: unknown): I.ImportAnswerInput {
+  const o = obj(v, "answer");
+  const on = obj(o.on, "answer.on");
+  const target = on.rule !== undefined ? { rule: str(on, "rule") } : { part: str(on, "part") };
+  return { on: target, option: str(o, "option"), ...(o.correction === undefined ? {} : { correction: oneOf(o, "correction", ["change", "misread"] as const) }), ...(o.text === undefined ? {} : { text: str(o, "text") }) };
+}
 
 // ---- registry ----
 
@@ -239,27 +320,9 @@ export const COMMANDS = {
     return M.startFactory(s, { agreed: true, draftRev: int(a, "draftRev"), summaryDigest: str(a, "summaryDigest"), visionRev: num(a, "visionRev"), settings: factorySettings(a.settings), acceptOpen: strings(a.acceptOpen, "acceptOpen") }, now);
   }),
   /** The device scope: at least one of desktop, mobile and terminal. Chosen in Vision, which stays open while the factory runs. */
-  setDevices: same((s, now, a) =>
-    M.setDevices(
-      s,
-      strings(a.devices, "devices").map((d) => {
-        if (!DEVICES.includes(d as Device)) throw new InvalidCommandError(`unknown device ${d}: choose desktop, mobile or terminal`);
-        return d as Device;
-      }),
-      now,
-    ),
-  ),
+  setDevices: same((s, now, a) => M.setDevices(s, devicesArg(a.devices), now)),
   /** The product's domains: at least one of screen, code and infrastructure. The owner's only; the lead proposes them as a question. */
-  setDomains: same((s, now, a) =>
-    setDomains(
-      s,
-      strings(a.domains, "domains").map((d) => {
-        if (!PROJECT_DOMAINS.includes(d as ProjectDomain)) throw new InvalidCommandError(`unknown domain ${d}: choose screen, code or infrastructure`);
-        return d as ProjectDomain;
-      }),
-      now,
-    ),
-  ),
+  setDomains: same((s, now, a) => setDomains(s, domainsArg(a.domains), now)),
   /** Accept the lead's draft as drafted or with edits: a user-authored revision, compare-and-set on the vision. */
   acceptVisionDraft: same((s, now, a) =>
     M.acceptVisionDraft(s, str(a, "draftId"), num(a, "expectedRev"), { text: a.text === undefined ? undefined : str(a, "text"), focus: a.focus === undefined ? undefined : str(a, "focus") }, now),
@@ -295,6 +358,27 @@ export const COMMANDS = {
    */
   closeChangeOrder: same((s, now, a) => M.closeChangeOrder(s, int(a, "rev"), now)),
 
+  // the import of an existing repository (ORC-032): the owner's
+  /**
+   * Start an import: a new project from everything the Start screen set, in one command (ImportProjectStart): `name`,
+   * `repoPath` (the repository, or the bundled sample's path as POST /api/import/demo gives it), `commit`, `branch` and
+   * `size` as the screen read them, `domains`, `devices`, `environment` and `preview` (as setEnvironment and
+   * setPreview take them), `tests` ({ argv, report }: the test command and its JUnit report's path), `readsOn` (absent:
+   * Claude), `budgetUsd` and `helpers` (the rules reader's cap, or null). Checked in full first: on a refusal nothing
+   * changes. While the sample's runs are active, the sample pauses and the import starts once they stop
+   * (`importStartStatus`). Opens round 0, As it is today.
+   */
+  startImport: same((s, now, a) => startImportProject(s, importProjectStart(a), now)),
+  /** Change the import budget, for example at its stop. */
+  setImportBudget: same((s, now, a) => I.setImportBudget(s, num(a, "budgetUsd"), now)),
+  /** Your answers on the import's rules and parts, sent together. */
+  answerImport: same((s, now, a) => I.answerImport(s, array<unknown>(a.answers, "answers").map(importAnswer), now)),
+  /**
+   * The baseline Lock in: every part of the import goes into force as blueprint revision 1, in Vision. `draftRev` and
+   * `summaryDigest` name the summary you saw (compare-and-set). Never the lead's, a setting's or Autopilot's.
+   */
+  lockInBaseline: same((s, now, a) => I.lockInBaseline(s, { draftRev: int(a, "draftRev"), summaryDigest: str(a, "summaryDigest") }, now)),
+
   // the studio: the service's (SERVICE_COMMANDS), from the lead's, the designer's, the PE's and the probes' runs
   /** Returns { n }. */
   openRound: (s, now, a) => {
@@ -325,7 +409,12 @@ export const COMMANDS = {
         }),
         madeBy: studioMaker(a.madeBy),
         ...(a.supersedes === undefined ? {} : { supersedes: str(a, "supersedes") }),
-        ...(a.provenance === undefined ? {} : { provenance: { files: strings(obj(a.provenance, "provenance").files, "provenance.files") } }),
+        ...(a.provenance === undefined
+          ? {}
+          : (() => {
+              const p = obj(a.provenance, "provenance");
+              return { provenance: { files: strings(p.files, "provenance.files"), ...(p.commit === undefined ? {} : { commit: str(p, "commit") }), ...(p.page === undefined ? {} : { page: str(p, "page") }) } };
+            })()),
         ...(a.dictionary === undefined ? {} : { dictionary: checked(parseDictionary(a.dictionary), "dictionary") }),
         ...(a.rules === undefined ? {} : { rules: array<unknown>(a.rules, "rules").map(variantRules) }),
       },
@@ -356,11 +445,32 @@ export const COMMANDS = {
         ...(a.artifactId === undefined ? {} : { artifactId: str(a, "artifactId") }),
         ...(a.selection === undefined ? {} : { selection: selection(a.selection) }),
         brief: str(a, "brief"),
+        ...(a.importStep === undefined ? {} : { importStep: oneOf(a, "importStep", IMPORT_STEPS) }),
       },
       now,
     );
     return { state: r.state, result: { runId: r.runId } };
   },
+
+  // the import (ORC-032): the service's (SERVICE_COMMANDS), from its own runs
+  /** The baseline test run: { status: "read", counts, reportFile, simulated? } or { status: "not-run", reason }. */
+  recordImportChecks: same((s, now, a) => {
+    const r = obj(a.result, "result");
+    const status = oneOf(r, "status", ["read", "not-run"] as const);
+    if (status === "not-run") return I.recordImportChecks(s, { importId: str(a, "importId"), result: { status, reason: str(r, "reason") } }, now);
+    const c = obj(r.counts, "result.counts");
+    const counts = { passed: num(c, "passed"), failed: num(c, "failed"), skipped: num(c, "skipped"), error: num(c, "error") };
+    return I.recordImportChecks(s, { importId: str(a, "importId"), result: { status, counts, reportFile: str(r, "reportFile"), ...(r.simulated === true ? { simulated: true as const } : {}) } }, now);
+  }),
+  /** The rules reader's output, `{ rules, cases }`, checked as at the boundary (`parseImportReading`). */
+  recordImportRules: same((s, now, a) => {
+    const reading = checked(I.parseImportReading({ rules: a.rules, cases: a.cases }), "the reading");
+    return I.recordImportRules(s, { importId: str(a, "importId"), ...(a.runId === undefined ? {} : { runId: str(a, "runId") }), ...reading }, now);
+  }),
+  /** The capture of the import's screens, terminal demos and TUIs: what each recorded, or why nothing. */
+  recordImportCapture: same((s, now, a) => I.recordImportCapture(s, { importId: str(a, "importId"), capture: I.parseImportCapture(a.capture) }, now)),
+  /** The service stops the import, with the reason. */
+  stopImport: same((s, now, a) => I.stopImport(s, { importId: str(a, "importId"), reason: str(a, "reason") }, now)),
 
   // PE review of new work in the factory (ORC-029 2e, pass 5)
   /**
@@ -506,44 +616,14 @@ export const COMMANDS = {
    * preview and its port, the CLI's entry; `preview: null` clears it. The owner's only: the lead may propose one in its
    * message.
    */
-  setPreview: same((s, now, a) => {
-    if (a.preview === null) return setPreview(s, null, now);
-    const p = obj(a.preview, "preview");
-    const opt = (k: string) => (p[k] === undefined || p[k] === null ? undefined : p[k]);
-    return setPreview(
-      s,
-      {
-        ...(opt("preview") !== undefined ? { preview: strings(p.preview, "preview.preview") } : {}),
-        ...(opt("port") !== undefined ? { port: num(p, "port") } : {}),
-        ...(opt("cliEntry") !== undefined && p.cliEntry !== "" ? { cliEntry: str(p, "cliEntry") } : {}),
-      },
-      now,
-    );
-  }),
+  setPreview: same((s, now, a) => setPreview(s, a.preview === null ? null : previewArg(a.preview), now)),
 
   /**
    * The project's environment (docs/design/project-environment.md): the base image the owner confirmed (pinned by
    * digest), the prepare commands and the hosts added to the registries; `environment: null` clears it. The owner's
    * only: the lead may propose an image in its message.
    */
-  setEnvironment: same((s, now, a) => {
-    if (a.environment === null) return setEnvironment(s, null, now);
-    const e = obj(a.environment, "environment");
-    const prepare = e.prepare === undefined || e.prepare === null ? [] : array<unknown>(e.prepare, "environment.prepare").map((c, i) => strings(c, `environment.prepare[${i}]`));
-    return setEnvironment(
-      s,
-      {
-        ...(e.image === undefined || e.image === null || e.image === "" ? {} : { image: str(e, "image") }),
-        prepare,
-        hosts: e.hosts === undefined || e.hosts === null ? [] : strings(e.hosts, "environment.hosts"),
-        ...(e.devcontainer === undefined || e.devcontainer === null ? {} : (() => {
-          const d = obj(e.devcontainer, "environment.devcontainer");
-          return { devcontainer: { file: str(d, "file"), sha256: str(d, "sha256") } };
-        })()),
-      },
-      now,
-    );
-  }),
+  setEnvironment: same((s, now, a) => setEnvironment(s, a.environment === null ? null : environmentArg(a.environment), now)),
 
   // the lead
   /** A message stops a planning run in progress so it is answered next; `taskId` names the task page it was sent from. */

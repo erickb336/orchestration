@@ -26,6 +26,7 @@ It opens a sample project (Weekend Trips, a hiking app) on a simulated runtime, 
 3. **The factory.** The lead plans tasks from the blueprint and gives each a [flow](flows/README.md): Change, Bug fix, Feature, Design, Investigation or Goal. Each step is a fresh agent in its own git worktree. The service runs your checks in your project's own container, two agents review each change, and the coder repairs until all are clean.
 4. **Design and reality.** Each part of the blueprint shows where it stands. The built screen or CLI sits beside its design, and each rule sits beside its test.
 5. **Change orders.** Vision stays open. A new design goes into the draft, and **Lock in** shows what it changes before the lead updates the tasks.
+6. **Import an existing repository.** The import reads its tests, rules and parts into Vision, asks you only what the code cannot answer, and your Lock in makes it the baseline to change.
 
 You can message the lead, send a note to a running agent, pause a task, edit a step's output or rerun it. The [user guide](docs/user-guide.md) tells how.
 

@@ -131,6 +131,11 @@ export interface PreparedCopy {
   record: ContainerRecord;
   /** One command in its own container with no network, on the prepared image and the copy (the checks' run phase). */
   run(argv: string[], timeoutMs: number): Promise<Captured>;
+  /**
+   * Another copy of the copy as it is now, in the step's folder, for a phase that must not see what another phase
+   * wrote (each terminal tape of a capture). It goes with the step's folder, and counts toward the disk limit.
+   */
+  copyWork(): string;
   /** A container of the step's own that mounts the copy: removed if this process exits before it does. */
   track(name: string): void;
   untrack(name: string): void;
@@ -331,7 +336,7 @@ export class PreparedEnvironments {
       while (live) {
         await new Promise((r) => setTimeout(r, this.diskCheckMs));
         if (!live) return;
-        const used = (await bytesUnder(d.work)) + (await bytesUnder(d.cache));
+        const used = (await bytesUnder(d.run)) + (await bytesUnder(d.cache));
         if (!live || used <= this.diskBytes) continue;
         s.overDisk = `the copy and the cache (/work and /cache) passed the environment's disk limit of ${size(this.diskBytes)} (${size(used)} measured)`;
         this.note(s, `Stopped: ${s.overDisk}`);
@@ -398,6 +403,7 @@ export class PreparedEnvironments {
       }
       const docker = up.docker;
       const d = s.d!;
+      let copies = 0;
       const value = await use({
         docker,
         denv: this.denv,
@@ -406,6 +412,11 @@ export class PreparedEnvironments {
         imageEnv: st.imageEnv,
         record: st.record,
         run: (argv, timeoutMs) => this.execIn(s, phaseArgs({ name: envName("run"), image: st.runImage, work: d.work, argv, phase: { kind: "run" }, imageEnv: st.imageEnv }), timeoutMs),
+        copyWork: () => {
+          const to = join(d.run, `work-${++copies}`);
+          copyWorktree(d.work, to);
+          return to;
+        },
         track: (name) => {
           s.mounted.add(name);
           remember(name, docker, this.denv, "container");

@@ -45,15 +45,6 @@ describe("asking for a studio run", () => {
     expect(runOf(codex.state, codex.result.runId)).toMatchObject({ provider: "codex", model: "codex-sample-large" });
   });
 
-  it("in round 0 (as it is today), the designer reproduces the existing code and the PE reviews what it made, as in any round", () => {
-    const zero = openRound(fresh(), "material", at(1));
-    const d = ask(zero.state, { round: 0, brief: "Reproduce the trip list as it is today." });
-    expect(runOf(d.state, d.result.runId)).toMatchObject({ kind: "designer", round: 0, status: "queued" });
-    const a = addScreen(d.state, 0, at(3), { title: "Trip list (as is)", variants: [{ id: "a", label: "As it is today" }], provenance: { files: ["src/TripList.tsx"] } });
-    const pe = R.askForPeReviews(a.state, at(4));
-    expect(S.peRunsOf(pe, a.id, 1)).toEqual([expect.objectContaining({ kind: "pe", round: 0, status: "queued", provider: "codex" })]);
-  });
-
   it("a revision names the artifact and the version it revises", () => {
     const { s, n } = inRound();
     const a = addScreen(s, n, at(2));

@@ -183,67 +183,62 @@ describe("a designer run at the service", () => {
     expect(prompt).toContain("`kind`: one of screen, terminal-demo, tui, contract, flow, interface, algorithm, topology, dictionary.");
     expect(prompt).toContain("- A document (contract, flow, interface, algorithm, topology) is plain files: Markdown (.md) with code blocks and tables, and Mermaid (.mmd) for diagrams, which the app renders. Its variant's entry is its main .md file; it has no devices.");
     expect(prompt).toContain('Names use only letters, digits, ".", "_", "-" and spaces.');
-    // Only round 0 of an existing repository is "as it is today".
+    // Only round 0, the import's, is "as it is today".
     expect(prompt).not.toContain("## As it is today");
   });
 
-  it("in round 0 (as it is today), it is asked to reproduce the code read-only and name each artifact's provenance; a Codex designer is told its reads are not confined", async () => {
-    await service({ workspaces: true });
+  /** A new project on the service's repository with one source file, and its import started at HEAD (ORC-032). */
+  function importRepo(o: { readsOn?: "codex" } = {}): { repo: string; commit: string } {
     const repo = state().project.repoPath;
     mkdirSync(join(repo, "src"));
     writeFileSync(join(repo, "src", "index.html"), "<h1>Trips</h1>");
     execFileSync("git", ["-C", repo, "add", "-A"]);
     execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "the trip list"]);
-    cmd("initProject", { name: "Trips", repoPath: repo, vision: "Weekend trips for a small group of friends.", focus: "" });
-    cmd("openRound", { focus: "material", summary: "As it is today" });
-    const id = startDesignerRun(store, { round: 0, brief: "Reproduce the trip list as it is today." }, iso());
+    const commit = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    cmd("startImport", { name: "Trips", repoPath: repo, commit, domains: ["screen"], devices: ["desktop", "mobile"], budgetUsd: 3, helpers: null, size: { sourceFiles: 1, testFiles: 0, kb: 1 }, ...o });
+    return { repo, commit };
+  }
+
+  it("in round 0, an import's designer reads a checkout at the import's commit, reproduces the code and names each artifact's provenance; a Codex designer is told its reads are not confined", async () => {
+    await service({ workspaces: true });
+    const { commit } = importRepo();
     tick();
-    const a = claude.runs.get(id)!;
-    expect(a.prompt).toContain(`# Studio run ${id}: the designer, round 0 (material)`);
-    expect(a.prompt).toContain("## As it is today\n\nThis round reproduces what the product's repository already does, before anything changes");
-    expect(a.prompt).toContain(`- Read the code, read-only, in the checkout at ${a.workspace.readRoots![0]}. The service lets you read only that checkout and your working directory.`);
-    expect(a.prompt).toContain("- Reproduce what the code does now, not what it could become");
+    const words = state().studio.runs.find((r) => r.importStep === "words")!;
+    const a = claude.runs.get(words.id)!;
+    expect(a.prompt).toContain(`# Studio run ${words.id}: the designer, round 0 (material)`);
+    expect(a.prompt).toContain(`## As it is today\n\nThis run is part of the import of the product's repository at commit ${commit.slice(0, 7)} (round 0, As it is today).`);
+    expect(a.prompt).toContain(`- Read the code, read-only, in the checkout at ${a.workspace.readRoots![0]} (commit ${commit.slice(0, 7)}). The service lets you read only that checkout and your working directory.`);
     expect(a.prompt).toContain('give every artifact `"provenance"`: the repository files it came from');
-    expect(a.prompt).toContain("- Code in the repository (1 of 2 tracked files): src/index.html.");
-    const cx = startDesignerRun(store, { round: 0, brief: "Reproduce the trip list as it is today.", selection: { provider: "codex", model: "auto" } }, iso());
+    expect(a.prompt).toContain("## The import: the words\n\n- Hand in one dictionary (kind `dictionary`)");
+    // The commit's files, written from git's object store: no checkout, and no .git (SR-2).
+    expect(readFileSync(join(a.workspace.readRoots![0], "src", "index.html"), "utf8")).toBe("<h1>Trips</h1>");
+    expect(existsSync(join(a.workspace.readRoots![0], ".git"))).toBe(false);
+    // On Codex (Q5: only when the owner picks it), the reads are not confined, and the envelope says so.
+    await scheduler.stop();
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dataDir, { recursive: true });
+    await service({ workspaces: true });
+    importRepo({ readsOn: "codex" });
     tick();
-    expect(codex.runs.get(cx)!.prompt).toContain("On Codex the service cannot confine what you read (as for every Codex run), so read only that checkout.");
+    const cx = state().studio.runs.find((r) => r.importStep === "words")!;
+    expect(codex.runs.get(cx.id)!.prompt).toContain("On Codex the service cannot confine what you read (as for every Codex run), so read only that checkout.");
   });
 
-  it("a reproduction is imported with its provenance, reviewed by a PE that reads the code and judges only its faithfulness, and never revised for the PE (review findings 5 and 11)", async () => {
+  it("an import's words run is imported with its provenance at the import's commit, and its checkout is removed when it ends", async () => {
     await service({ workspaces: true });
-    const repo = state().project.repoPath;
-    mkdirSync(join(repo, "src"));
-    writeFileSync(join(repo, "src", "index.html"), "<h1>Trips</h1>");
-    execFileSync("git", ["-C", repo, "add", "-A"]);
-    execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "the trip list"]);
-    cmd("initProject", { name: "Trips", repoPath: repo, vision: "Weekend trips for a small group of friends.", focus: "" });
-    cmd("openRound", { focus: "material", summary: "As it is today" });
-    const id = startDesignerRun(store, { round: 0, brief: "Reproduce the trip list as it is today." }, iso());
+    const { commit } = importRepo();
     tick();
-    const asIs = { ...TRIP_PLAN, title: "Trip list (as is)", variants: [TRIP_PLAN.variants[0]], files: ["a/index.html", "a/style.css"], provenance: ["src/index.html"] };
-    handIn(claude.runs.get(id)!, { artifacts: [asIs] });
-    finish(id);
+    const words = state().studio.runs.find((r) => r.importStep === "words")!;
+    const a = claude.runs.get(words.id)!;
+    const checkout = a.workspace.readRoots![0];
+    const dictionary = { kind: "dictionary", title: "Words", devices: [], variants: [{ id: "a", label: "As it is today", entry: "dictionary.json" }], files: ["dictionary.json"], provenance: ["src/index.html"] };
+    handIn(a, { artifacts: [dictionary] }, { "dictionary.json": JSON.stringify([{ term: "trip", meaning: "A weekend away with friends.", avoid: [] }]) });
+    finish(words.id);
     tick();
     const [v1] = S.latestArtifacts(state());
-    expect(v1).toMatchObject({ round: 0, provenance: { asIs: true, files: ["src/index.html"] } });
-    tick();
-    const pe = state().studio.runs.find((r) => r.kind === "pe")!;
-    const a = codex.runs.get(pe.id)!;
-    // It reads a checkout of the code beside the version, and is told what to judge.
-    const checkout = a.workspace.readRoots![0];
-    expect(readFileSync(join(checkout, "src", "index.html"), "utf8")).toBe("<h1>Trips</h1>");
-    expect(a.prompt).toContain("Judge each variant on one thing only: does it reproduce the code faithfully? The designer named the repository files it came from: src/index.html.");
-    expect(a.prompt).toContain(`- The product's repository, as committed, is readable at ${checkout}.`);
-    expect(a.prompt).toContain("- The designer does not revise a reproduction for you: your verdict goes to the owner with the artifact, and the owner corrects it.");
-    expect(a.prompt).not.toContain("## The budgets");
-    peFinish(pe.id, answer([{ variant: "a", verdict: "feasible-if", reasons: "The list matches.", change: "The code sorts trips by date." }]));
-    tick();
-    tick();
-    // Its pass asked for a change: review ends there, the owner sees it, and no designer run revises it.
-    expect(S.peReview(state(), S.getArtifact(state(), v1.id, 1))).toMatchObject({ status: "ended", ended: "as-is", asks: [{ change: "The code sorts trips by date." }] });
-    expect(state().studio.runs.filter((r) => r.kind === "designer")).toHaveLength(1);
-    // The PE's checkout is removed once its run ends.
+    expect(v1).toMatchObject({ round: 0, kind: "dictionary", provenance: { asIs: true, files: ["src/index.html"], commit } });
+    expect(runOf(words.id).status).toBe("completed");
     expect(existsSync(checkout)).toBe(false);
   });
 

@@ -23,6 +23,9 @@ export const MAX_AVOID = 8;
 export const MAX_RULES = 60;
 export const MAX_EXAMPLES = 30;
 export const MAX_RULE_TEXT = 400;
+/** The most existing tests one rule names (ORC-032), and the longest test id ("suite::name"). */
+export const MAX_RULE_TESTS = 20;
+export const MAX_TEST_ID = 500;
 /** The most problems one refusal lists: the designer's next run fixes them together. */
 const MAX_ERRORS = 8;
 
@@ -133,8 +136,9 @@ export const PATTERNS_HELP = `A rule fits one of: ${PATTERNS.map((p) => `"${p.fo
 const ID = /^[A-Za-z0-9_-]{1,20}$/;
 
 /**
- * A rules.json: `{ "rules": [{ "id", "text" }], "examples": [{ "id", "text" }] }`, with 1 to 60 rules, each in one
- * of EARS's five patterns, and up to 30 examples (the list may be left out), each "Given …, when …, then …". Ids are
+ * A rules.json: `{ "rules": [{ "id", "text", "tests"? }], "examples": [{ "id", "text" }] }`, with 1 to 60 rules, each
+ * in one of EARS's five patterns and naming up to 20 existing tests (ORC-032; the import checks them against its
+ * baseline report), and up to 30 examples (the list may be left out), each "Given …, when …, then …". Ids are
  * letters, digits, "-" and "_", each once across both lists. Each line that fits no pattern is named with its id;
  * then the patterns it may fit.
  */
@@ -167,8 +171,14 @@ export function parseRules(raw: unknown): Parsed<{ rules: FlowRule[]; examples: 
   raw.rules.forEach((v, i) => {
     const r = lineOf(v, i, "rule");
     if (!r) return;
+    // The existing tests that prove it (ORC-032): ids of the baseline report, which the import checks against it.
+    const tests = (v as { tests?: unknown }).tests;
+    if (tests !== undefined && (!Array.isArray(tests) || tests.length > MAX_RULE_TESTS || !tests.every((t) => typeof t === "string" && t.length > 0 && t.length <= MAX_TEST_ID) || new Set(tests).size !== tests.length)) {
+      errors.push(`rule ${r.id}: "tests" is a list of at most ${MAX_RULE_TESTS} different test ids`);
+      return;
+    }
     const pattern = rulePattern(r.text);
-    if (pattern) rules.push({ ...r, pattern });
+    if (pattern) rules.push({ ...r, pattern, ...(tests?.length ? { tests: tests as string[] } : {}) });
     else {
       unfit = true;
       errors.push(`rule ${r.id} fits no pattern: ${show(r.text, 160)}`);

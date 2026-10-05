@@ -77,9 +77,11 @@ export interface StagedArtifact {
   files: StagedFile[];
   /** An "as is" reproduction of the existing repository: the repository files it came from, as the designer listed them. */
   provenance?: string[];
+  /** An "as is" screen's page in the running app ("/trips"), which the import's capture opens (ORC-032, U2-F2). */
+  page?: string;
   /** A dictionary's terms, from its dictionary.json, checked (pass 4d). */
   dictionary?: DictionaryEntry[];
-  /** A flow's rules, from the rules.json beside each variant's entry that has one, checked (pass 4d). */
+  /** A part's rules, from the rules.json beside each variant's entry that has one, checked (pass 4d; any kind but a dictionary, ORC-032). */
   rules?: VariantRules[];
 }
 
@@ -200,9 +202,12 @@ export function readStaged(staging: string, kinds: readonly StudioArtifactKind[]
     });
     checkTerminalFiles(where, a.kind as StudioArtifactKind, variants, files);
     const provenance = a.provenance === undefined ? undefined : provenanceOf(a.provenance, where);
+    // An imported screen's page in the running app; the domain checks its form when it records the version.
+    if (a.page !== undefined && (typeof a.page !== "string" || !provenance)) throw new ManifestError(`${where}: "page" is the path of a reproduced screen in the running app, as text, beside its "provenance".`);
     const dictionary = a.kind === "dictionary" ? dictionaryOf(where, devices, variants, files) : undefined;
-    const rules = a.kind === "flow" ? rulesOf(where, variants, files) : [];
-    return { kind: a.kind as StudioArtifactKind, title: a.title, devices: devices as Device[], variants, files, ...(provenance ? { provenance } : {}), ...(dictionary ? { dictionary } : {}), ...(rules.length ? { rules } : {}) };
+    // Any part may carry rules (ORC-032 D1): a flow's decided cases, an imported part's rules with the tests that prove them.
+    const rules = a.kind === "dictionary" ? [] : rulesOf(where, variants, files);
+    return { kind: a.kind as StudioArtifactKind, title: a.title, devices: devices as Device[], variants, files, ...(provenance ? { provenance } : {}), ...(typeof a.page === "string" ? { page: a.page } : {}), ...(dictionary ? { dictionary } : {}), ...(rules.length ? { rules } : {}) };
   });
 }
 

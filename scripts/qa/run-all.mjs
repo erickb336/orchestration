@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { EVIDENCE, ROOT, buildApp, removeApp } from "./harness.mjs";
 
-const ALL = ["new-project", "vision-round", "lock-in", "preflight", "task-delivery", "change-order", "budget-stop", "pause-resume", "notes", "settings", "screens"];
+const ALL = ["new-project", "import", "vision-round", "lock-in", "preflight", "task-delivery", "change-order", "budget-stop", "pause-resume", "notes", "settings", "screens"];
 const asked = process.argv.slice(2).filter((a) => !a.startsWith("-"));
 const unknown = asked.filter((a) => !ALL.includes(a));
 if (unknown.length) {

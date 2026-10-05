@@ -3,14 +3,16 @@
 // runs have sections of their own (BudgetsSection.tsx, Runs.tsx). In real mode, Start a new project is its own form with its
 // own button.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import * as M from "../../domain/model";
 import type { Device, ProjectDomain } from "../../domain/types";
-import { Button, Checkbox, Disclosure, Field, Input, Textarea, useConfirm } from "../kit";
+import { Button, Checkbox, Disclosure, Field, Input, SegmentedControl, Textarea, useConfirm } from "../kit";
+import { StartImport, StartWaits } from "../import/StartImport";
 import { DeliveryCard, deliveryErrors, deliverySteps, liveDelivery, type DeliveryDraft } from "../DeliverySettings";
 import { confirmNewProject } from "../settingsText";
 import { DOMAIN_CHOICES, toggleDomain } from "../studio/studioView";
 import { initProjectConfirm } from "../stageChoice";
+import { focusHeading } from "../common";
 import { useStore } from "../store";
 import { devicesProblem, devicesSteps } from "./budgets";
 import { DevicesCard } from "./DevicesCard";
@@ -107,8 +109,33 @@ export function ProjectSection({ current, onDirty }: { current: boolean; onDirty
 
       <DeliveryCard v={v} set={draft.set} confirm={confirm} />
 
-      {real && <NewProjectCard openByDefault={!repo?.ok} />}
+      {real ? <NewProjectCard openByDefault={!repo?.ok} /> : <TryImportCard />}
     </SettingsSection>
+  );
+}
+
+/**
+ * The demo: the import on the invented sample repository, tally (ORC-032), with the simulated runtime. It replaces the
+ * sample project, as a new project does in real mode.
+ */
+function TryImportCard() {
+  const [open, setOpen] = useState(false);
+  // Only the click on the button opens Start in its place: focus goes to the card's heading (the kit's Card names it
+  // `<id>-title`), UX30-2. It stays in Settings, so the page does not go to its top.
+  useEffect(() => {
+    if (open) focusHeading(document.getElementById("new-project-title"), false);
+  }, [open]);
+  return (
+    <SettingsCard id="new-project" title="Import an existing repository" help="In the demo, the import reads tally, an invented command-line tool, and every run is simulated. It replaces the sample project.">
+      <StartWaits />
+      {open ? (
+        <StartImport sample onCancel={() => setOpen(false)} />
+      ) : (
+        <div>
+          <Button onClick={() => setOpen(true)}>Try the import on a sample repository (tally)</Button>
+        </div>
+      )}
+    </SettingsCard>
   );
 }
 
@@ -120,6 +147,29 @@ const projectStartedNotice = (name: string) => `"${name}" is ready. Every projec
  * it started, the page says so and opens Vision, where every project begins.
  */
 function NewProjectCard({ openByDefault }: { openByDefault: boolean }) {
+  const [how, setHow] = useState<"idea" | "import">("idea");
+  return (
+    <SettingsCard id="new-project" title="Start a new project" help="Replaces this board and its history with an empty project; refused while any run is active.">
+      <Disclosure label="New project form" defaultOpen={openByDefault}>
+        <div className="k-stack">
+          <SegmentedControl
+            label="How the project starts"
+            value={how}
+            onChange={setHow}
+            options={[
+              { value: "idea", label: "From an idea" },
+              { value: "import", label: "Import an existing repository" },
+            ]}
+          />
+          {how === "idea" ? <FromAnIdea /> : <StartImport sample={false} />}
+        </div>
+      </Disclosure>
+    </SettingsCard>
+  );
+}
+
+/** A new project from an idea: its name, its repository, and the vision, which may stay empty. */
+function FromAnIdea() {
   const { state, send, disabled, setNotice } = useStore();
   const confirm = useConfirm();
   const [name, setName] = useState("");
@@ -129,37 +179,33 @@ function NewProjectCard({ openByDefault }: { openByDefault: boolean }) {
   // Every project begins in Vision (the vision may stay empty); the factory starts only when you start it.
   const docCount = M.currentVisionDocs(state).length;
   return (
-    <SettingsCard id="new-project" title="Start a new project" help="Replaces this board and its history with an empty project; refused while any run is active.">
-      <Disclosure label="New project form" defaultOpen={openByDefault}>
-        <form
-          onSubmit={async (e) => {
-            e.preventDefault();
-            if (!(await confirm(confirmNewProject(name, initProjectConfirm(name, docCount))))) return;
-            if (!(await send("initProject", { name, repoPath: repo, vision, focus })).ok) return;
-            // Every project begins in Vision: say that it started, and go there.
-            setNotice({ kind: "info", message: projectStartedNotice(name) });
-            location.hash = "#/vision";
-          }}
-        >
-          <div className="s-fields s-fields--wide">
-            <Field label="Name">
-              <Input type="text" value={name} onChange={(e) => setName(e.target.value)} required />
-            </Field>
-            <Field label="Repository path (absolute)" hint="A git repository with at least one commit.">
-              <Input type="text" className="s-mono" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="/path/to/your/repo" required />
-            </Field>
-          </div>
-          <Field label="Vision (optional)" className="s-gap">
-            <Textarea value={vision} onChange={(e) => setVision(e.target.value)} />
-          </Field>
-          <Field label="Current focus">
-            <Input type="text" value={focus} onChange={(e) => setFocus(e.target.value)} />
-          </Field>
-          <Button type="submit" className="s-gap" disabled={disabled}>
-            Start project
-          </Button>
-        </form>
-      </Disclosure>
-    </SettingsCard>
+    <form
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (!(await confirm(confirmNewProject(name, initProjectConfirm(name, docCount))))) return;
+        if (!(await send("initProject", { name, repoPath: repo, vision, focus })).ok) return;
+        // Every project begins in Vision: say that it started, and go there.
+        setNotice({ kind: "info", message: projectStartedNotice(name) });
+        location.hash = "#/vision";
+      }}
+    >
+      <div className="s-fields s-fields--wide">
+        <Field label="Name">
+          <Input type="text" value={name} onChange={(e) => setName(e.target.value)} required />
+        </Field>
+        <Field label="Repository path (absolute)" hint="A git repository with at least one commit.">
+          <Input type="text" className="s-mono" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="/path/to/your/repo" required />
+        </Field>
+      </div>
+      <Field label="Vision (optional)" className="s-gap">
+        <Textarea value={vision} onChange={(e) => setVision(e.target.value)} />
+      </Field>
+      <Field label="Current focus">
+        <Input type="text" value={focus} onChange={(e) => setFocus(e.target.value)} />
+      </Field>
+      <Button type="submit" className="s-gap" disabled={disabled}>
+        Start project
+      </Button>
+    </form>
   );
 }

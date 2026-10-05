@@ -14,9 +14,9 @@ import type { StudioRun } from "../../src/domain/studio/types";
 import type { GivenPrinciple, ProseCheck, State } from "../../src/domain/types";
 import { LEAD_PRINCIPLES_HEADER, PRINCIPLES_WORD_CAP, principlesSection, proseFeedbackBlock, type ProseFeedbackWords } from "../envelope";
 
-/** The principles a run of this kind is given, in table order, each with the hash of its body. A probe gets none. */
+/** The principles a run of this kind is given, in table order, each with the hash of its body. A research run (a probe, the import's reader) gets none. */
 export function studioPrinciples(kind: StudioRun["kind"]): GivenPrinciple[] {
-  if (kind === "probe") return [];
+  if (kind === "probe" || kind === "reader") return [];
   return orderPrinciples(STUDIO_PRINCIPLE_IDS[kind]).map((id) => ({ id, hash: principle(id)?.hash ?? "" }));
 }
 
@@ -66,7 +66,7 @@ const FEEDBACK_WORDS: Record<"designer" | "pe", ProseFeedbackWords> = {
 
 /** The feedback on the role's last checked text, as envelope lines (then an empty line); none when it broke no rule. */
 export function studioFeedbackLines(s: State, run: StudioRun): string[] {
-  return run.kind === "probe" ? [] : lines(proseFeedbackBlock(lastStudioProse(s, run), FEEDBACK_WORDS[run.kind]));
+  return run.kind === "probe" || run.kind === "reader" ? [] : lines(proseFeedbackBlock(lastStudioProse(s, run), FEEDBACK_WORDS[run.kind]));
 }
 
 const lines = (section: string): string[] => (section.trim() ? [section.trim(), ""] : []);

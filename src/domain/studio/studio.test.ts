@@ -6,6 +6,7 @@ import { InvalidCommandError, runCommand } from "../commands";
 import * as M from "../model";
 import { buildSeed } from "../seed";
 import { startFactoryAsOwner } from "../testing/factory";
+import { TALLY_COMMIT, tallyImport } from "../testing/import";
 import { ABC, DESIGNER, addScreen, feedback, openRound, peAgrees, pePass, run, sha } from "../testing/studio";
 import { ControlError, StaleWriteError, type State } from "../types";
 import * as R from "./runs";
@@ -35,46 +36,48 @@ function nextRound(s: State, sec: number, focus = "experience") {
   return openRound(runCommand(s, "closeRound", { round: cur.n }, at(sec)).state, focus, at(sec));
 }
 
-describe("as it is today: round 0 of an existing repository (pass 4)", () => {
-  const asIs = (over: Record<string, unknown> = {}) => ({ title: "Trip list (as is)", variants: [{ id: "a", label: "As it is today", entry: "a/index.html" }], files: [{ path: "a/index.html", sha256: sha("a") }], provenance: { files: ["src/TripList.tsx", "src/trips.css"] }, ...over });
+describe("as it is today: round 0 of an import (ORC-032)", () => {
+  const asIs = (over: Record<string, unknown> = {}) => ({ title: "Trip list (as is)", variants: [{ id: "a", label: "As it is today", entry: "a/index.html" }], files: [{ path: "a/index.html", sha256: sha("a") }], devices: ["terminal"], provenance: { files: ["src/TripList.tsx", "src/trips.css"] }, ...over });
+  /** Round 0 of tally's import, as it starts. */
+  const importZero = () => ({ state: tallyImport("started").s, n: 0 });
 
-  it("holds the designer's reproductions of the code, labelled as is with the repository files they came from, which the PE reviews", () => {
-    const zero = openRound(fresh(), "material", at(1));
-    expect(zero.n).toBe(0);
+  it("holds the designer's reproductions of the code, labelled as is with the repository files they came from, at the import's commit", () => {
+    const zero = importZero();
     const a = addScreen(zero.state, 0, at(2), asIs({ provenance: { files: ["src/TripList.tsx", "src/trips.css", "src/TripList.tsx"] } }));
     const v1 = art(a.state, a.id, 1);
-    expect(v1).toMatchObject({ round: 0, kind: "screen", provenance: { asIs: true, files: ["src/TripList.tsx", "src/trips.css"] } });
+    expect(v1).toMatchObject({ round: 0, kind: "screen", provenance: { asIs: true, files: ["src/TripList.tsx", "src/trips.css"], commit: TALLY_COMMIT } });
     expect(a.state.events.at(-1)!.message).toBe("Trip list (as is) v1 added to round 0, by the designer (claude); as is, from 2 repository files");
-    // Not what the owner brought: the PE reviews it before the owner sees it.
-    expect(S.readyForOwner(a.state, v1)).toBe(false);
-    const agreed = peAgrees(a.state, a.id, 1, ["a"], at(3));
-    expect(S.readyForOwner(agreed, art(agreed, a.id, 1))).toBe(true);
+    // The PE does not review a part of an import (C6): its tests and its recording check it.
+    expect(S.peReview(a.state, v1)).toEqual({ status: "not-reviewed", why: S.IMPORT_PART_WHY });
     // A correction in round 0 is still as is, with its provenance; a later round's revision is a proposal and has none.
-    const v2 = addScreen(agreed, 0, at(4), asIs({ artifactId: a.id, provenance: { files: ["src/TripList.tsx"] } }));
-    expect(art(v2.state, a.id, 2).provenance).toEqual({ asIs: true, files: ["src/TripList.tsx"] });
-    const later = openRound(run(v2.state, "closeRound", { round: 0 }, at(5)).state, "experience", at(6));
-    const v3 = addScreen(later.state, later.n, at(7), { artifactId: a.id });
+    const v2 = addScreen(a.state, 0, at(4), asIs({ artifactId: a.id, provenance: { files: ["src/TripList.tsx"] } }));
+    expect(art(v2.state, a.id, 2).provenance).toEqual({ asIs: true, files: ["src/TripList.tsx"], commit: TALLY_COMMIT });
+    // Round 0 closes with the baseline (CR-3): here, as if the import were locked in.
+    const locked = structuredClone(v2.state);
+    locked.studio.import!.lockedInAt = at(5);
+    const later = openRound(run(locked, "closeRound", { round: 0 }, at(5)).state, "experience", at(6));
+    const v3 = addScreen(later.state, later.n, at(7), { artifactId: a.id, devices: ["terminal"] });
     expect(art(v3.state, a.id, 3).provenance).toBeUndefined();
   });
 
-  it("a reproduction is not revised for the PE: what the PE says of its faithfulness goes to the owner at once (review finding 5)", () => {
+  it("a screen names its page in the running app, which the import's capture opens (U2-F2); only a screen has one", () => {
+    const zero = importZero();
+    const a = addScreen(zero.state, 0, at(2), asIs({ provenance: { files: ["src/TripList.tsx"], page: "/trips?view=list" } }));
+    expect(art(a.state, a.id, 1).provenance).toEqual({ asIs: true, files: ["src/TripList.tsx"], commit: TALLY_COMMIT, page: "/trips?view=list" });
+    const refused = "A screen's page is a path in the running app, such as /trips. Only a screen has one.";
+    for (const page of ["trips", "/a b", "/\u0007", `/${"x".repeat(200)}`]) expect(() => addScreen(zero.state, 0, at(2), asIs({ provenance: { files: ["src/TripList.tsx"], page } }))).toThrow(refused);
+    expect(() => addScreen(zero.state, 0, at(2), asIs({ kind: "terminal-demo", variants: [{ id: "a", label: "As it is today", entry: "a/demo.tape" }], files: [{ path: "a/demo.tape", sha256: sha("a") }], provenance: { files: ["src/cli.ts"], page: "/" } }))).toThrow(refused);
+  });
+
+  it("refuses as-is provenance outside an import: the import is the one way to reproduce an existing repository (U2-Q3)", () => {
     const zero = openRound(fresh(), "material", at(1));
-    const a = addScreen(zero.state, 0, at(2), asIs());
-    const s = pePass(a.state, a.id, 1, [{ verdict: "feasible-if", reasons: "The list matches the code.", change: "The code sorts trips by date; the reproduction does not." }], at(3));
-    const v1 = art(s, a.id, 1);
-    expect(S.peReview(s, v1)).toMatchObject({ status: "ended", ended: "as-is", pass: 1, objections: [], asks: [{ change: "The code sorts trips by date; the reproduction does not." }] });
-    expect(S.revisionDue(s, v1)).toBe(false);
-    expect(S.readyForOwner(s, v1)).toBe(true);
-    expect(s.events.at(-1)!.message).toBe(
-      "PE review of Trip list (as is) v1, pass 1: feasible if changed; review ended: it reproduces the code as it is today, and the designer does not revise a reproduction for the PE; it goes to the owner with the changes the PE asks for",
-    );
-    // The owner corrects it: a mark, and the round can close.
-    expect(S.currentFeedback(feedback(s, a.id, 1, { mark: "change", note: "Sort by date, as the code does." }, at(4)), a.id, 1)?.mark).toBe("change");
-    expect(S.roundBusy(s, 0)).toBeUndefined();
+    expect(() => addScreen(zero.state, 0, at(2), asIs({ devices: ["desktop"] }))).toThrow("Only the import of an existing repository reproduces its code as it is today.");
+    // In round 0 without an import, only what the owner brought.
+    expect(() => addScreen(zero.state, 0, at(2), { devices: ["desktop"] })).toThrow(/Round 0 holds what already exists/);
   });
 
   it("refuses as-is artifacts anywhere else, from anyone else, and provenance that is not a path in the repository", () => {
-    const zero = openRound(fresh(), "material", at(1));
+    const zero = importZero();
     const outside = "Only the designer's reproductions of the existing code in round 0 (as it is today) are labelled as is.";
     expect(() => addScreen(zero.state, 0, at(2), asIs({ kind: "material", madeBy: { role: "user" } }))).toThrow(outside);
     expect(() => addScreen(zero.state, 0, at(2), asIs({ madeBy: { ...DESIGNER, role: "probe" } }))).toThrow(/Round 0 holds what already exists/);

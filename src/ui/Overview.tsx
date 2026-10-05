@@ -17,7 +17,10 @@ import { Onboarding } from "./Onboarding";
 import { foldSummary, messageStatusText } from "./notes";
 import { landedVerdict, latestLeadReply, liveText, needsYouItems, optionsLine, progressByArea, replyExcerpt, type AreaProgress, type NeedsYouEntry } from "./progress";
 import { VisionLine } from "./studio/VisionCard";
-import { Button, ButtonLink, Card, Chip, EmptyState, Field, Input, NeedsYouItem, Row, Rows, SimulatedChip, useConfirm } from "./kit";
+import { Button, ButtonLink, Card, Chip, EmptyState, Field, Input, NeedsYouItem, Row, Rows, SimulatedChip, StatePill, useConfirm } from "./kit";
+import { importStatus, unansweredQuestions } from "../domain/studio/import";
+import { AskForRound } from "./import/AfterBaseline";
+import { budgetStopLine, importPill, nothingToBuild, readingSteps } from "./import/importView";
 import type { FindingDecision, PrDelivery, SpecOption, State, Task, VisionRevision } from "../domain/types";
 
 /** The one name for each involvement setting, wherever it is shown. */
@@ -42,6 +45,7 @@ export function Overview() {
       <h1 className="no-margin">Home</h1>
       <Onboarding />
       <VisionLine />
+      <ImportHome />
       <div data-tour="needs-you">
         <NeedsYouCard state={state} />
       </div>
@@ -80,6 +84,67 @@ function FactoryHome({ state }: { state: State }) {
         <LatestFromLead state={state} withFocus />
       </div>
     </div>
+  );
+}
+
+// ---------- the import (ORC-032) ----------
+
+/**
+ * The import on Home: while it reads, its steps; while the review waits, that it needs you; after the baseline, the
+ * factory has nothing to build until you change the design ("2 changes to design" when you asked for some, with Ask
+ * the lead for a round).
+ */
+export function ImportHome() {
+  const { state } = useStore();
+  const status = importStatus(state);
+  if (!status) return null;
+  const stopLine = budgetStopLine(state);
+  const vision = (
+    <ButtonLink size="small" href="#/vision" variant={status === "review" ? "primary" : "secondary"}>
+      {status === "review" ? "Answer in Vision" : "Open Vision"}
+    </ButtonLink>
+  );
+  if (status === "reading" || status === "stopped") {
+    const steps = readingSteps(state);
+    const done = steps.filter((s) => s.mark === "done" || s.mark === "skipped");
+    const pill = importPill(state, "importing");
+    return (
+      <Card title="The import" actions={<StatePill tone={pill.tone} pulse={pill.pulse} paused={pill.paused}>{pill.text}</StatePill>}>
+        <p className="no-margin">{status === "stopped" ? `It stopped: ${state.studio.import!.stopped!.reason}` : [stopLine, `${done.length} of ${steps.length} steps done${done.length ? `: ${done.map((s) => s.name).join(", ")}` : ""}.`].filter(Boolean).join(" ")}</p>
+        <div className="k-actions">{vision}</div>
+      </Card>
+    );
+  }
+  if (status === "review") {
+    const imp = state.studio.import!;
+    const open = unansweredQuestions(imp).length;
+    return (
+      <Card title="The import" actions={<StatePill tone="you">needs you</StatePill>}>
+        <p className="no-margin">{[open ? `Round 0, As it is today, asks you ${open} question${open === 1 ? "" : "s"}. Answer in Vision, then lock in the baseline.` : "Every question is answered. Lock in the baseline in Vision.", stopLine].filter(Boolean).join(" ")}</p>
+        <div className="k-actions">{vision}</div>
+      </Card>
+    );
+  }
+  if (state.project.stage !== "shaping") return null;
+  const n = nothingToBuild(state);
+  return (
+    <Card
+      title="The factory"
+      actions={
+        <ButtonLink size="small" href="#/tasks">
+          All tasks
+        </ButtonLink>
+      }
+    >
+      <p className="no-margin">
+        <b>{n.bold}</b>
+        {n.rest}
+      </p>
+      <div className="k-actions">
+        {vision}
+        {n.changes > 0 && <AskForRound />}
+      </div>
+    </Card>
   );
 }
 

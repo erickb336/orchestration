@@ -11,6 +11,7 @@ import { buildSeed } from "../../domain/seed";
 import * as R from "../../domain/studio/runs";
 import * as S from "../../domain/studio/studio";
 import { DESIGNER, addScreen, feedback, openRound, peAgrees, pePass, run, sha } from "../../domain/testing/studio";
+import { tallyImport } from "../../domain/testing/import";
 import type { RoundLead, StudioRun } from "../../domain/studio/types";
 import type { State } from "../../domain/types";
 import { TABS, VisionBadge } from "../App";
@@ -497,28 +498,27 @@ describe("the product's kinds (domains), while they are not chosen", () => {
   });
 });
 
-describe("as it is today (round 0 of an existing repository)", () => {
-  /** Round 0 with the designer's reproduction of the trip board, labelled as is, from `files`; agreed by the PE. */
-  function withAsIs(files: string[]) {
-    const r = openRound(vision(), "material", at(1));
-    const a = addScreen(r.state, r.n, at(2), { title: "Trip board", variants: [{ id: "a", label: "As is", entry: "board/index.html" }], files: [{ path: "board/index.html", sha256: sha("a") }], provenance: { files } });
-    return { s: pePass(a.state, a.id, 1, [{ variant: "a", verdict: "feasible", reasons: "It shows the same trip cards as the code." }], at(3)), id: a.id };
+describe("as it is today (round 0 of an import)", () => {
+  /** tally's import, locked in as the baseline: Vision shows round 0 as any round, first its words, from `files`. */
+  function withAsIs(files?: string[]) {
+    const { s, parts } = tallyImport("baseline");
+    if (files) S.latestVersion(s, parts.words!)!.provenance!.files = files;
+    return { s, id: parts.words! };
   }
 
-  it("the round is named As it is today, not What you brought; the artifact says it is a reproduction to correct, with the files it came from", () => {
-    const { s, id } = withAsIs(["src/board/index.html", "src/board/style.css"]);
-    expect(roundLabel(s, s.studio.rounds[0])).toBe("As it is today");
-    expect(artifactLine(S.getArtifact(s, id, 1))).toBe("as is · screen");
+  it("once locked in, the round is named Lock in 1 · the baseline, not What you brought; the artifact says it is the baseline, with the files it came from (UX-5)", () => {
+    const { s, id } = withAsIs();
+    expect(roundLabel(s, s.studio.rounds[0])).toBe("Lock in 1 · the baseline");
+    expect(artifactLine(S.getArtifact(s, id, 1))).toBe("as is · dictionary");
     const html = render(<Studio />, s);
-    expect(html).toContain("0 · As it is today");
+    expect(html).toContain("0 · Lock in 1 · the baseline");
     expect(html).not.toContain("What you brought");
-    expect(html).toContain('aria-label="As it is today"');
-    expect(html).toContain("It is not a proposal. Correct what it gets wrong");
+    expect(html).toContain('aria-label="The baseline"');
+    expect(html).toContain("in force and built since Lock in 1. To change it, ask the lead for a round.");
+    expect(html).not.toContain("Correct what it gets wrong");
     expect(html).toContain("Made from 2 files in the repository:");
-    expect(html).toContain("<code>src/board/index.html</code>");
-    expect(html).toContain("<code>src/board/style.css</code>");
-    // You can mark it, as any artifact the PE agreed on.
-    expect(html).toMatch(/<button[^>]*aria-pressed="false"[^>]*>Keep<\/button>/);
+    expect(html).toContain("<code>tally/cli.py</code>");
+    expect(html).toContain("<code>README.md</code>");
   });
 
   it("a long list of files shows the first six; the rest are one click away", () => {
@@ -527,53 +527,6 @@ describe("as it is today (round 0 of an existing repository)", () => {
     expect(html).toContain("Made from 9 files in the repository:");
     expect(html.indexOf("src/part-6.js")).toBeLessThan(html.indexOf("The other files"));
     expect(html.indexOf("src/part-7.js")).toBeGreaterThan(html.indexOf("The other files"));
-  });
-
-  it("a reproduction that matches: the PE checked it against the code, and it is never called feasible", () => {
-    const { s, id } = withAsIs(["src/board/index.html"]);
-    const text = peText(s);
-    expect(text).toContain("Matches the code The PE checked it against the code: it matches.");
-    expect(text).toContain("As is Matches the code");
-    expect(text).toContain("Mark it Keep, Change or Drop.");
-    expect(text).not.toMatch(/feasible/i);
-    expect(versionHistory(s, S.getArtifact(s, id, 1))).toEqual([{ version: 1, round: 0, current: true, tone: "done", state: "matches", text: "PE pass 1: it matches the code." }]);
-  });
-
-  it("a reproduction with differences: the PE lists them, the designer does not revise it, and you correct it", () => {
-    const r = openRound(vision(), "material", at(1));
-    const a = addScreen(r.state, r.n, at(2), {
-      title: "Trip board",
-      variants: [
-        { id: "a", label: "Board", entry: "board/index.html" },
-        { id: "b", label: "Trip page", entry: "trip/index.html" },
-      ],
-      files: [
-        { path: "board/index.html", sha256: sha("a") },
-        { path: "trip/index.html", sha256: sha("b") },
-      ],
-      provenance: { files: ["src/board/index.html", "src/trip.html"] },
-    });
-    const s = pePass(
-      a.state,
-      a.id,
-      1,
-      [
-        { variant: "a", verdict: "feasible-if", reasons: "The cards match, apart from the dates.", change: "The code shows each trip's dates; the reproduction leaves them out." },
-        { variant: "b", verdict: "not-feasible", reasons: "This page is not in the code.", change: "The code has no trip page; the board links nowhere." },
-      ],
-      at(3),
-    );
-    expect(S.peReview(s, S.getArtifact(s, a.id, 1))).toMatchObject({ status: "ended", ended: "as-is", pass: 1 });
-    const text = peText(s);
-    expect(text).toContain("The PE found differences from the code: Board Some differences The cards match, apart from the dates. The differences: The code shows each trip's dates; the reproduction leaves them out.");
-    expect(text).toContain("Trip page Does not match the code This page is not in the code. What is wrong: The code has no trip page; the board links nowhere.");
-    expect(text).toContain("PE review ended: it reproduces the code as it is today, and the designer does not revise a reproduction for the PE. You can overrule the objection, with your reason. Mark it Keep, Change or Drop, and pick a variant.");
-    expect(text).not.toMatch(/feasible/i);
-    expect(text).not.toContain("every option");
-    expect(versionHistory(s, S.getArtifact(s, a.id, 1))[0]).toMatchObject({
-      state: "waiting for you",
-      text: "PE pass 1: found differences from the code; review ended: it reproduces the code as it is today, and the designer does not revise a reproduction for the PE. This is waiting for you.",
-    });
   });
 
   it("what the owner brought, and every later round, keep their names", () => {

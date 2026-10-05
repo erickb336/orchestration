@@ -14,6 +14,7 @@ import { clockTime, runWords } from "../domain/needsYou";
 import { reportSubagent } from "../domain/subagents";
 import { answerChangeOrder, changeOrdered, fullAnswer } from "../domain/testing/changeOrders";
 import { inVision } from "../domain/testing/factory";
+import { tallyImport } from "../domain/testing/import";
 import { reviewedChange } from "../domain/testing/reviewed";
 import type { PrDelivery, State, SteeringChange } from "../domain/types";
 import { LeadButton, ProjectMenu, ResultsBadge, SimBanner, TABS } from "./App";
@@ -208,6 +209,12 @@ describe("Home", () => {
     expect(markup).toContain("This is the sample project.");
     expect(markup).toContain(">Hide<");
     expect(markup).not.toContain("Start building now");
+  });
+
+  it("after the demo import, the welcome line names the import demo, not the sample project (UX26-2)", () => {
+    const words = visible(render(<Overview />, store(tallyImport("review").s)));
+    expect(words).toContain("This is the import demo: tally is a sample repository. For your own repository, start the service with ORCHESTRATION_RUNTIME=real npm start");
+    expect(words).not.toContain("This is the sample project.");
   });
 });
 

@@ -25,6 +25,7 @@ import { sharedEnvironments, type PreparedCopy, type PreparedEnvironments } from
 import { OUT, WORK, attachTty, containerArgs, containerName, defaultRecorderRoot, dockerEnv, dockerSocket, makeStage, probeRecorder, removeStage, resizeTty, runDocker, startRecording, type RunningContainer } from "./container";
 import type { AdapterEvent } from "../runtimes/types";
 import { MAGIC, projectStudioDir, versionDir as serveVersionDir } from "./serve";
+import { MAX_FOLDER_DEPTH } from "../workspaces";
 import { TAPE_CAP, recordSession, tapeSession, transcriptError, validateCast, validateTape, type TapeSession } from "./terminal";
 
 // ---------- the capture plan ----------
@@ -238,8 +239,8 @@ export function readCapturePlan(root: string, items: readonly CaptureItem[], o: 
 
 // ---------- the copy of the change ----------
 
-/** The change's files that are copied for a capture: files, bytes, depth. */
-export const COPY_CAPS = { files: 20_000, bytes: 512 * 1024 * 1024, depth: 32 };
+/** The change's files that are copied for a capture: files, bytes, and folders above a file (the snapshot's limit). */
+export const COPY_CAPS = { files: 20_000, bytes: 512 * 1024 * 1024, depth: MAX_FOLDER_DEPTH };
 
 /**
  * Copy the change's worktree into `dst`: folders and regular files, and symbolic links as links (never followed here;
@@ -551,6 +552,12 @@ export interface CaptureJob {
   lender?: EnvironmentLender;
   /** Names this capture's folder in the environment's root. */
   attemptId?: string;
+  /**
+   * A capture plan the service made itself (the import's, ORC-032): its text, and the tapes it names by path. It is
+   * checked like the change's own plan, but read from here, so nothing is written into the copy of a repository
+   * (CR-2). Absent: the change's plan, CAPTURE_PLAN in the copy.
+   */
+  plan?: { text: string; files: ReadonlyMap<string, string> };
 }
 
 /** What the capture needs of the project's environment: a copy of the change, prepared as the checks prepare it. */
@@ -603,8 +610,9 @@ const lastLine = (s: string) => s.trim().split("\n").pop()?.slice(0, 200) ?? "";
 
 /**
  * Capture in the project's environment: the copy prepared as the checks prepare it (reusing the prepared image by its
- * key), then the screens (screensInEnvironment) and each CLI (sessionInEnvironment) on the prepared image, with no
- * network. A prepare that fails, or an environment that cannot run, says so on every item.
+ * key), then each CLI (sessionInEnvironment) and the screens (screensInEnvironment) on the prepared image, with no
+ * network. Each tape types into a fresh copy of the prepared copy, so no tape sees what another tape or the preview
+ * wrote. A prepare that fails, or an environment that cannot run, says so on every item.
  */
 async function captureInEnvironment(c: EnvironmentCapture): Promise<void> {
   const { job } = c;
@@ -613,11 +621,11 @@ async function captureInEnvironment(c: EnvironmentCapture): Promise<void> {
     { attemptId: job.attemptId ?? `ev-${randomBytes(6).toString("hex")}`, workspace: c.stage.work, sha: job.sha, environment: job.environment!, logDir: join(c.stage.dir, "logs"), ...(job.signal ? { signal: job.signal } : {}), note: (m) => c.log(`evidence: ${m}`) },
     async (p) => {
       c.setPath(pathOf(p.record));
-      if (c.screens.length && !job.signal?.aborted) await screensInEnvironment(c, p);
       for (const t of c.terminals) {
         if (job.signal?.aborted) break;
         await sessionInEnvironment(c, p, t);
       }
+      if (c.screens.length && !job.signal?.aborted) await screensInEnvironment(c, p);
     },
   );
   if (out.ok) {
@@ -705,7 +713,7 @@ async function screensInEnvironment(c: EnvironmentCapture, p: PreparedCopy): Pro
 
 /**
  * One CLI: a container of the project's image with no network and a terminal (`docker create --tty --interactive`),
- * its shell bash with VHS's prompt at the copy's root. The service attaches to the terminal through the daemon's
+ * its shell bash with VHS's prompt at the root of its own fresh copy. The service attaches to the terminal through the daemon's
  * socket, starts the container, sets the tape's size, types the tape (recordSession) and keeps the recording: an
  * asciicast v2 file and its transcript, scanned for failures. Nothing half-made is kept.
  */
@@ -718,7 +726,7 @@ async function sessionInEnvironment(c: EnvironmentCapture, p: PreparedCopy, t: P
   p.track(name);
   let stream: Awaited<ReturnType<typeof attachTty>> | undefined;
   try {
-    const made = await runDocker(p.docker, phaseArgs({ name, image: p.image, work: p.work, argv: ["bash", "--noprofile", "--norc", "-i"], phase: { kind: "session" }, imageEnv: p.imageEnv }), { env: p.denv, timeoutMs: 60_000 });
+    const made = await runDocker(p.docker, phaseArgs({ name, image: p.image, work: p.copyWork(), argv: ["bash", "--noprofile", "--norc", "-i"], phase: { kind: "session" }, imageEnv: p.imageEnv }), { env: p.denv, timeoutMs: 60_000 });
     if (made.code !== 0) return c.none(item, "capture-failed", `The session's container was not made: ${lastLine(made.stderr) || `exit ${made.code ?? "?"}`}`, made.stderr);
     stream = await attachTty(socket, name);
     stream.on("error", () => {});
@@ -800,8 +808,10 @@ export async function captureEvidence(job: CaptureJob): Promise<Omit<EvidenceRun
       return finish();
     }
 
-    // The plan, from the copy: what runs is what was checked.
-    const read = readCapturePlan(stage.work, job.items, job.preview.cliEntry ? { cliEntry: job.preview.cliEntry } : {});
+    // The plan, from the copy, or the service's own: what runs is what was checked.
+    const cli = job.preview.cliEntry ? { cliEntry: job.preview.cliEntry } : {};
+    const own = job.plan;
+    const read = own ? checkCapturePlan(own.text, job.items, { readFile: (rel) => own.files.get(rel), ...cli }) : readCapturePlan(stage.work, job.items, cli);
     if (!read.ok) {
       none(job.items, read.reason, read.error);
       return finish();

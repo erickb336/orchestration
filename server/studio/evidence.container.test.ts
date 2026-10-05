@@ -210,6 +210,30 @@ describe(`capturing evidence in the project's environment${skipReason}`, () => {
   );
 
   it.skipIf(!ready.ok)(
+    "each tape types into its own fresh copy of the change: a file one tape writes does not reach the next (ORC-032, U2-F1)",
+    async () => {
+      const src = join(dir, "change");
+      mkdirSync(join(src, ".orchestrator"), { recursive: true });
+      const tape = (cmd: string) => `Output demo.gif\nSet Shell bash\nSet Columns 80\nSet Rows 24\nType "${cmd}"\nEnter\nWait\nSleep 300ms\n`;
+      writeFileSync(join(src, ".orchestrator", "first.tape"), tape("echo kept > left.txt && ls left.txt"));
+      writeFileSync(join(src, ".orchestrator", "second.tape"), tape("ls left.txt"));
+      writeFileSync(join(src, ".orchestrator", "capture.json"), JSON.stringify({ screens: [], terminals: [{ item: "bi-1", tape: ".orchestrator/first.tape" }, { item: "bi-2", tape: ".orchestrator/second.tape" }] }));
+      const items: CaptureItem[] = [
+        { ...DEMO, itemId: "bi-1", title: "First tape" },
+        { ...DEMO, itemId: "bi-2", title: "Second tape", artifactId: "sa-3" },
+      ];
+      const out = join(dir, "evidence");
+      const r = await captureEvidence({ source: src, sha: SHA, items, preview: { rev: 1 }, outDir: out, root: ROOT, environment: { plan: settingPlan("Python", []), project: `${TEST_ID}-tapes` }, lender, attemptId: "ev-tapes" });
+      expect(r.items.map((i) => i.status)).toEqual(["captured", "captured"]);
+      const transcript = (item: string) => readFileSync(join(out, item, "demo.txt"), "utf8");
+      // The first tape wrote left.txt and lists it; the second, in a copy of its own, finds no such file.
+      expect(transcript("bi-1")).toMatch(/^left\.txt$/m);
+      expect(transcript("bi-2")).toContain("ls: cannot access 'left.txt': No such file or directory");
+    },
+    900_000,
+  );
+
+  it.skipIf(!ready.ok)(
     "Python, from the confirmed image: its page (pytest from PyPI) and its CLI in a terminal",
     async () => {
       const c = await capture("python", settingPlan("Python", [["python3", "-m", "pip", "install", "--user", "-r", "requirements.txt"]]), ["python3", "serve.py"]);

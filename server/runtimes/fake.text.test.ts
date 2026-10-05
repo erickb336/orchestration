@@ -160,7 +160,7 @@ describe("the simulated lead under the output schema", () => {
     expect(replies.planning.proposals).toHaveLength(1);
     expect(replies.steering.steer).toMatchObject({ focus: expect.any(String), tasks: [{ id: "T-001", defer: true }], notes: [{ task: "T-001", step: "S1" }] });
     expect(Object.keys(replies.shaping)).toEqual(expect.arrayContaining(["vision", "coverage", "questions", "studio"]));
-    expect(replies.shaping.studio).toMatchObject({ openRound: { focus: "material" }, designerRuns: [{ kinds: ["screen"], devices: ["desktop", "mobile"] }] });
+    expect(replies.shaping.studio).toMatchObject({ openRound: { focus: "experience" }, designerRuns: [{ kinds: ["screen"], devices: ["desktop", "mobile"] }] });
     expect(replies.decisions.decisions).toEqual([expect.objectContaining({ id: "fd-1" }), expect.objectContaining({ id: "fd-2", cost: expect.any(Object) })]);
     for (const [kind, reply] of Object.entries(replies)) {
       const answer = fakeLeadAnswer(reply, LEAD_REPLY_SCHEMA);

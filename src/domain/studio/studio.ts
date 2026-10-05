@@ -8,8 +8,7 @@
 // The loop rule (ORC-029 pass 4). The PE judges every option before the owner sees it. When its pass asks for a change
 // (feasible-if) or objects (not-feasible) to a variant, the designer revises the version in the same round and the PE
 // reviews the new one, up to three passes in a round. A version reaches the owner when the PE's latest pass finds
-// every variant feasible, or once review ends (`LoopEnd`: the third pass, a reproduction of the code, the round
-// closed, runs that failed twice, or no provider to run the next step), with the PE's open objections and asked-for
+// every variant feasible, or once review ends (`LoopEnd`: the third pass, the round closed, runs that failed twice, or no provider to run the next step), with the PE's open objections and asked-for
 // changes shown. Where review stands is one value, `PeReview`, and the words the owner and the lead see are made from
 // it. An objection is never dropped: a later pass on a revision answers it, or the owner overrules it (recorded). A
 // kind the PE does not review (`KIND_RULES` in types.ts: what the owner brought, a probe's evidence, the dictionary) is
@@ -35,6 +34,7 @@ import {
   type Mark,
   type OpenCase,
   type PeVerdict,
+  type Provenance,
   type Pin,
   type Probe,
   type ProbeStatus,
@@ -120,6 +120,9 @@ export function getArtifact(s: State, artifactId: string, version: number): Stud
 /** "Trip plan v2" */
 export const artifactName = (a: StudioArtifact) => `${a.title} v${a.version}`;
 
+/** Whether a version (or the blueprint item that names it) reproduces the code as it is today: "as is", from round 0. */
+export const isAsIs = (s: State, v: { artifactId: string; version: number }) => !!versionsOf(s, v.artifactId).find((a) => a.version === v.version)?.provenance;
+
 /** The owner's current feedback on a version: the last record for it. */
 export function currentFeedback(s: State, artifactId: string, version: number): Feedback | undefined {
   for (let i = s.studio.feedback.length - 1; i >= 0; i--) {
@@ -166,6 +169,9 @@ const FOCUS_WORDS: Record<RoundFocus, string> = { material: "what you brought", 
 export function closeRound(state: State, n: number, summary: string | undefined, now: string): State {
   const r = getRound(state, n);
   if (r.closedAt) throw new ControlError(`Round ${n} is already closed.`);
+  // An import's round 0 closes only with its baseline (lockInBaseline): until then the import's runs work in it, and
+  // no later round can open (ORC-032, CR-3).
+  if (n === 0 && state.studio.import && !state.studio.import.lockedInAt) throw new ControlError("Round 0 is the import's: it closes with the baseline Lock in.");
   const text = summary === undefined ? undefined : capped(agentText(summary), 2000, "The round's summary");
   const s = draft(state);
   const round = getRound(s, n);
@@ -189,11 +195,14 @@ export interface ArtifactInput {
   devices: Device[];
   madeBy: StudioMaker;
   supersedes?: string;
-  /** An "as is" artifact's provenance: the repository files the designer reproduced it from (round 0 only). */
-  provenance?: { files: string[] };
+  /**
+   * An "as is" artifact's provenance: the repository files the designer reproduced it from (round 0 only), and the
+   * commit they are at, and a screen's page in the running app. The commit is the import's (C11), filled in when absent.
+   */
+  provenance?: { files: string[]; commit?: string; page?: string };
   /** A dictionary's terms, checked at the boundary (words.ts `parseDictionary`). A dictionary has them; nothing else does. */
   dictionary?: DictionaryEntry[];
-  /** A flow's rules, by variant, checked at the boundary (words.ts `parseRules`). Only a flow has them. */
+  /** A part's rules, by variant, checked at the boundary (words.ts `parseRules`). Any designer's kind but the dictionary (ORC-032 D1). */
   rules?: VariantRules[];
 }
 
@@ -243,7 +252,16 @@ export function addArtifact(state: State, input: ArtifactInput, now: string): { 
     throw new ControlError("Round 0 holds what already exists: what the owner brought (material), and the designer's reproductions of the existing code, labelled as is with the repository files they came from.");
   }
   if (asIs && (round.n !== 0 || input.kind === "material" || input.madeBy.role !== "designer")) throw new ControlError("Only the designer's reproductions of the existing code in round 0 (as it is today) are labelled as is.");
-  const provenance = asIs ? { asIs: true as const, files: provenanceFiles(input.provenance!.files) } : undefined;
+  const imp = state.studio.import;
+  let provenance: Provenance | undefined;
+  if (asIs) {
+    if (!imp) throw new ControlError("Only the import of an existing repository reproduces its code as it is today.");
+    const commit = input.provenance!.commit ?? imp.commit;
+    if (commit !== imp.commit) throw new ControlError(`The import reads commit ${imp.commit.slice(0, 7)}; a reproduction shows that commit, not ${agentLine(commit).slice(0, 12)}.`);
+    const page = input.provenance!.page;
+    if (page !== undefined && (input.kind !== "screen" || !/^\/[!-~]{0,199}$/.test(page))) throw new ControlError("A screen's page is a path in the running app, such as /trips. Only a screen has one.");
+    provenance = { asIs: true, files: provenanceFiles(input.provenance!.files), commit, ...(page ? { page } : {}) };
+  }
   const title = required(agentLine(input.title), 200, "The title");
   if (input.variants.length > MAX_VARIANTS) throw new ControlError(`At most ${MAX_VARIANTS} variants side by side.`);
   if (!input.files.length || input.files.length > MAX_FILES) throw new ControlError(`An artifact has between 1 and ${MAX_FILES} files.`);
@@ -266,7 +284,7 @@ export function addArtifact(state: State, input: ArtifactInput, now: string): { 
   // The project's words and a flow's rules (pass 4d): their shapes were checked at the boundary; here, who has them.
   if ((input.kind === "dictionary") !== !!input.dictionary?.length) throw new ControlError(input.kind === "dictionary" ? "A dictionary lists its terms." : "Only a dictionary lists terms.");
   if (input.rules?.length) {
-    if (input.kind !== "flow") throw new ControlError("Only a flow carries rules.");
+    if (KIND_RULES[input.kind].maker !== "designer" || input.kind === "dictionary") throw new ControlError("A dictionary, the owner's material and a probe's evidence carry no rules.");
     for (const r of input.rules) if (!variants.some((v) => v.id === r.variant)) throw new ControlError(`The rules in "${agentLine(r.path).slice(0, 80)}" are for variant ${agentLine(r.variant).slice(0, 30)}, which ${title} does not have.`);
     if (new Set(input.rules.map((r) => r.variant)).size !== input.rules.length) throw new ControlError("Each variant has at most one set of rules.");
   }
@@ -474,7 +492,6 @@ export function peRunsOf(s: State, artifactId: string, version: number): StudioR
 /** Why PE review of a version ended, in words that follow "PE review ended: ". `no-provider` comes with its note. */
 export const LOOP_END_WORDS: Record<LoopEnd, string> = {
   passes: `the PE made its ${MAX_PE_PASSES} passes in the round`,
-  "as-is": "it reproduces the code as it is today, and the designer does not revise a reproduction for the PE",
   "round-closed": "its round closed before the PE agreed",
   "no-revision": `the designer's runs revising it ended ${MAX_REVISION_RUNS} times without a new version`,
   "no-review": `the PE's runs on it ended ${MAX_PE_RUNS} times without a verdict`,
@@ -484,14 +501,15 @@ export const LOOP_END_WORDS: Record<LoopEnd, string> = {
 
 /**
  * Why PE review of a version is over before the PE agreed, or undefined while it goes on. `pass` is the PE's latest
- * pass on this version, 0 when it has none. In order: an end the service recorded; the round's last pass; a
- * reproduction of the code, which is not revised (round 0); the round closed; the revisions or the PE's runs failed
+ * pass on this version, 0 when it has none. In order: an end the service recorded; the round's last pass; the round
+ * closed; the revisions or the PE's runs failed
  * (those since the owner last asked the PE again).
  */
 function loopEnd(s: State, a: StudioArtifact, pass: number): LoopEnd | undefined {
   if (a.reviewEnd) return a.reviewEnd.reason;
+  // A stored pass-4 reproduction (a project with no import, CR-8): no designer may revise it, so it gets one pass.
+  if (pass && a.provenance) return "earlier-rule";
   if (pass >= MAX_PE_PASSES) return "passes";
-  if (pass && a.provenance) return "as-is";
   const round = s.studio.rounds.find((r) => r.n === a.round);
   if (!round || round.closedAt) return "round-closed";
   if (pass && endedWithoutResult(revisionRunsOf(s, a)) >= MAX_REVISION_RUNS) return "no-revision";
@@ -519,9 +537,15 @@ export type PeReview =
   | { status: "agreed"; pass: number }
   | { status: "ended"; ended: LoopEnd; note?: string; pass: number; asks: PeVerdict[]; objections: PeVerdict[] };
 
+/** Why the PE does not review a part of an import (C6), in words that follow "The PE does not review it: ". */
+export const IMPORT_PART_WHY = "it reproduces the code as it is today, which its tests and its recording check";
+
 export function peReview(s: State, a: StudioArtifact): PeReview {
   const rule = KIND_RULES[a.kind];
   if (!rule.peReviews) return { status: "not-reviewed", why: rule.why };
+  // A part of an import (ORC-032, C6) is recorded from the running code or checked by its tests, and the factory does
+  // not build it: no PE review. (Without an import, a reproduction is pass 4's, which the PE still reviews.)
+  if (a.provenance && s.studio.import) return { status: "not-reviewed", why: IMPORT_PART_WHY };
   const mine = s.studio.verdicts.filter((v) => v.artifactId === a.id && v.version === a.version);
   const pass = Math.max(0, ...mine.map((v) => v.pass));
   const latest = mine.filter((v) => v.pass === pass);
@@ -644,7 +668,7 @@ export function openObjections(s: State, a: StudioArtifact, variant?: string): P
  */
 export function roundBusy(s: State, n: number): string | undefined {
   const run = s.studio.runs.find((r) => r.round === n && isUnderWay(r));
-  if (run) return `${run.kind === "pe" ? "the PE's" : run.kind === "probe" ? "a probe's" : "the designer's"} run ${run.id} is ${run.status}`;
+  if (run) return `${run.kind === "pe" ? "the PE's" : run.kind === "probe" ? "a probe's" : run.kind === "reader" ? "the reader's" : "the designer's"} run ${run.id} is ${run.status}`;
   for (const a of latestArtifacts(s)) {
     if (a.round !== n) continue;
     const r = peReview(s, a);
@@ -878,7 +902,7 @@ export function markableRows(a: StudioArtifact, variant?: string): string[] {
  */
 function rowMarks(a: StudioArtifact, given: RowMark[]): RowMark[] {
   if (!given.length) return [];
-  if (!a.dictionary && !a.rules) throw new ControlError(`${artifactName(a)} has no rows to mark: only a dictionary's terms and a flow's rules have marks of their own.`);
+  if (!a.dictionary && !a.rules) throw new ControlError(`${artifactName(a)} has no rows to mark: only a dictionary's terms and a part's rules have marks of their own.`);
   const seen = new Set<string>();
   return given.map((r) => {
     const variant = a.variants.length > 1 && !a.dictionary ? r.variant : undefined;

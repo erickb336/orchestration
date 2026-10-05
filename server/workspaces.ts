@@ -8,8 +8,8 @@
 
 import { execFile, execFileSync, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { basename, isAbsolute, join, resolve, sep } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { MAX_SCOPE_PATHS } from "../src/domain/coverage";
 import { PR_BRANCH_REF, matchGlob, prBaseRef, prBranch } from "../src/domain/delivery";
 import type { PrDelivery } from "../src/domain/types";
@@ -105,6 +105,21 @@ const MAX_REVIEW_DIFF_BYTES = 60 * 1024;
 /** Largest diff returned to the changes viewer. */
 export const MAX_CHANGE_DIFF_BYTES = 512 * 1024;
 
+/** A commit's files written from git's object store (`snapshot`): its folder, and the commit. */
+export interface RepoSnapshot {
+  path: string;
+  base: string;
+}
+
+/** The most folders above a file that the snapshot and the capture's copy (COPY_CAPS in studio/evidence.ts) take: 64 pass, 65 are refused. */
+export const MAX_FOLDER_DEPTH = 64;
+
+/**
+ * What one snapshot may hold: paths (files, links and submodules), bytes, and folders above a file (MAX_FOLDER_DEPTH);
+ * and the most bytes one read of git's object store holds (SR-4).
+ */
+export const SNAPSHOT_CAPS = { files: 20_000, bytes: 512 * 1024 * 1024, depth: MAX_FOLDER_DEPTH, batch: 16 * 1024 * 1024 };
+
 interface CommitResult {
   sha: string;
   branch?: string;
@@ -117,12 +132,30 @@ interface CommitResult {
 
 /**
  * Environment for the service's own git calls: no inherited GIT_* variables (GIT_DIR, GIT_WORK_TREE,
- * GIT_CONFIG_* …) that could redirect them, and no prompts.
+ * GIT_CONFIG_* …) that could redirect them, and no prompts. No lazy fetch (SR-3): in a partial clone, git fetches a
+ * missing object from the promisor remote, which can run a command the repository's config names; with
+ * GIT_NO_LAZY_FETCH a missing object is an error. (The import of a repository that may be someone else's runs no
+ * checkout at all: `snapshot`.)
  */
 export function gitEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(process.env)) if (!k.startsWith("GIT_")) env[k] = v;
-  return { ...env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_NOSYSTEM: "1" };
+  return { ...env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_NO_LAZY_FETCH: "1" };
+}
+
+/** The config every service git call sets: no hooks (`noHooks` is a folder with none), no fsmonitor, no untracked cache, no signing. */
+export const gitSafeFlags = (noHooks: string): string[] => ["-c", `core.hooksPath=${noHooks}`, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "commit.gpgSign=false"];
+
+/** Why the import refuses a repository whose config makes it a partial clone (SR-3); see gitEnv. */
+export const PARTIAL_CLONE_REFUSED = "This repository is a partial clone: git would fetch its missing files from its remote, and that can run a command on this computer. Import a full clone.";
+
+/**
+ * Whether the repository's config, in any file git reads, names a promisor remote: extensions.partialClone,
+ * core.partialClone (git 2.17 to 2.26 set it in place of the extension), or any remote.<name>.promisor. Such a repository is refused for the import, even though gitEnv stops each lazy fetch.
+ */
+export function isPartialClone(repo: string, flags: string[], gitBin = "git"): boolean {
+  const r = spawnSync(gitBin, [...flags, "-C", repo, "config", "--get-regexp", "^(extensions\\.partialclone|core\\.partialclone|remote\\..*\\.promisor)$"], { encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "ignore"], timeout: 10_000 });
+  return r.status === 0 && r.stdout.trim() !== "";
 }
 
 /**
@@ -164,7 +197,7 @@ export class WorkspaceManager {
   private safeFlags(): string[] {
     const noHooks = join(this.root, ".no-hooks");
     mkdirSync(noHooks, { recursive: true });
-    return ["-c", `core.hooksPath=${noHooks}`, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "commit.gpgSign=false"];
+    return gitSafeFlags(noHooks);
   }
 
   /**
@@ -318,6 +351,103 @@ export class WorkspaceManager {
       }
     }
     return ws;
+  }
+
+  /**
+   * The files of `commit`, written from git's object store into a new folder: `git ls-tree` lists them and `git
+   * cat-file --batch` gives their bytes, as the commit holds them (ORC-032, SR-2). No checkout runs, so nothing that
+   * any git config of the repository sets runs either: no filter or smudge (its own config, an include.path, an
+   * includeIf, a config.worktree), no git-lfs, no hook, no fsmonitor. No `.git` is written: the folder is no repository.
+   * Paths with an empty, ".", ".." or ".git" part are refused. Regular files are written first, each new (O_EXCL), then
+   * the symbolic links, so no file is ever written through a link. Within SNAPSHOT_CAPS. `remove` removes it.
+   */
+  snapshot(o: { repoPath: string; projectId: string; attemptId: string; commit: string }): RepoSnapshot {
+    const check = this.check(o.repoPath);
+    if (!check.ok) throw new Error(check.reason);
+    const repo = this.repoDir(o.repoPath);
+    if (isPartialClone(repo, this.safeFlags(), this.gitBin)) throw new Error(PARTIAL_CLONE_REFUSED);
+    const base = this.git(repo, ["rev-parse", "--verify", "--end-of-options", `${o.commit}^{commit}`]);
+    if (base !== o.commit) throw new Error(`the repository has no commit ${o.commit.slice(0, 12)}`);
+    const path = this.pathFor(o.repoPath, o.attemptId, o.projectId);
+    if (existsSync(path)) throw new Error(`Workspace ${path} already exists; refusing to reuse another run's files.`);
+    // "<mode> <type> <object> <size>\t<path>", one per entry, the path as git holds it.
+    const listed = this.status(["-C", repo, "ls-tree", "-r", "-l", "-z", "--full-tree", "--end-of-options", base]);
+    if (listed.status !== 0) throw new Error(`could not list commit ${base.slice(0, 12)}`);
+    const rows = listed.stdout.split("\0").filter(Boolean);
+    // Every path counts, a submodule's too: each costs a folder (SR-4).
+    if (rows.length > SNAPSHOT_CAPS.files) throw new Error(`the commit has more than ${SNAPSHOT_CAPS.files} files`);
+    const entries = rows.map((row) => {
+      const tab = row.indexOf("\t");
+      const [mode, type, oid, size] = row.slice(0, tab).split(/\s+/);
+      const rel = row.slice(tab + 1);
+      const parts = rel.split("/");
+      if (tab < 0 || parts.some((p) => !p || p === "." || p === ".." || p.toLowerCase() === ".git")) throw new Error(`the commit names a path the service does not write: ${JSON.stringify(rel.slice(0, 120))}`);
+      // The folders above a path: every part but its last.
+      if (parts.length - 1 > SNAPSHOT_CAPS.depth) throw new Error(`the commit has a file with more than ${SNAPSHOT_CAPS.depth} folders above it`);
+      // ls-tree gives "-" for the size of a blob that is not in the object store: fail closed (SR-3).
+      if (type === "blob" && !/^\d+$/.test(size ?? "")) throw new Error(`could not read the files of commit ${base.slice(0, 12)}: ${rel.slice(0, 120)} is missing`);
+      return { mode, type, oid, size: Number(size) || 0, rel };
+    });
+    // Each path once, and none under another entry's path, in any case or Unicode form (as this computer's file system
+    // may compare them): so no entry is ever written into a link another entry made. Each folder is checked once, when
+    // it is first seen, so the check grows with the number of folders, not with depth times paths (SR-4).
+    const key = (p: string) => p.normalize("NFC").toLowerCase();
+    const names = new Set<string>();
+    const folders = new Set<string>();
+    const clash = (rel: string) => new Error(`the commit names ${JSON.stringify(rel.slice(0, 120))} twice, or a file and a folder alike`);
+    for (const e of entries) {
+      const k = key(e.rel);
+      if (names.has(k) || folders.has(k)) throw clash(e.rel);
+      names.add(k);
+      for (let cut = k.lastIndexOf("/"); cut > 0; cut = k.lastIndexOf("/", cut - 1)) {
+        const folder = k.slice(0, cut);
+        if (folders.has(folder)) break; // and so are the folders above it
+        if (names.has(folder)) throw clash(e.rel);
+        folders.add(folder);
+      }
+    }
+    const blobs = entries.filter((e) => e.type === "blob");
+    const bytes = blobs.reduce((n, e) => n + e.size, 0);
+    if (bytes > SNAPSHOT_CAPS.bytes) throw new Error(`the commit holds more than ${SNAPSHOT_CAPS.bytes / 1024 / 1024} MB`);
+    mkdirSync(path, { recursive: true, mode: 0o755 });
+    try {
+      for (const e of entries) if (e.type === "commit") mkdirSync(join(path, e.rel), { recursive: true }); // a submodule: an empty folder, as a checkout leaves it
+      // The blobs' bytes, a batch at a time (at most SNAPSHOT_CAPS.batch bytes, or one larger blob), each batch written
+      // before the next is read: "<object> blob <size>\n<bytes>\n" each, in the order asked.
+      const links: { rel: string; target: string }[] = [];
+      for (let i = 0; i < blobs.length; ) {
+        let n = 0;
+        let j = i;
+        while (j < blobs.length && (j === i || n + blobs[j].size <= SNAPSHOT_CAPS.batch)) n += blobs[j++].size;
+        const batch = blobs.slice(i, j);
+        i = j;
+        const cat = spawnSync(this.gitBin, [...this.safeFlags(), "-C", repo, "cat-file", "--batch"], { input: batch.map((e) => e.oid).join("\n") + "\n", env: gitEnv(), stdio: ["pipe", "pipe", "pipe"], maxBuffer: n + batch.length * 128 + 4096, timeout: 60_000 });
+        if (cat.error || cat.status !== 0) throw new Error("git could not read them");
+        const out = cat.stdout as Buffer;
+        let at = 0;
+        for (const e of batch) {
+          const nl = out.indexOf(10, at);
+          const [oid, type, size] = out.subarray(at, nl).toString("utf8").split(" ");
+          if (oid !== e.oid || type !== "blob" || Number(size) !== e.size) throw new Error(`git gave another object than ${e.oid.slice(0, 12)}`);
+          const bytesOf = out.subarray(nl + 1, nl + 1 + e.size);
+          at = nl + 1 + e.size + 1;
+          if (e.mode === "120000") links.push({ rel: e.rel, target: bytesOf.toString("utf8") });
+          else {
+            const to = join(path, e.rel);
+            mkdirSync(dirname(to), { recursive: true });
+            writeFileSync(to, bytesOf, { flag: "wx", mode: e.mode === "100755" ? 0o755 : 0o644 });
+          }
+        }
+      }
+      for (const l of links) {
+        mkdirSync(dirname(join(path, l.rel)), { recursive: true });
+        symlinkSync(l.target, join(path, l.rel));
+      }
+    } catch (err) {
+      rmSync(path, { recursive: true, force: true });
+      throw new Error(`could not write the files of commit ${base.slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return { path, base };
   }
 
   /** Prepare a merge, a revert or a carry in a fresh writer worktree, as Orchestration, without committing. */
@@ -970,6 +1100,9 @@ export class WorkspaceManager {
     if (!/^[A-Za-z0-9._/-]{1,200}$/.test(o.ref) || o.ref.startsWith("-")) return undefined;
     if (!this.check(o.repoPath).ok) return undefined;
     const repo = this.repoDir(o.repoPath);
+    // A partial clone is never read: a git older than 2.45 ignores GIT_NO_LAZY_FETCH and would fetch a missing object
+    // from its remote, which can run a command on this computer (SR-5). Every read of a file at a ref passes here.
+    if (isPartialClone(repo, this.safeFlags(), this.gitBin)) return undefined;
     const blob = this.status(["-C", repo, "rev-parse", "--verify", "--quiet", "--end-of-options", `${o.ref}:${o.path}`]);
     if (blob.status !== 0 || !blob.stdout.trim()) return undefined;
     const max = o.maxBytes ?? 256 * 1024;
@@ -1021,11 +1154,13 @@ export class WorkspaceManager {
     return log.stdout.split("\n").filter((l) => l === ORCHESTRATION_AUTHOR).length;
   }
 
-  /** Remove one run's worktree (and private temp dir). Its branch, if any, is kept. */
+  /** Remove one run's worktree or snapshot (and private temp dir). Its branch, if any, is kept. */
   remove(repoPath: string, path: string) {
     const repo = resolve(repoPath.replace(/^~(?=\/|$)/, process.env.HOME ?? "~"));
     if (!resolve(path).startsWith(this.root + sep)) return;
     try {
+      // A snapshot has no .git: it is only files, and git has no record of it.
+      if (!existsSync(join(path, ".git"))) throw new Error("not a worktree");
       this.git(repo, ["worktree", "remove", "--force", path]);
     } catch {
       rmSync(path, { recursive: true, force: true });
@@ -1090,9 +1225,10 @@ export class WorkspaceManager {
       }
       // Never destroy work that exists only in a worktree (for example a run stopped at its time limit),
       // unless the worktree is a throwaway one (a check run's build output).
-      let dirty = true;
+      // A snapshot (no .git) holds no work of a run's: git status would read another repository above it.
+      let dirty = existsSync(join(path, ".git"));
       try {
-        dirty = this.git(path, ["status", "--porcelain"]) !== "";
+        if (dirty) dirty = this.git(path, ["status", "--porcelain"]) !== "";
       } catch {
         dirty = false;
       }

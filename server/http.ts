@@ -6,7 +6,7 @@
 import { createReadStream, existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join, resolve, sep } from "node:path";
-import { CLIENT_HEADER, type AckMode, type ChangeError, type ChangeResponse, type CheckSuggestions, type CommandError, type EnvironmentFound, type ServiceInfo, type StatePayload, type VisionDocUploadOk } from "../src/api";
+import { CLIENT_HEADER, type AckMode, type ChangeError, type ChangeResponse, type CheckSuggestions, type CommandError, type EnvironmentFound, type ImportStartInfo, type ServiceInfo, type StatePayload, type VisionDocUploadOk } from "../src/api";
 import { suggestChecks, type RepoFile } from "../src/domain/checks";
 import { PROPOSAL_MARKERS, dockerfileBases, proposeImage } from "../src/domain/environment";
 import { readDevcontainer } from "./environment/devcontainer";
@@ -19,6 +19,7 @@ import type { FakeRuntimeConfig } from "./runtimes/fake";
 import type { Scheduler } from "./scheduler";
 import { evidenceFileKnown } from "../src/domain/studio/evidence";
 import { appEvidenceFile } from "./studio/evidence";
+import { demoStartInfo, importFileKnown, importStartInfo } from "./studio/import";
 import { APP_FILE_HEADERS, appStudioFile } from "./studio/files";
 import { projectStudioDir } from "./studio/serve";
 import type { VisionDocStore } from "./visiondocs";
@@ -224,6 +225,25 @@ export function createHttpServer(opts: HttpOptions): Server {
     return send(res, 200, { ref, ...(devcontainer ? { devcontainer } : {}), ...(proposal ? { proposal } : {}) } satisfies EnvironmentFound);
   };
 
+  /**
+   * What the import's Start screen shows for a repository (ORC-032): read from git without changing it, never saved.
+   * Real mode only: the simulated runtime imports the bundled sample (POST /api/import/demo).
+   */
+  const importStart = (res: ServerResponse, path: string) => {
+    if (!real || !opts.workspaces) return send(res, 200, { ok: false, reason: "The simulated runtime reads no repository of yours: import the bundled sample, tally, instead." } satisfies ImportStartInfo);
+    const check = opts.workspaces.check(path);
+    if (!check.ok) return send(res, 200, { ok: false, reason: check.reason ?? "The repository cannot be read." } satisfies ImportStartInfo);
+    const repo = resolve(path.trim().replace(/^~(?=\/|$)/, process.env.HOME ?? "~"));
+    const read = (file: string, maxBytes: number) => {
+      try {
+        return opts.workspaces!.readFileAt({ repoPath: repo, ref: check.head!, path: file, maxBytes });
+      } catch {
+        return undefined;
+      }
+    };
+    return send(res, 200, importStartInfo(repo, read));
+  };
+
   /** The full (redacted) log of one check of one run, from the service's own directory. Ids are validated; nothing else is served. */
   const checkLog = (res: ServerResponse, run: string, check: string) => {
     const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,60}$/;
@@ -243,7 +263,8 @@ export function createHttpServer(opts: HttpOptions): Server {
     const { state } = store.read();
     const studioDir = opts.dataDir ? projectStudioDir(opts.dataDir, state.project.id) : undefined;
     // A capture of evidence (ORC-029 pass 5) is served the same way: ?evidence=<run>&path=<item>/<file>.
-    const r = query.has("evidence") ? appEvidenceFile(opts.dataDir, state.project.id, query, (run, path) => evidenceFileKnown(state, run, path)) : appStudioFile(studioDir, query, (id, version) => state.studio.artifacts.some((a) => a.id === id && a.version === version));
+    // So is the import's capture (ORC-032): ?evidence=<import id>&path=<artifact>/<file>.
+    const r = query.has("evidence") ? appEvidenceFile(opts.dataDir, state.project.id, query, (run, path) => evidenceFileKnown(state, run, path) || importFileKnown(state, run, path)) : appStudioFile(studioDir, query, (id, version) => state.studio.artifacts.some((a) => a.id === id && a.version === version));
     if (!r.ok) {
       res.writeHead(r.status, { "Content-Type": "application/json; charset=utf-8", ...APP_FILE_HEADERS });
       return res.end(JSON.stringify({ error: r.error, kind: r.status === 403 ? "forbidden" : "invalid" } satisfies CommandError));
@@ -352,6 +373,7 @@ export function createHttpServer(opts: HttpOptions): Server {
         if (path === "/api/change") return change(res, url.searchParams.get("task") ?? "");
         if (path === "/api/checks/suggest") return suggest(res);
         if (path === "/api/environment/found") return environmentFound(res);
+        if (path === "/api/import/start") return importStart(res, url.searchParams.get("path") ?? "");
         if (path === "/api/checks/log") return checkLog(res, url.searchParams.get("run") ?? "", url.searchParams.get("check") ?? "");
         if (path === "/api/studio/file") return studioFile(res, url.searchParams);
         return fail(res, 404, "invalid", "Not found");
@@ -383,7 +405,7 @@ export function createHttpServer(opts: HttpOptions): Server {
         // Once a batch commits (refused files lose their records) and once a project is replaced, copies
         // no record refers to are deleted. A batch's own copies go at once; others wait out the grace
         // period in case their batch is still uploading.
-        const sweepAfter = !!opts.visionDocs && (body.name === "attachVisionDocs" || body.name === "initProject");
+        const sweepAfter = !!opts.visionDocs && (body.name === "attachVisionDocs" || body.name === "initProject" || body.name === "startImport");
         const batchHashes = sweepAfter && body.name === "attachVisionDocs" ? stagedHashes(store.read().state, body.args) : [];
         let r: CommandResult;
         try {
@@ -409,6 +431,12 @@ export function createHttpServer(opts: HttpOptions): Server {
         const result = (r.result ?? {}) as { docId?: string; status?: "staged" | "unchanged"; replaces?: string };
         opts.visionDocs.store(store.read().state.project.id, upload.input.hash, upload.buf);
         return send(res, 200, { version: r.version, docId: result.docId ?? "", status: result.status ?? "staged", ...(result.replaces ? { replaces: result.replaces } : {}) } satisfies VisionDocUploadOk);
+      }
+      // The bundled sample for the import (ORC-032), with the simulated runtime only: tally is made once in the service's
+      // data folder, and the screen imports it with the same commands as a repository of the owner's.
+      if (path === "/api/import/demo") {
+        if (real || !opts.dataDir) return fail(res, 400, "control", "The sample import is for the simulated runtime. Give the path of your repository instead.");
+        return send(res, 200, demoStartInfo(opts.dataDir));
       }
       if (path.startsWith("/api/sim") && (real || !fakeConfig)) return fail(res, 400, "control", "Simulation controls are only available with the fake runtime.");
       if (path === "/api/maintenance/prune") {

@@ -111,6 +111,7 @@ export function ShapingBanner() {
   const { state } = useStore();
   if (state.project.stage !== "shaping") return null;
   const running = M.activeAttempts(state).length;
+  const planned = state.tasks.some((t) => t.lifecycle !== "done" && t.lifecycle !== "cancelled");
   return (
     <Banner
       tone="info"
@@ -121,7 +122,7 @@ export function ShapingBanner() {
         </ButtonLink>
       }
     >
-      {running ? `${running} running ${plural(running, "step")} ${plural(running, "finishes", "finish")} normally; planned` : "Planned"} tasks are held.
+      {running ? `${running} running ${plural(running, "step")} ${plural(running, "finishes", "finish")} normally; planned tasks are held.` : planned ? "Planned tasks are held." : null}
     </Banner>
   );
 }
@@ -191,7 +192,7 @@ function VisionDraftCard({ state, draft, onEditing }: { state: State; draft: Vis
       <div className="v-draft__head">
         <strong>The lead drafted a vision</strong>
         <span className="small muted">
-          {relTime(draft.at)} · from your {messages === 1 ? "message" : `${messages} messages`}
+          {relTime(draft.at)} · {messages === 0 ? "from the import" : messages === 1 ? "from your message" : `from your ${messages} messages`}
           {messages > 0 && (
             <>
               {" · "}
@@ -254,7 +255,7 @@ function VisionDraftCard({ state, draft, onEditing }: { state: State; draft: Vis
           </Field>
           <div className="k-actions">
             <Button type="submit" variant="primary" disabled={off || !text.trim() || gone || stale}>
-              Accept as r{editing.baseRev + 1}
+              {acceptWords(vision, editing.baseRev)}
             </Button>
             <Button variant="quiet" disabled={busy} onClick={stopEditing}>
               Cancel
@@ -272,7 +273,7 @@ function VisionDraftCard({ state, draft, onEditing }: { state: State; draft: Vis
           </div>
           <div className="k-actions v-draft__actions">
             <Button variant="primary" disabled={off || changed === 0} onClick={() => void run("acceptVisionDraft", { draftId: draft.id, expectedRev: vision.rev })}>
-              Accept as r{vision.rev + 1}
+              {acceptWords(vision, vision.rev)}
             </Button>
             <Button
               disabled={off}
@@ -295,3 +296,6 @@ function VisionDraftCard({ state, draft, onEditing }: { state: State; draft: Vis
     </section>
   );
 }
+
+/** The Accept button: it names the revision it makes, but no revision while the vision has no text yet (UX-R3-1). */
+const acceptWords = (vision: { text: string }, baseRev: number) => (vision.text.trim() ? `Accept as r${baseRev + 1}` : "Accept");
