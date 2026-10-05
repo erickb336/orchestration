@@ -65,6 +65,8 @@ npm run test:real          # the same scenario with real Claude and Codex agents
 npm run capture            # retake the README images from the demo (needs Chrome and ffmpeg)
 ```
 
+The first real import of a repository has its own walkthrough: [docs/real-run.md](docs/real-run.md).
+
 **Where things are:**
 
 - `src/domain/`: pure state and commands, no I/O.
