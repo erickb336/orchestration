@@ -13,7 +13,7 @@ The import (ORC-032) has run only on simulated agents so far. This run shows whe
 ## 1. Before you start
 
 1. Start Docker (`colima start`). The import runs the tests only in a container. Without Docker, the tests show "not run".
-2. Open a terminal where your Claude token is set: your usual `zsh` login shell, as for `npm run test:real`. Do not paste the token anywhere.
+2. Open a terminal where your Claude token is set in the shell variable `CLAUDE_CODE_OAUTH_TOKEN`: your usual `zsh` login shell, as for `npm run test:real`. Never paste the token anywhere.
 3. You need nothing else. Codex is not needed: Claude reads the repository by default.
 
 ## 2. Make the trial repository
@@ -28,11 +28,17 @@ It makes `~/workspace/orchestrator-trial` with one commit, and refuses if that f
 
 ## 3. Start the service in real mode, with its own data
 
+First stop your usual service, if it runs. Both use port 5319, and the second one stops with "Port 5319 is already in use".
+
 ```bash
-ORCHESTRATION_RUNTIME=real ORCHESTRATION_DB=~/workspace/orchestrator-trial-data/orchestration.db npm start
+ORCHESTRATION_RUNTIME=real ORCHESTRATION_CLAUDE_AUTH=subscription ORCHESTRATION_DB=~/workspace/orchestrator-trial-data/orchestration.db npm start
 ```
 
-`ORCHESTRATION_DB` gives the trial its own data file. Start a new project replaces the board and its history, so this keeps your usual real-mode project as it is. The terminal prints the address (http://127.0.0.1:5319 unless you saved another port), and the browser opens it.
+- `ORCHESTRATION_CLAUDE_AUTH=subscription` passes your token to Claude. Without it, Claude cannot sign in.
+- `ORCHESTRATION_DB` gives the trial its own data file. Start a new project replaces the board and its history, so this keeps your usual real-mode project as it is.
+- To keep your usual service running, add `ORCHESTRATION_PORT=5329` to the command, and open http://127.0.0.1:5329.
+
+The first line can say "Starting the demo" when you have no saved answers from `npm run setup`. Ignore it. The line to check is "Runtime: REAL". The terminal prints the address (http://127.0.0.1:5319 unless you set another port), and the browser opens it.
 
 ## 4. Fill in Start
 
